@@ -1,58 +1,32 @@
-# Karma Community MVP Server
+# KC-MVP Server (NestJS + Postgres + Redis)
 
-שרת API עבור אפליקציית Karma Community.
+שרת NestJS לאפליקציית Karma Community עם Postgres ו-Redis, ו־REST גנרי תואם ל־`DatabaseService` בפרונט.
 
 ## 🚀 הפעלה מקומית
 
 ```bash
-# התקנת dependencies
 npm install
 
-# הפעלת השרת
-npm start
+# הרמת בסיסי נתונים
+npm run docker:up
 
-# או עם nodemon לפיתוח
-npm run dev
+# אתחול סכמות וטבלאות
+npm run init:db
+
+# פיתוח
+npm run start:dev
 ```
+
+צרו קובץ `.env` לפי `.env.example` (PORT, Postgres/Redis, CORS)
 
 ## 📡 Endpoints
 
-### Health Check
-- `GET /` - בדיקת תקינות השרת
+- `GET /` — בריאות
+- CRUD גנרי לפי קולקציה (תואם ל־collections של DatabaseService):
+  - `GET /api/:collection?userId=...` — רשימת פריטים למשתמש
+  - `GET /api/:collection/:userId/:itemId` — פריט בודד
+  - `POST /api/:collection` — יצירה/עדכון: body `{ id, userId, data }`
+  - `PUT /api/:collection/:userId/:itemId` — עדכון: body `{ data }`
+  - `DELETE /api/:collection/:userId/:itemId` — מחיקה
 
-### Chat API
-- `POST /api/chat` - שליחת הודעה לצ'אט
-  ```json
-  {
-    "message": "שלום קהילה!"
-  }
-  ```
-
-### Google Places API
-- `GET /autocomplete?input=ירושלים` - חיפוש מיקומים
-- `GET /place-details?place_id=...` - פרטי מיקום
-
-## 🌐 הפעלה על Railway
-
-1. היכנס ל-[Railway](https://railway.app/)
-2. התחבר עם GitHub
-3. לחץ "New Project" → "Deploy from GitHub repo"
-4. בחר את הרפוזיטורי שלך
-5. השרת יופעל אוטומטית
-
-## 🔧 Environment Variables
-
-- `PORT` - פורט השרת (Railway יקבע אוטומטית)
-- `GOOGLE_API_KEY` - מפתח Google Places API
-
-## 📊 לוגים
-
-השרת מדפיס לוגים מפורטים לכל בקשה:
-- 🗺️ Autocomplete requests
-- 📍 Place details requests  
-- 💬 Chat requests
-
-## 🔗 קישורים שימושיים
-
-- [Railway Documentation](https://docs.railway.app/)
-- [Google Places API](https://developers.google.com/maps/documentation/places/web-service)
+טבלאות נוצרות עם PK מורכב `(user_id, item_id)` ועמודת JSONB בשם `data`.
