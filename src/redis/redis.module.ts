@@ -10,15 +10,30 @@ export const REDIS = 'REDIS';
     {
       provide: REDIS,
       useFactory: () => {
-        if (!process.env.REDIS_HOST || !process.env.REDIS_PORT) {
+        const tlsEnabled = process.env.REDIS_TLS === 'true';
+
+        // Prefer a single connection URL when available
+        const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL;
+        if (redisUrl) {
+          return new Redis(redisUrl, {
+            password: process.env.REDIS_PASSWORD || undefined,
+            tls: tlsEnabled ? {} : undefined,
+          });
+        }
+
+        // Fallback to host/port. Support both underscore and Railway's no-underscore variants
+        const host = process.env.REDIS_HOST || process.env.REDISHOST;
+        const portEnv = process.env.REDIS_PORT || process.env.REDISPORT;
+
+        if (!host || !portEnv) {
           throw new Error('Missing Redis connection environment variables');
         }
 
         return new Redis({
-          host: process.env.REDIS_HOST,
-          port: Number(process.env.REDIS_PORT),
+          host,
+          port: Number(portEnv),
           password: process.env.REDIS_PASSWORD || undefined,
-          tls: process.env.REDIS_TLS === 'true' ? {} : undefined,
+          tls: tlsEnabled ? {} : undefined,
         });
       },
     },
