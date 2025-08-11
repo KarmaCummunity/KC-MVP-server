@@ -9,6 +9,14 @@ export const PG_POOL = 'PG_POOL';
     {
       provide: PG_POOL,
       useFactory: () => {
+        const connectionString = process.env.DATABASE_URL;
+        if (connectionString) {
+          const pool = new Pool({
+            connectionString,
+            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+          });
+          return pool;
+        }
         const pool = new Pool({
           host: process.env.POSTGRES_HOST || 'localhost',
           port: Number(process.env.POSTGRES_PORT || 5432),

@@ -17,7 +17,23 @@ npm run init:db
 npm run start:dev
 ```
 
-צרו קובץ `.env` לפי `.env.example` (PORT, Postgres/Redis, CORS)
+צרו קובץ `.env`:
+```
+# Local
+PORT=3001
+CORS_ORIGIN=http://localhost:8081,http://localhost:19006
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=kc
+POSTGRES_PASSWORD=kc_password
+POSTGRES_DB=kc_db
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+
+# Production (Railway/Vercel): השתמשו בערכי הסביבה שמוקצים
+# DATABASE_URL=postgres://user:pass@host:5432/dbname
+# REDIS_URL=redis://default:pass@host:6379
+```
 
 ## 📡 Endpoints
 
