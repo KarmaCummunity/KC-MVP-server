@@ -21,9 +21,9 @@ async function bootstrap() {
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
-  console.log(`🚀 Karma Community Nest Server running on http://localhost:${port}`);
+  console.log(`🚀 Karma Community Nest Server running on port ${port}`);
 }
 
 bootstrap();
