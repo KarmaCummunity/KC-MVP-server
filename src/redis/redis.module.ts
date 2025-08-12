@@ -25,6 +25,7 @@ export const REDIS = 'REDIS';
           enableReadyCheck: true,
           retryStrategy: (times: number) => Math.min(times * 200, 2000),
           reconnectOnError: (err: Error) => /READONLY|ETIMEDOUT|ECONNRESET/i.test(err.message),
+          family: 4,
         } as const;
 
         if (preferInternal && internalPort) {
