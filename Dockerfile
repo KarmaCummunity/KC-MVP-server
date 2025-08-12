@@ -11,27 +11,39 @@ COPY package*.json ./
 RUN npm ci --include=dev
 
 COPY . .
-# Ensure Nest CLI is available in builder (if postinstall skipped)
-RUN npx --yes @nestjs/cli@10.3.2 build -p tsconfig.build.json || npm run build
 
-# Prune dev dependencies to keep only production deps for runtime
+# Clean any build cache and build the application
+RUN rm -f *.tsbuildinfo
+
+# Build using TypeScript directly (more reliable than nest build)
+RUN npx tsc -p tsconfig.build.json
+
+# Verify build succeeded
+RUN test -f ./dist/main.js
+
+# 2) Production deps stage: install only production deps
+FROM node:20 as deps
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
 # Rebuild native deps for runtime image architecture (argon2)
 RUN npm rebuild argon2 --build-from-source || true 
-RUN npm prune --omit=dev && npm cache clean --force
 
-# 2) Runtime stage: install only production deps and run compiled app
+# 3) Runtime stage: run compiled app
 FROM node:20-slim as runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 LABEL Name="kc-mvp-server" Version="1.1.0"
 
-# Copy production node_modules and compiled dist from builder stage
-COPY --from=builder /app/node_modules ./node_modules
+# Copy production node_modules from deps stage and compiled dist from builder stage
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
 
-# Assert dist exists at build-time (fail early if not)
+# Final assertion that dist exists
 RUN test -f ./dist/main.js
 
 # Expose is optional for Railway, but helps locally
