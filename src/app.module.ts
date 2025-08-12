@@ -8,6 +8,7 @@ import { DatabaseInit } from './database/database.init';
 import { ItemsModule } from './items/items.module';
 import { RedisModule } from './redis/redis.module';
 import { AuthController } from './controllers/auth.controller';
+import { RedisTestController } from './controllers/redis-test.controller';
 
 @Module({
   imports: [
@@ -16,7 +17,7 @@ import { AuthController } from './controllers/auth.controller';
     RedisModule,
     ItemsModule,
   ],
-  controllers: [HealthController, PlacesController, ChatController, AuthController],
+  controllers: [HealthController, PlacesController, ChatController, AuthController, RedisTestController],
   providers: [DatabaseInit],
 })
 export class AppModule {}
