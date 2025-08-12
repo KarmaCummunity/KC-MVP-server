@@ -27,6 +27,9 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # Copy compiled dist from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Assert dist exists at build-time (fail early if not)
+RUN test -f ./dist/main.js
+
 # Expose is optional for Railway, but helps locally
 EXPOSE 3001
 
