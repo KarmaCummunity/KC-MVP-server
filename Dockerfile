@@ -8,10 +8,11 @@ WORKDIR /app
 ENV NODE_ENV=development
 
 COPY package*.json ./
-RUN npm ci --include=dev
+RUN npm ci --include=dev --ignore-scripts
 
 COPY . .
-RUN npm run build
+# Ensure Nest CLI is available in builder (if postinstall skipped)
+RUN npx --yes @nestjs/cli@10.3.2 build -p tsconfig.build.json || npm run build
 
 # 2) Runtime stage: install only production deps and run compiled app
 FROM node:20-slim AS runner
