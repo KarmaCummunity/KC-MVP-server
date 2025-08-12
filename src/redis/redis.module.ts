@@ -29,12 +29,14 @@ export const REDIS = 'REDIS';
         } as const;
 
         if (preferInternal && internalPort) {
-          return new Redis({
+          const client = new Redis({
             host: internalHost,
             port: Number(internalPort),
             tls: tlsEnabledEnv ? {} : undefined,
             ...commonOptions,
           });
+          attachRedisLogging(client, `redis://${internalHost}:${internalPort}`);
+          return client;
         }
 
         // Prefer a single connection URL when available
@@ -50,25 +52,60 @@ export const REDIS = 'REDIS';
             // ignore parse errors – fall back to env flag only
           }
 
-          return new Redis(redisUrl, {
+          const client = new Redis(redisUrl, {
             tls: enableTls ? {} : undefined,
             ...commonOptions,
           });
+          attachRedisLogging(client, maskRedisUrl(redisUrl));
+          return client;
         }
 
         if (!internalHost || !internalPort) {
           throw new Error('Missing Redis connection environment variables');
         }
 
-        return new Redis({
+        const client = new Redis({
           host: internalHost,
           port: Number(internalPort),
           tls: tlsEnabledEnv ? {} : undefined,
           ...commonOptions,
         });
+        attachRedisLogging(client, `redis://${internalHost}:${internalPort}`);
+        return client;
       },
     },
   ],
   exports: [REDIS],
 })
 export class RedisModule {}
+
+function maskRedisUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.password) u.password = '***';
+    return u.toString();
+  } catch {
+    return url.replace(/:(?:[^@/]+)@/, ':***@');
+  }
+}
+
+function attachRedisLogging(client: Redis, target: string) {
+  // eslint-disable-next-line no-console
+  console.log(`[redis] connecting to ${target}`);
+  client.on('connect', () => {
+    // eslint-disable-next-line no-console
+    console.log('[redis] socket connected');
+  });
+  client.on('ready', () => {
+    // eslint-disable-next-line no-console
+    console.log('[redis] ready');
+  });
+  client.on('end', () => {
+    // eslint-disable-next-line no-console
+    console.log('[redis] connection ended');
+  });
+  client.on('error', (err) => {
+    // eslint-disable-next-line no-console
+    console.error('[redis] error', err.message);
+  });
+}
