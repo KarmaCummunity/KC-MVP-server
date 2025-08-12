@@ -46,8 +46,7 @@ export const REDIS = 'REDIS';
           try {
             const parsed = new URL(redisUrl);
             const isRediss = parsed.protocol === 'rediss:';
-            const isRailwayProxy = /proxy\.rlwy\.net|proxy\.railway\.app|proxy\.railway/.test(parsed.hostname);
-            if (isRediss || isRailwayProxy) enableTls = true;
+            if (isRediss) enableTls = true;
           } catch (_) {
             // ignore parse errors – fall back to env flag only
           }
