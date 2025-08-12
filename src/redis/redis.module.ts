@@ -40,8 +40,18 @@ export const REDIS = 'REDIS';
           return client;
         }
 
+        // Debug: Log all Redis environment variables
+        console.log('[DEBUG] Redis environment variables:');
+        console.log('REDIS_URL:', process.env.REDIS_URL);
+        console.log('REDIS_HOST:', process.env.REDIS_HOST);
+        console.log('REDISHOST:', process.env.REDISHOST);
+        console.log('REDIS_PORT:', process.env.REDIS_PORT);
+        console.log('REDISPORT:', process.env.REDISPORT);
+        console.log('REDIS_PASSWORD:', process.env.REDIS_PASSWORD ? '[SET]' : '[NOT SET]');
+
         // Prefer a single connection URL when available
         const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL || process.env.UPSTASH_REDIS_URL;
+        console.log('[DEBUG] Final redisUrl:', redisUrl ? maskRedisUrl(redisUrl) : 'NOT FOUND');
         if (redisUrl) {
           let enableTls = tlsEnabledEnv;
           try {
