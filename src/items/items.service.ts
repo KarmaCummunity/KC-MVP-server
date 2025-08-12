@@ -31,6 +31,8 @@ export class ItemsService {
       // Organizations / NGO onboarding
       'organizations',
       'org_applications',
+      // App analytics (e.g., category open counters)
+      'analytics',
     ]);
     if (!allowed.has(collection)) {
       throw new Error(`Unknown collection: ${collection}`);

@@ -29,7 +29,9 @@ export class DatabaseInit implements OnModuleInit {
         const tables = [
           'users', 'posts', 'followers', 'following', 'chats', 'messages', 'notifications', 'bookmarks',
           'donations', 'tasks', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
-          'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications'
+          'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications',
+          // App analytics (e.g., category open counters)
+          'analytics'
         ];
 
         for (const t of tables) {
