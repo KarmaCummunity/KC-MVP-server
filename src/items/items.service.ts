@@ -28,6 +28,9 @@ export class ItemsService {
       'voice_messages',
       'conversation_metadata',
       'rides',
+      // Organizations / NGO onboarding
+      'organizations',
+      'org_applications',
     ]);
     if (!allowed.has(collection)) {
       throw new Error(`Unknown collection: ${collection}`);

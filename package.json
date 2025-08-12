@@ -6,8 +6,9 @@
   "license": "MIT",
   "scripts": {
     "prebuild": "rimraf dist",
-    "build": "nest build",
+    "build": "nest build -p tsconfig.build.json",
     "start": "node dist/main.js",
+    "start:local": "REDIS_URL=redis://localhost:6379 POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=kc POSTGRES_PASSWORD=kc_password POSTGRES_DB=kc_db node dist/main.js",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "lint": "eslint ./src --ext .ts",
@@ -27,6 +28,7 @@
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pg": "^8.11.3",
+    "argon2": "^0.31.2",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1"
   },

@@ -4,8 +4,10 @@ import { HealthController } from './controllers/health.controller';
 import { PlacesController } from './controllers/places.controller';
 import { ChatController } from './controllers/chat.controller';
 import { DatabaseModule } from './database/database.module';
+import { DatabaseInit } from './database/database.init';
 import { ItemsModule } from './items/items.module';
 import { RedisModule } from './redis/redis.module';
+import { AuthController } from './controllers/auth.controller';
 
 @Module({
   imports: [
@@ -14,7 +16,8 @@ import { RedisModule } from './redis/redis.module';
     RedisModule,
     ItemsModule,
   ],
-  controllers: [HealthController, PlacesController, ChatController],
+  controllers: [HealthController, PlacesController, ChatController, AuthController],
+  providers: [DatabaseInit],
 })
 export class AppModule {}
 

@@ -50,6 +50,9 @@ async function run() {
       'voice_messages',
       'conversation_metadata',
       'rides',
+      // Organizations / NGO onboarding
+      'organizations',
+      'org_applications',
     ];
 
     for (const t of tables) {
@@ -57,6 +60,11 @@ async function run() {
       console.log(`Ensuring table: ${t}`);
       await client.query(baseTable(t));
     }
+
+    // Index for email lookup in users table
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')))`
+    );
 
     // eslint-disable-next-line no-console
     console.log('✅ Database initialized');
