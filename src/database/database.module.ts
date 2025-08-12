@@ -11,9 +11,14 @@ export const PG_POOL = 'PG_POOL';
       useFactory: () => {
         const connectionString = process.env.DATABASE_URL;
         if (connectionString) {
+          // Allow explicit control of SSL via env or URL
+          const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL;
+          const sslEnabled =
+            (sslFlag && /^(1|true|require)$/i.test(sslFlag)) || /sslmode=require/i.test(connectionString);
+
           const pool = new Pool({
             connectionString,
-            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+            ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
           });
           return pool;
         }

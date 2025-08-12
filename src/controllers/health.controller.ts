@@ -1,7 +1,10 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Inject } from '@nestjs/common';
+import { REDIS } from '../redis/redis.module';
+import Redis from 'ioredis';
 
 @Controller('/')
 export class HealthController {
+  constructor(@Inject(REDIS) private readonly redis: Redis) {}
   @Get()
   getRoot() {
     return {
@@ -9,6 +12,16 @@ export class HealthController {
       message: 'Karma Community Nest Server is running!',
       timestamp: new Date().toISOString(),
     };
+  }
+
+  @Get('health/redis')
+  async getRedisHealth() {
+    try {
+      const pong = await this.redis.ping('health');
+      return { ok: true, ping: pong };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
   }
 }
 
