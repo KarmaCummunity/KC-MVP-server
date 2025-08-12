@@ -10,16 +10,17 @@ export const REDIS = 'REDIS';
     {
       provide: REDIS,
       useFactory: () => {
-        const tlsEnabledEnv = process.env.REDIS_TLS === 'true';
+        // Railway Redis may expose rediss:// or REDIS_TLS=true
+        const tlsEnabledEnv = String(process.env.REDIS_TLS || process.env.REDIS_SSL || '').toLowerCase() === 'true';
 
         // Prefer internal networking in Railway when present
-        const internalHost = process.env.REDIS_HOST || process.env.REDISHOST;
-        const internalPort = process.env.REDIS_PORT || process.env.REDISPORT;
+        const internalHost = process.env.REDIS_HOST || process.env.REDISHOST || process.env.UPSTASH_REDIS_HOST;
+        const internalPort = process.env.REDIS_PORT || process.env.REDISPORT || process.env.UPSTASH_REDIS_PORT;
         const preferInternal = !!internalHost && /\.internal$/.test(internalHost);
 
         const commonOptions = {
-          username: process.env.REDIS_USERNAME || process.env.REDISUSER || undefined,
-          password: process.env.REDIS_PASSWORD || process.env.REDISPASSWORD || undefined,
+          username: process.env.REDIS_USERNAME || process.env.REDISUSER || process.env.UPSTASH_REDIS_USERNAME || undefined,
+          password: process.env.REDIS_PASSWORD || process.env.REDISPASSWORD || process.env.UPSTASH_REDIS_PASSWORD || undefined,
           connectTimeout: 15000,
           maxRetriesPerRequest: 3,
           enableReadyCheck: true,
@@ -40,7 +41,7 @@ export const REDIS = 'REDIS';
         }
 
         // Prefer a single connection URL when available
-        const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL;
+        const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL || process.env.UPSTASH_REDIS_URL;
         if (redisUrl) {
           let enableTls = tlsEnabledEnv;
           try {

@@ -9,27 +9,36 @@ export const PG_POOL = 'PG_POOL';
     {
       provide: PG_POOL,
       useFactory: () => {
+        // 1) Prefer a single DATABASE_URL (Railway Postgres addon exposes this)
         const connectionString = process.env.DATABASE_URL;
         if (connectionString) {
-          // Allow explicit control of SSL via env or URL
-          const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL;
+          const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL || process.env.PGSSLMODE;
           const sslEnabled =
             (sslFlag && /^(1|true|require)$/i.test(sslFlag)) || /sslmode=require/i.test(connectionString);
 
-          const pool = new Pool({
+          return new Pool({
             connectionString,
             ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
           });
-          return pool;
         }
-        const pool = new Pool({
-          host: process.env.POSTGRES_HOST || 'localhost',
-          port: Number(process.env.POSTGRES_PORT || 5432),
-          user: process.env.POSTGRES_USER || 'kc',
-          password: process.env.POSTGRES_PASSWORD || 'kc_password',
-          database: process.env.POSTGRES_DB || 'kc_db',
+
+        // 2) Fall back to discrete env vars. Support both POSTGRES_* and PG* (Railway style)
+        const host = process.env.POSTGRES_HOST || process.env.PGHOST || 'localhost';
+        const port = Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432);
+        const user = process.env.POSTGRES_USER || process.env.PGUSER || 'kc';
+        const password = process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || 'kc_password';
+        const database = process.env.POSTGRES_DB || process.env.PGDATABASE || 'kc_db';
+        const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL || process.env.PGSSLMODE;
+        const sslEnabled = sslFlag ? /^(1|true|require)$/i.test(sslFlag) : false;
+
+        return new Pool({
+          host,
+          port,
+          user,
+          password,
+          database,
+          ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
         });
-        return pool;
       },
     },
   ],
