@@ -15,7 +15,7 @@
     "incremental": true,
     "skipLibCheck": true,
     "strict": true,
-    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
     "paths": {
       "*": ["src/*"]
     }
