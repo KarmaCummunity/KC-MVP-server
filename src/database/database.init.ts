@@ -21,6 +21,12 @@ export class DatabaseInit implements OnModuleInit {
         if (process.env.SKIP_FULL_SCHEMA === '1') {
           console.warn('⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)');
         } else {
+          // Auto-detect legacy JSONB schema and skip full relational schema to avoid conflicts
+          const legacyDetected = await this.detectLegacySchema(client);
+          if (legacyDetected) {
+            console.warn('⏭️  Legacy JSONB schema detected (tables with data JSONB). Skipping full relational schema to avoid conflicts.');
+            return;
+          }
           try {
             await this.runSchema(client);
             await this.initializeDefaultData(client);
@@ -35,6 +41,35 @@ export class DatabaseInit implements OnModuleInit {
     } catch (err) {
       console.error('❌ DatabaseInit failed', err);
       throw err;
+    }
+  }
+
+  private async detectLegacySchema(client: any): Promise<boolean> {
+    try {
+      const checks = [
+        `SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'users' AND column_name = 'data'
+          ) AS exists;`,
+        `SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'donations' AND column_name = 'data'
+          ) AS exists;`,
+        `SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'chats' AND column_name = 'data'
+          ) AS exists;`
+      ];
+      for (const sql of checks) {
+        const res = await client.query(sql);
+        if (res?.rows?.[0]?.exists) {
+          return true;
+        }
+      }
+      return false;
+    } catch (err) {
+      console.warn('⚠️ Legacy schema detection failed, proceeding with full schema:', err?.message || err);
+      return false;
     }
   }
 
