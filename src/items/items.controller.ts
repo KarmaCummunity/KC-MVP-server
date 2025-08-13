@@ -50,6 +50,13 @@ export class ItemsController {
   @Get('user-activity/:userId')
   async getUserActivity(@Param('userId') userId: string) {
     try {
+      if (!userId || typeof userId !== 'string') {
+        return {
+          success: false,
+          error: 'Valid userId is required',
+        };
+      }
+      
       const activity = await this.itemsService.getUserActivity(userId);
       return {
         success: true,
@@ -89,6 +96,61 @@ export class ItemsController {
         success: true,
         stats,
         message: 'Redis cache statistics',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  // Simple test endpoints for Redis functionality
+  
+  @Post('test-redis')
+  async testRedis(@Body() body: { userId?: string; collection?: string; itemId?: string; data?: any }) {
+    try {
+      const { userId = 'test_user', collection = 'posts', itemId = `test_${Date.now()}`, data = { message: 'Test Redis integration', timestamp: new Date().toISOString() } } = body;
+      
+      // Create a test item
+      const createResult = await this.itemsService.create(collection, userId, itemId, data);
+      
+      // Read it back
+      const readResult = await this.itemsService.read(collection, userId, itemId);
+      
+      // Get user activity
+      const activity = await this.itemsService.getUserActivity(userId);
+      
+      return {
+        success: true,
+        message: 'Redis test completed successfully',
+        results: {
+          created: createResult,
+          retrieved: readResult,
+          userActivity: activity,
+        },
+        testData: { userId, collection, itemId, data },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  @Get('demo-activity')
+  async getDemoActivity() {
+    try {
+      // Use a demo user ID
+      const demoUserId = 'demo_user_12345';
+      const activity = await this.itemsService.getUserActivity(demoUserId);
+      
+      return {
+        success: true,
+        message: 'Demo user activity from Redis',
+        userId: demoUserId,
+        ...activity,
       };
     } catch (error) {
       return {
