@@ -108,6 +108,7 @@ export class DonationsController {
 
       // Clear relevant caches
       await this.clearDonationCaches();
+      await this.clearCommunityStatsCaches();
 
       return { success: true, data: donation };
     } catch (error) {
@@ -345,6 +346,21 @@ export class DonationsController {
     
     for (const key of allKeys) {
       await this.redisCache.delete(key);
+    }
+  }
+
+  private async clearCommunityStatsCaches() {
+    const patterns = [
+      'community_stats_*',
+      'community_trends_*',
+      'dashboard_stats',
+      'real_time_stats',
+    ];
+    for (const pattern of patterns) {
+      const keys = await this.redisCache.getKeys(pattern);
+      for (const key of keys) {
+        await this.redisCache.delete(key);
+      }
     }
   }
 }

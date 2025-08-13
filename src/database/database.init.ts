@@ -12,27 +12,28 @@ export class DatabaseInit implements OnModuleInit {
     try {
       const client = await this.pool.connect();
       try {
-        // For now, just ensure backward compatibility tables work
-        await this.ensureBackwardCompatibility(client);
+        // 1) Detect legacy first – decide path
+        const legacyDetected = await this.detectLegacySchema(client);
 
-        console.log('✅ DatabaseInit - Basic tables initialized successfully');
-        
-        // Try to run the full schema, unless explicitly skipped for local dev
+        if (legacyDetected) {
+          console.warn('⏭️  Legacy JSONB schema detected. Initializing compatibility tables only.');
+          await this.ensureBackwardCompatibility(client);
+          console.log('✅ DatabaseInit - Legacy compatibility ensured');
+          return;
+        }
+
+        // 2) For modern schema – optionally skip full schema in dev if requested
         if (process.env.SKIP_FULL_SCHEMA === '1') {
           console.warn('⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)');
         } else {
-          // Auto-detect legacy JSONB schema and skip full relational schema to avoid conflicts
-          const legacyDetected = await this.detectLegacySchema(client);
-          if (legacyDetected) {
-            console.warn('⏭️  Legacy JSONB schema detected (tables with data JSONB). Skipping full relational schema to avoid conflicts.');
-            return;
-          }
           try {
             await this.runSchema(client);
             await this.initializeDefaultData(client);
             console.log('✅ DatabaseInit - Complete schema initialized successfully');
-          } catch (schemaError: any) {
-            console.warn('⚠️ Full schema initialization failed, using basic tables:', schemaError?.message || schemaError);
+          } catch (schemaError: unknown) {
+            const reason = schemaError instanceof Error ? schemaError.message : String(schemaError);
+            console.warn('⚠️ Full schema initialization failed, attempting legacy compatibility only:', reason);
+            await this.ensureBackwardCompatibility(client);
           }
         }
       } finally {
@@ -67,8 +68,9 @@ export class DatabaseInit implements OnModuleInit {
         }
       }
       return false;
-    } catch (err) {
-      console.warn('⚠️ Legacy schema detection failed, proceeding with full schema:', err?.message || err);
+    } catch (err: unknown) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn('⚠️ Legacy schema detection failed, proceeding with full schema:', reason);
       return false;
     }
   }

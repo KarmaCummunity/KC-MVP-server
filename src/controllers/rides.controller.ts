@@ -67,6 +67,8 @@ export class RidesController {
 
       await client.query('COMMIT');
       await this.clearRideCaches();
+      // Clear community stats caches to reflect new ride immediately
+      await this.clearCommunityStatsCaches();
 
       return { success: true, data: ride };
     } catch (error) {
@@ -244,6 +246,8 @@ export class RidesController {
 
       await client.query('COMMIT');
       await this.clearRideCaches();
+      // Clear community stats caches to reflect booking impact
+      await this.clearCommunityStatsCaches();
 
       return { success: true, data: booking };
     } catch (error) {
@@ -464,6 +468,21 @@ export class RidesController {
     
     for (const key of allKeys) {
       await this.redisCache.delete(key);
+    }
+  }
+
+  private async clearCommunityStatsCaches() {
+    const patterns = [
+      'community_stats_*',
+      'community_trends_*',
+      'dashboard_stats',
+      'real_time_stats',
+    ];
+    for (const pattern of patterns) {
+      const keys = await this.redisCache.getKeys(pattern);
+      for (const key of keys) {
+        await this.redisCache.delete(key);
+      }
     }
   }
 }
