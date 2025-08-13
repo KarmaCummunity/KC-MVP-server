@@ -24,6 +24,57 @@ export class RidesController {
     try {
       await client.query('BEGIN');
 
+      console.log('🚗 Server - Creating ride with data:', JSON.stringify(rideData, null, 2));
+
+      // Validate required fields
+      if (!rideData.driver_id) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Driver ID is required' };
+      }
+
+      if (!rideData.from_location || !rideData.to_location) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'From and to locations are required' };
+      }
+
+      if (!rideData.departure_time) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Departure time is required' };
+      }
+
+      // Check or create user profile for driver_id
+      let driverUuid = rideData.driver_id;
+      
+      // If driver_id is not a valid UUID, try to find or create user profile
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(rideData.driver_id)) {
+        // Try to find existing user profile by legacy ID or email
+        const { rows: existingUsers } = await client.query(`
+          SELECT id FROM user_profiles 
+          WHERE settings->>'legacy_id' = $1 OR email = $2 
+          LIMIT 1
+        `, [rideData.driver_id, `${rideData.driver_id}@legacy.com`]);
+
+        if (existingUsers.length > 0) {
+          driverUuid = existingUsers[0].id;
+          console.log(`🔄 Found existing user profile for ${rideData.driver_id}: ${driverUuid}`);
+        } else {
+          // Create new user profile for legacy user
+          const { rows: newUsers } = await client.query(`
+            INSERT INTO user_profiles (email, name, settings)
+            VALUES ($1, $2, $3)
+            RETURNING id
+          `, [
+            `${rideData.driver_id}@legacy.com`,
+            `User ${rideData.driver_id}`,
+            JSON.stringify({ legacy_id: rideData.driver_id, source: 'legacy-app' })
+          ]);
+          
+          driverUuid = newUsers[0].id;
+          console.log(`✨ Created new user profile for ${rideData.driver_id}: ${driverUuid}`);
+        }
+      }
+
       // Insert ride
       const { rows } = await client.query(`
         INSERT INTO rides (
@@ -32,7 +83,7 @@ export class RidesController {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
       `, [
-        rideData.driver_id,
+        driverUuid,
         rideData.title || `נסיעה מ${rideData.from_location?.name || 'כאן'} ל${rideData.to_location?.name || 'שם'}`,
         JSON.stringify(rideData.from_location),
         JSON.stringify(rideData.to_location),
@@ -71,9 +122,15 @@ export class RidesController {
       `);
 
       await client.query('COMMIT');
-      await this.clearRideCaches();
-      // Clear community stats caches to reflect new ride immediately
-      await this.clearCommunityStatsCaches();
+
+      // Best-effort cache clearing (do not fail the request if Redis is down)
+      try {
+        await this.clearRideCaches();
+        await this.clearCommunityStatsCaches();
+      } catch (cacheError) {
+        // eslint-disable-next-line no-console
+        console.error('⚠️ Cache clear failed after ride creation:', cacheError);
+      }
 
       return { success: true, data: ride };
     } catch (error) {
