@@ -44,6 +44,59 @@ export class ItemsController {
   ) {
     return this.itemsService.delete(collection, userId, itemId);
   }
+
+  // Redis-powered endpoints
+  
+  @Get('user-activity/:userId')
+  async getUserActivity(@Param('userId') userId: string) {
+    try {
+      const activity = await this.itemsService.getUserActivity(userId);
+      return {
+        success: true,
+        userId,
+        ...activity,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  
+  @Get('popular-collections')
+  async getPopularCollections() {
+    try {
+      const collections = await this.itemsService.getPopularCollections();
+      return {
+        success: true,
+        collections,
+        total: collections.length,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  
+  @Get('cache-stats')
+  async getCacheStats() {
+    try {
+      const stats = await this.itemsService.getCacheStats();
+      return {
+        success: true,
+        stats,
+        message: 'Redis cache statistics',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 }
 
 
