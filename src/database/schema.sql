@@ -108,8 +108,8 @@ CREATE TABLE IF NOT EXISTS donations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     donor_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     recipient_id UUID, -- REFERENCES user_profiles(id), -- can be null for general donations
-    organization_id UUID REFERENCES organizations(id), -- can be null
-    category_id UUID REFERENCES donation_categories(id),
+    organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
+    category_id UUID, -- REFERENCES donation_categories(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255) NOT NULL,
     description TEXT,
     amount DECIMAL(10,2), -- for money donations
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS rides (
 -- Ride requests/bookings
 CREATE TABLE IF NOT EXISTS ride_bookings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    ride_id UUID REFERENCES rides(id),
+    ride_id UUID, -- REFERENCES rides(id), -- Temporarily disabled for backward compatibility
     passenger_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     seats_requested INTEGER DEFAULT 1,
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, cancelled
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS ride_bookings (
 CREATE TABLE IF NOT EXISTS community_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     organizer_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
-    organization_id UUID REFERENCES organizations(id),
+    organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255) NOT NULL,
     description TEXT,
     event_date TIMESTAMPTZ NOT NULL,
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS community_events (
 -- Event attendees
 CREATE TABLE IF NOT EXISTS event_attendees (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    event_id UUID REFERENCES community_events(id),
+    event_id UUID, -- REFERENCES community_events(id), -- Temporarily disabled for backward compatibility
     user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     status VARCHAR(20) DEFAULT 'going', -- going, maybe, not_going
     registered_at TIMESTAMPTZ DEFAULT NOW(),
@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
 -- Chat messages with rich content support
 CREATE TABLE IF NOT EXISTS chat_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    conversation_id UUID REFERENCES chat_conversations(id),
+    conversation_id UUID, -- REFERENCES chat_conversations(id), -- Temporarily disabled for backward compatibility
     sender_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     content TEXT,
     message_type VARCHAR(20) DEFAULT 'text', -- text, image, file, voice, location, donation
@@ -217,7 +217,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     file_size INTEGER,
     file_type VARCHAR(100),
     metadata JSONB, -- coordinates for location, donation details, etc.
-    reply_to_id UUID REFERENCES chat_messages(id),
+    reply_to_id UUID, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
     is_edited BOOLEAN DEFAULT false,
     edited_at TIMESTAMPTZ,
     is_deleted BOOLEAN DEFAULT false,
@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 -- Read receipts for messages
 CREATE TABLE IF NOT EXISTS message_read_receipts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    message_id UUID REFERENCES chat_messages(id),
+    message_id UUID, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
     user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     read_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(message_id, user_id)
