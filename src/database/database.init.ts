@@ -12,16 +12,23 @@ export class DatabaseInit implements OnModuleInit {
     try {
       const client = await this.pool.connect();
       try {
-        // First, run the comprehensive schema
-        await this.runSchema(client);
-        
-        // Keep backward compatibility with old JSONB tables
+        // For now, just ensure backward compatibility tables work
         await this.ensureBackwardCompatibility(client);
 
-        // Initialize default data
-        await this.initializeDefaultData(client);
-
-        console.log('✅ DatabaseInit - Complete schema initialized successfully');
+        console.log('✅ DatabaseInit - Basic tables initialized successfully');
+        
+        // Try to run the full schema, unless explicitly skipped for local dev
+        if (process.env.SKIP_FULL_SCHEMA === '1') {
+          console.warn('⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)');
+        } else {
+          try {
+            await this.runSchema(client);
+            await this.initializeDefaultData(client);
+            console.log('✅ DatabaseInit - Complete schema initialized successfully');
+          } catch (schemaError: any) {
+            console.warn('⚠️ Full schema initialization failed, using basic tables:', schemaError?.message || schemaError);
+          }
+        }
       } finally {
         client.release();
       }
@@ -33,7 +40,26 @@ export class DatabaseInit implements OnModuleInit {
 
   private async runSchema(client: any) {
     try {
-      const schemaPath = path.join(__dirname, 'schema.sql');
+      // Support both build (dist) and dev (src) paths
+      const candidates = [
+        path.join(__dirname, 'schema.sql'), // dist/database/schema.sql (build)
+        path.join(process.cwd(), 'dist', 'database', 'schema.sql'),
+        path.join(process.cwd(), 'src', 'database', 'schema.sql'), // dev path
+        path.resolve(__dirname, '../../src/database/schema.sql'),
+      ];
+
+      let schemaPath = '';
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          schemaPath = p;
+          break;
+        }
+      }
+
+      if (!schemaPath) {
+        throw new Error('schema.sql not found in expected locations');
+      }
+
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       
       // Split by semicolons and execute each statement
@@ -45,7 +71,7 @@ export class DatabaseInit implements OnModuleInit {
         }
       }
       
-      console.log('✅ Schema tables created successfully');
+      console.log(`✅ Schema tables created successfully from: ${schemaPath}`);
     } catch (err) {
       console.error('❌ Schema creation failed:', err);
       throw err;
@@ -69,12 +95,27 @@ export class DatabaseInit implements OnModuleInit {
         CREATE INDEX IF NOT EXISTS ${name}_data_gin ON ${name} USING GIN (data);
       `;
 
-      const legacyTables = [
+      // JSONB legacy tables for backward compatibility.
+      // IMPORTANT: Exclude tables that are owned by the relational schema in schema.sql to avoid FK conflicts
+      const relationalOwned = new Set([
+        // core relational schema tables
+        'user_profiles',
+        'organizations', 'organization_applications',
+        'donation_categories', 'donations',
+        'rides', 'ride_bookings',
+        'community_events', 'event_attendees',
+        'chat_conversations', 'chat_messages', 'message_read_receipts',
+        'user_activities', 'community_stats', 'user_follows', 'user_notifications',
+      ]);
+
+      const potentialLegacy = [
         'users', 'posts', 'followers', 'following', 'chats', 'messages', 'notifications', 'bookmarks',
         'donations', 'tasks', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
         'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications',
         'analytics'
       ];
+
+      const legacyTables = potentialLegacy.filter(t => !relationalOwned.has(t));
 
       for (const t of legacyTables) {
         await client.query(baseTable(t));
