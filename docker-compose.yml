@@ -1,3 +1,7 @@
+# File overview:
+# - Purpose: Local development services for Postgres and Redis.
+# - Reached from: `MVP/scripts/run-local-e2e.sh` to bring up DBs before server start.
+# - Services: postgres:15 (kc_db) with volume; redis:7 default.
 version: '3.9'
 services:
   postgres:

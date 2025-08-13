@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: One-off/dev script to ensure minimal DB schema and indexes exist for local E2E runs.
+// - Reached from: Client script `scripts/run-local-e2e.sh` before starting server.
+// - Provides: Creates `community_stats`, `donation_categories`, relational `donations`, plus a set of JSONB tables for generic items and messaging.
+// - Also: Ensures rides + ride_bookings tables; seeds default categories; prints success on completion.
 import { Pool } from 'pg';
 import * as dotenv from 'dotenv';
 
@@ -15,6 +20,61 @@ async function run() {
   const client = await pool.connect();
   try {
     await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+    // Minimal relational tables to satisfy new controllers when skipping full schema
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS community_stats (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        stat_type VARCHAR(50) NOT NULL,
+        stat_value BIGINT DEFAULT 0,
+        city VARCHAR(100),
+        date_period DATE,
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(stat_type, city, date_period)
+      );
+    `);
+    await client.query('CREATE INDEX IF NOT EXISTS idx_community_stats_type ON community_stats (stat_type, date_period);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, date_period);');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS donation_categories (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        slug VARCHAR(50) UNIQUE NOT NULL,
+        name_he VARCHAR(100) NOT NULL,
+        name_en VARCHAR(100) NOT NULL,
+        description_he TEXT,
+        description_en TEXT,
+        icon VARCHAR(50),
+        color VARCHAR(7),
+        is_active BOOLEAN DEFAULT true,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS donations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        donor_id UUID,
+        recipient_id UUID,
+        organization_id UUID,
+        category_id UUID,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        amount DECIMAL(10,2),
+        currency VARCHAR(3) DEFAULT 'ILS',
+        type VARCHAR(20) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        location JSONB,
+        images TEXT[],
+        tags TEXT[],
+        metadata JSONB,
+        expires_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
 
     const baseTable = (name: string) => `
       CREATE TABLE IF NOT EXISTS ${name} (
@@ -39,7 +99,6 @@ async function run() {
       'messages',
       'notifications',
       'bookmarks',
-      'donations',
       'tasks',
       'settings',
       'media',
@@ -49,7 +108,6 @@ async function run() {
       'read_receipts',
       'voice_messages',
       'conversation_metadata',
-      'rides',
       // Organizations / NGO onboarding
       'organizations',
       'org_applications',
@@ -65,6 +123,303 @@ async function run() {
     await client.query(
       `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')))`
     );
+
+    // If a legacy JSONB donations table exists (with 'data' column) — replace it with relational schema for APIs
+    const legacyDonations = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'donations' AND column_name = 'data'
+      ) AS exists;
+    `);
+    if (legacyDonations?.rows?.[0]?.exists) {
+      // eslint-disable-next-line no-console
+      console.warn('⚠️  Replacing legacy JSONB donations table with relational schema');
+      await client.query('DROP TABLE IF EXISTS donations CASCADE;');
+    }
+    // Ensure relational donations table exists (id/donor_id/...)
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS donations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        donor_id UUID,
+        recipient_id UUID,
+        organization_id UUID,
+        category_id UUID,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        amount DECIMAL(10,2),
+        currency VARCHAR(3) DEFAULT 'ILS',
+        type VARCHAR(20) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        location JSONB,
+        images TEXT[],
+        tags TEXT[],
+        metadata JSONB,
+        expires_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    // Create indexes only if columns exist (safe on re-run)
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='donations' AND column_name='donor_id'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_donations_donor ON donations (donor_id);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='donations' AND column_name='category_id'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_donations_category ON donations (category_id);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='donations' AND column_name='type'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_donations_type ON donations (type);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='donations' AND column_name='status'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_donations_status ON donations (status);
+        END IF;
+      END$$;
+    `);
+
+    // Ensure rides relational schema (replace legacy JSONB rides if exists)
+    const legacyRides = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'rides' AND column_name = 'data'
+      ) AS exists;
+    `);
+    if (legacyRides?.rows?.[0]?.exists) {
+      // eslint-disable-next-line no-console
+      console.warn('⚠️  Replacing legacy JSONB rides table with relational schema');
+      await client.query('DROP TABLE IF EXISTS rides CASCADE;');
+    }
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS rides (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        driver_id UUID,
+        title VARCHAR(255),
+        from_location JSONB NOT NULL,
+        to_location JSONB NOT NULL,
+        departure_time TIMESTAMPTZ NOT NULL,
+        arrival_time TIMESTAMPTZ,
+        available_seats INTEGER DEFAULT 1,
+        price_per_seat DECIMAL(10,2) DEFAULT 0,
+        description TEXT,
+        requirements TEXT,
+        status VARCHAR(20) DEFAULT 'active',
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='rides' AND column_name='driver_id'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides (driver_id);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='rides' AND column_name='departure_time'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_rides_departure ON rides (departure_time);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='rides' AND column_name='status'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_rides_status ON rides (status);
+        END IF;
+      END$$;
+    `);
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name='rides' AND column_name='from_location'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name='rides' AND column_name='to_location'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);
+        END IF;
+      END$$;
+    `);
+
+    // Ensure ride_bookings table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ride_bookings (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        ride_id UUID,
+        passenger_id UUID,
+        seats_requested INTEGER DEFAULT 1,
+        status VARCHAR(20) DEFAULT 'pending',
+        message TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(ride_id, passenger_id)
+      );
+    `);
+
+    // Ensure community_events table - required by StatsController
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS community_events (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        organizer_id UUID,
+        organization_id UUID,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        event_date TIMESTAMPTZ NOT NULL,
+        end_date TIMESTAMPTZ,
+        location JSONB,
+        max_attendees INTEGER,
+        current_attendees INTEGER DEFAULT 0,
+        category VARCHAR(50),
+        tags TEXT[],
+        image_url TEXT,
+        is_virtual BOOLEAN DEFAULT false,
+        meeting_link TEXT,
+        status VARCHAR(20) DEFAULT 'active',
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_status ON community_events (status);');
+
+    // Ensure event_attendees table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS event_attendees (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        event_id UUID,
+        user_id UUID,
+        status VARCHAR(20) DEFAULT 'going',
+        registered_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(event_id, user_id)
+      );
+    `);
+
+    // Ensure chat_messages table with required columns for StatsController
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        conversation_id UUID,
+        sender_id UUID,
+        content TEXT,
+        message_type VARCHAR(20) DEFAULT 'text',
+        file_url TEXT,
+        file_name VARCHAR(255),
+        file_size INTEGER,
+        file_type VARCHAR(100),
+        metadata JSONB,
+        reply_to_id UUID,
+        is_edited BOOLEAN DEFAULT false,
+        edited_at TIMESTAMPTZ,
+        is_deleted BOOLEAN DEFAULT false,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`);
+
+    // Add missing columns to existing chat_messages table if needed
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='chat_messages' AND column_name='is_deleted'
+        ) THEN
+          ALTER TABLE chat_messages ADD COLUMN is_deleted BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='chat_messages' AND column_name='deleted_at'
+        ) THEN
+          ALTER TABLE chat_messages ADD COLUMN deleted_at TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='chat_messages' AND column_name='is_edited'
+        ) THEN
+          ALTER TABLE chat_messages ADD COLUMN is_edited BOOLEAN DEFAULT false;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='chat_messages' AND column_name='edited_at'
+        ) THEN
+          ALTER TABLE chat_messages ADD COLUMN edited_at TIMESTAMPTZ;
+        END IF;
+      END$$;
+    `);
+
+    // Ensure chat_conversations table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_conversations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        title VARCHAR(255),
+        type VARCHAR(20) DEFAULT 'direct',
+        participants UUID[] NOT NULL DEFAULT ARRAY[]::UUID[],
+        created_by UUID,
+        last_message_id UUID,
+        last_message_at TIMESTAMPTZ DEFAULT NOW(),
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`);
+
+    // Seed default donation categories if empty
+    const { rows: catCountRows } = await client.query('SELECT COUNT(*)::int as count FROM donation_categories');
+    const catCount = catCountRows?.[0]?.count ?? 0;
+    if (catCount === 0) {
+      const categories = [
+        { slug: 'money', name_he: 'כסף', name_en: 'Money', icon: '💰', color: '#4CAF50', sort_order: 1 },
+        { slug: 'trump', name_he: 'טרמפים', name_en: 'Rides', icon: '🚗', color: '#2196F3', sort_order: 2 },
+        { slug: 'knowledge', name_he: 'ידע', name_en: 'Knowledge', icon: '📚', color: '#9C27B0', sort_order: 3 },
+        { slug: 'time', name_he: 'זמן', name_en: 'Time', icon: '⏰', color: '#FF9800', sort_order: 4 },
+        { slug: 'food', name_he: 'אוכל', name_en: 'Food', icon: '🍞', color: '#8BC34A', sort_order: 5 },
+        { slug: 'clothes', name_he: 'בגדים', name_en: 'Clothes', icon: '👕', color: '#03A9F4', sort_order: 6 },
+        { slug: 'books', name_he: 'ספרים', name_en: 'Books', icon: '📖', color: '#607D8B', sort_order: 7 },
+        { slug: 'furniture', name_he: 'רהיטים', name_en: 'Furniture', icon: '🪑', color: '#795548', sort_order: 8 },
+        { slug: 'medical', name_he: 'רפואה', name_en: 'Medical', icon: '🏥', color: '#F44336', sort_order: 9 },
+        { slug: 'animals', name_he: 'חיות', name_en: 'Animals', icon: '🐾', color: '#4CAF50', sort_order: 10 },
+        { slug: 'housing', name_he: 'דיור', name_en: 'Housing', icon: '🏠', color: '#FF5722', sort_order: 11 },
+        { slug: 'support', name_he: 'תמיכה', name_en: 'Support', icon: '💝', color: '#E91E63', sort_order: 12 },
+        { slug: 'education', name_he: 'חינוך', name_en: 'Education', icon: '🎓', color: '#3F51B5', sort_order: 13 },
+        { slug: 'environment', name_he: 'סביבה', name_en: 'Environment', icon: '🌱', color: '#4CAF50', sort_order: 14 },
+        { slug: 'technology', name_he: 'טכנולוגיה', name_en: 'Technology', icon: '💻', color: '#009688', sort_order: 15 }
+      ];
+      for (const c of categories) {
+        await client.query(
+          `INSERT INTO donation_categories (slug, name_he, name_en, icon, color, sort_order)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (slug) DO UPDATE SET name_he=EXCLUDED.name_he, name_en=EXCLUDED.name_en, icon=EXCLUDED.icon, color=EXCLUDED.color, sort_order=EXCLUDED.sort_order, updated_at=NOW()`,
+          [c.slug, c.name_he, c.name_en, c.icon, c.color, c.sort_order]
+        );
+      }
+    }
 
     // eslint-disable-next-line no-console
     console.log('✅ Database initialized');

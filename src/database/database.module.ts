@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Provide a global PostgreSQL `Pool` via DI token `PG_POOL` with flexible env config (Railway/local).
+// - Reached from: Imported by `AppModule` and any provider/controller injecting `PG_POOL`.
+// - Env inputs: `DATABASE_URL` (preferred) or discrete POSTGRES_* / PG* vars and optional SSL flags.
+// - Provides: `PG_POOL` provider; exports for use across the app.
 import { Global, Module } from '@nestjs/common';
 import { Pool } from 'pg';
 

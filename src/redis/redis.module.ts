@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Provide a global Redis client via DI token `REDIS` using ioredis with Railway-friendly config.
+// - Reached from: Imported by `AppModule` and `RedisCacheModule`.
+// - Env inputs: `REDIS_URL`/`REDIS_PUBLIC_URL`/Upstash vars or host/port + TLS flags.
+// - Provides: Connection with logging hooks; masks secrets in logs.
 // src/redis/redis.module.ts
 import { Global, Module } from '@nestjs/common';
 import Redis from 'ioredis';

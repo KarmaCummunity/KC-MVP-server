@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Redis-backed rate limiting with per-identifier rules and block windows; utilities and stats.
+// - Reached from: `RateLimitController` and other controllers/services enforcing quotas.
+// - Rules: Built-in presets for general, login, register, password_reset, chat, search; supports custom rules.
 import { Injectable } from '@nestjs/common';
 import { RedisCacheService } from '../redis/redis-cache.service';
 

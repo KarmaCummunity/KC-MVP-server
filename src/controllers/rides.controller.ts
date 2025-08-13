@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Rides API for creating, listing, booking, updating, and stats; integrates with community/user activity.
+// - Reached from: Routes under '/api/rides'.
+// - Provides: Create ride, list with filters, get by id, book ride, update booking status, per-user rides, summary stats; clears caches accordingly.
+// - Storage: `rides`, `ride_bookings`, `user_profiles`, `community_stats`; Redis caches with TTL.
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';

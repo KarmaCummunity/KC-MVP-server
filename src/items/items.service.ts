@@ -1,3 +1,9 @@
+// File overview:
+// - Purpose: Generic JSONB CRUD over multiple logical collections (users, posts, donations, rides, etc.) with Redis caching and activity tracking.
+// - Reached from: `ItemsController` endpoints under '/api'.
+// - Provides: create/read/update/delete/list with safe collection mapping; activity counters and cache stats via Redis.
+// - Storage: Postgres tables named after collections with (user_id, item_id, data JSONB) + indexes.
+// - Cache keys: item:{collection}:{userId}:{itemId}, list:{collection}:{userId}, activity:{userId}, daily_activity:{userId}:{YYYY-MM-DD}, popular_collections:*.
 import { Inject, Injectable } from '@nestjs/common';
 import { PG_POOL } from '../database/database.module';
 import { Pool } from 'pg';

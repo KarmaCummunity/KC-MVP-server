@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Users API for register/login (relational), get/update profile, list users, activities/stats, and follow/unfollow.
+// - Reached from: Routes under '/api/users'.
+// - Provides: Endpoints for CRUD-like operations and analytics; uses Redis caching for profiles/lists.
+// - Storage: `user_profiles`, `user_follows`, `user_activities` (and joins to donations/rides).
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';

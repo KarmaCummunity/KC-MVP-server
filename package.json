@@ -1,6 +1,6 @@
 {
   "name": "kc-mvp-server",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "description": "Karma Community MVP Server (NestJS + Postgres + Redis)",
   "private": true,
   "license": "MIT",
@@ -8,8 +8,8 @@
     "prebuild": "rimraf dist",
     "build": "rm -f *.tsbuildinfo && tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
-    "start:local": "REDIS_URL=redis://localhost:6379 POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=kc POSTGRES_PASSWORD=kc_password POSTGRES_DB=kc_db node dist/main.js",
-    "start:dev": "nest start --watch",
+    "start:local": "REDIS_URL=redis://localhost:6379 POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=kc POSTGRES_PASSWORD=kc_password POSTGRES_DB=kc_db EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com node dist/main.js",
+    "start:dev": "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com nest start --watch",
     "start:debug": "nest start --debug --watch",
     "lint": "eslint ./src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",

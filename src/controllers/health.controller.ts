@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Lightweight health endpoints (root OK and Redis health ping).
+// - Reached from: `AppModule` controller wiring at '/' and '/health/redis'.
+// - Provides: App status and Redis connectivity check.
 import { Controller, Get, Inject } from '@nestjs/common';
 import { REDIS } from '../redis/redis.module';
 import Redis from 'ioredis';

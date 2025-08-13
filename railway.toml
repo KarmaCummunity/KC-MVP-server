@@ -1,3 +1,6 @@
+# File overview:
+# - Purpose: Railway deployment config; builds via Dockerfile and runs compiled server.
+# - Reached from: Railway platform on deploy.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
@@ -11,3 +14,4 @@ restartPolicyMaxRetries = 10
 
 [env]
 NODE_ENV = "production"
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com"

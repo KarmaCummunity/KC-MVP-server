@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Donations API for categories, CRUD, listing, and stats; updates community/user stats and caches.
+// - Reached from: Routes under '/api/donations'.
+// - Provides: Create/update/delete donation, list with filters, per-user donations, category endpoints, summary stats.
+// - Storage: `donations`, `donation_categories`, `user_profiles`, `community_stats`; Redis caches with TTL.
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';

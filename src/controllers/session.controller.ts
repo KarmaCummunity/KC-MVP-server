@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Session endpoints for login (demo), validation, listing, logout (single/all), protected test, and stats.
+// - Reached from: Routes under '/session'.
+// - Provides: Uses `SessionService` for Redis-backed sessions and `RateLimitService` for throttling.
 import { Controller, Get, Post, Delete, Body, Headers, Ip, Req, Param } from '@nestjs/common';
 import { SessionService } from '../auth/session.service';
 import { RateLimitService } from '../auth/rate-limit.service';

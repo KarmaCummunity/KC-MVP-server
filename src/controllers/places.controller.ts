@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Places autocomplete and details via Google Places API, with Redis caching and simple analytics.
+// - Reached from: Routes '/autocomplete', '/place-details', '/search-stats'.
+// - Env inputs: GOOGLE_API_KEY; language fixed to he-IL and country IL.
+// - Provides: Caching for autocomplete results, simple Redis-based search metrics.
 import { Controller, Get, Query } from '@nestjs/common';
 import { RedisCacheService } from '../redis/redis-cache.service';
 

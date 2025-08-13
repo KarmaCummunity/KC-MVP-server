@@ -1,3 +1,9 @@
+// File overview:
+// - Purpose: NestJS bootstrap entrypoint to configure and start the HTTP server.
+// - Reached from: Node process start (Railway/Docker), runs `bootstrap()`.
+// - Provides: CORS configuration (origin from env), global ValidationPipe, loads dotenv.
+// - Env inputs: PORT, CORS_ORIGIN and DB/Redis envs used indirectly by modules.
+// - Downstream flow: Creates `AppModule` → loads controllers/modules for API routes.
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';

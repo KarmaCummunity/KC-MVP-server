@@ -1,3 +1,9 @@
+// File overview:
+// - Purpose: Root Nest module wiring configuration, database, redis, auth, and feature controllers.
+// - Reached from: `main.ts` NestFactory.create(AppModule).
+// - Provides: Controllers for health, places (Google), chat, auth, redis-test, session, rate-limit, donations, rides, users, stats.
+// - Imports: ConfigModule (global), DatabaseModule (PG pool), RedisModule/RedisCacheModule, AuthModule, ItemsModule.
+// - Providers: `DatabaseInit` runs schema/compat setup on startup.
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './controllers/health.controller';

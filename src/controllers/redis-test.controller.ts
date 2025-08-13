@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Utility endpoints to verify Redis connectivity and operations.
+// - Reached from: Routes under '/redis-test'.
+// - Provides: info, set/get/delete, keys, increment, and a comprehensive test suite.
 import { Controller, Get, Post, Delete, Body, Param, Query } from '@nestjs/common';
 import { RedisCacheService } from '../redis/redis-cache.service';
 

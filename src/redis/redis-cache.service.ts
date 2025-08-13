@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: High-level Redis helper service for set/get/delete/exists/keys and counters.
+// - Reached from: Injected into controllers/services for caching and stats.
+// - Provides: JSON serialization, TTL, increment, info dump for debugging.
 import { Injectable, Inject } from '@nestjs/common';
 import Redis from 'ioredis';
 import { REDIS } from './redis.module';

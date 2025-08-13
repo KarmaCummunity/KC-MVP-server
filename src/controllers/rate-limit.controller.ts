@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Endpoints to test, inspect, and manipulate rate limiting behavior.
+// - Reached from: Routes under '/rate-limit'.
+// - Provides: test, stress-test, status, clear, rules, stats, custom, simulate endpoints.
 import { Controller, Get, Post, Delete, Body, Ip, Param, Query } from '@nestjs/common';
 import { RateLimitService, RateLimitRule } from '../auth/rate-limit.service';
 

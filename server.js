@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Legacy Express server for simple Google Places proxy and chat echo (pre-NestJS). Kept for compatibility/dev.
+// - Reached from: Can be run standalone via `node server.js` on port 3001.
+// - Provides: '/', '/autocomplete', '/place-details', '/api/chat'. Uses GOOGLE_API_KEY from env.
 // server.js
 const express = require('express');
 const cors = require('cors');

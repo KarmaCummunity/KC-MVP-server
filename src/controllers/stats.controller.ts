@@ -1,3 +1,7 @@
+// File overview:
+// - Purpose: Stats/analytics endpoints for community, trends, city-level, category/user analytics, dashboard, and real-time metrics.
+// - Reached from: Routes under '/api/stats'.
+// - Provides: Aggregations over `community_stats`, donations/rides/users; caches responses with TTL; cache invalidation helpers.
 import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -399,25 +403,185 @@ export class StatsController {
   }
 
   private async addComputedStats(stats: any, city?: string) {
-    // Calculate derived statistics
-    const totalDonations = (stats.money_donations?.value || 0) + 
-                          (stats.volunteer_hours?.value || 0) + 
-                          (stats.rides_completed?.value || 0);
+    const cityCondition = city ? 'AND city = $1' : '';
+    const params = city ? [city] : [];
 
-    const activeMembers = await this.pool.query(`
-      SELECT COUNT(DISTINCT id) as count
-      FROM user_profiles 
-      WHERE is_active = true 
-        AND last_active >= NOW() - INTERVAL '30 days'
-        ${city ? 'AND city = $1' : ''}
-    `, city ? [city] : []);
+    // Basic counts and metrics
+    const queries = await Promise.all([
+      // User metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(DISTINCT id) as total_users,
+          COUNT(CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as active_members,
+          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active_users,
+          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
+          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_this_week,
+          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
+          COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
+          COUNT(DISTINCT city) as cities_with_users
+        FROM user_profiles 
+        WHERE 1=1 ${cityCondition}
+      `, params),
 
-    stats.total_contributions = { value: totalDonations, days_tracked: 1 };
-    stats.active_members = { value: parseInt(activeMembers.rows[0].count), days_tracked: 1 };
-    
-    if (stats.money_donations?.value > 0 && stats.active_members?.value > 0) {
-      stats.avg_donation_per_user = { 
-        value: Math.round(stats.money_donations.value / stats.active_members.value), 
+      // Donation metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(*) as total_donations,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_this_week,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as donations_this_month,
+          COUNT(CASE WHEN status = 'active' THEN 1 END) as active_donations,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_donations,
+          COUNT(CASE WHEN type = 'money' THEN 1 END) as money_donations,
+          COUNT(CASE WHEN type = 'item' THEN 1 END) as item_donations,
+          COUNT(CASE WHEN type = 'service' THEN 1 END) as service_donations,
+          COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_hours,
+          SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
+          COUNT(DISTINCT donor_id) as unique_donors
+        FROM donations 
+        WHERE 1=1 ${cityCondition.replace('city', 'location->>\'city\'')}
+      `, params),
+
+      // Ride metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(*) as total_rides,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as rides_this_week,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as rides_this_month,
+          COUNT(CASE WHEN status = 'active' THEN 1 END) as active_rides,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides,
+          SUM(available_seats) as total_seats_offered,
+          COUNT(DISTINCT driver_id) as unique_drivers
+        FROM rides 
+        WHERE 1=1 ${cityCondition.replace('city', 'from_location->>\'city\'')}
+      `, params),
+
+      // Event metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(*) as total_events,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as events_this_week,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as events_this_month,
+          COUNT(CASE WHEN status = 'active' THEN 1 END) as active_events,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_events,
+          SUM(current_attendees) as total_event_attendees,
+          COUNT(CASE WHEN is_virtual = true THEN 1 END) as virtual_events
+        FROM community_events 
+        WHERE 1=1 ${cityCondition.replace('city', 'location->>\'city\'')}
+      `, params),
+
+      // Activity and engagement metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(*) as total_activities,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '1 day' THEN 1 END) as activities_today,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as activities_this_week,
+          COUNT(CASE WHEN activity_type = 'login' THEN 1 END) as total_logins,
+          COUNT(CASE WHEN activity_type = 'donation' THEN 1 END) as donation_activities,
+          COUNT(CASE WHEN activity_type = 'chat' THEN 1 END) as chat_activities,
+          COUNT(DISTINCT user_id) as active_users_tracked
+        FROM user_activities 
+        WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
+      `, []),
+
+      // Chat and social metrics
+      this.pool.query(`
+        SELECT 
+          COUNT(DISTINCT cm.id) as total_messages,
+          COUNT(DISTINCT cc.id) as total_conversations,
+          COUNT(CASE WHEN cm.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as messages_this_week,
+          COUNT(CASE WHEN cc.type = 'group' THEN 1 END) as group_conversations,
+          COUNT(CASE WHEN cc.type = 'direct' THEN 1 END) as direct_conversations
+        FROM chat_conversations cc
+        LEFT JOIN chat_messages cm ON cc.id = cm.conversation_id
+        WHERE cm.is_deleted = false
+      `, [])
+    ]);
+
+    const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics] = queries;
+
+    // Map all computed stats
+    const computed = {
+      // User stats
+      total_users: { value: parseInt(userMetrics.rows[0].total_users || '0'), days_tracked: 1 },
+      active_members: { value: parseInt(userMetrics.rows[0].active_members || '0'), days_tracked: 1 },
+      daily_active_users: { value: parseInt(userMetrics.rows[0].daily_active_users || '0'), days_tracked: 1 },
+      weekly_active_users: { value: parseInt(userMetrics.rows[0].weekly_active_users || '0'), days_tracked: 1 },
+      new_users_this_week: { value: parseInt(userMetrics.rows[0].new_users_this_week || '0'), days_tracked: 1 },
+      new_users_this_month: { value: parseInt(userMetrics.rows[0].new_users_this_month || '0'), days_tracked: 1 },
+      total_organizations: { value: parseInt(userMetrics.rows[0].total_organizations || '0'), days_tracked: 1 },
+      cities_with_users: { value: parseInt(userMetrics.rows[0].cities_with_users || '0'), days_tracked: 1 },
+
+      // Donation stats
+      total_donations: { value: parseInt(donationMetrics.rows[0].total_donations || '0'), days_tracked: 1 },
+      donations_this_week: { value: parseInt(donationMetrics.rows[0].donations_this_week || '0'), days_tracked: 1 },
+      donations_this_month: { value: parseInt(donationMetrics.rows[0].donations_this_month || '0'), days_tracked: 1 },
+      active_donations: { value: parseInt(donationMetrics.rows[0].active_donations || '0'), days_tracked: 1 },
+      completed_donations: { value: parseInt(donationMetrics.rows[0].completed_donations || '0'), days_tracked: 1 },
+      money_donations: { value: parseInt(donationMetrics.rows[0].money_donations || '0'), days_tracked: 1 },
+      item_donations: { value: parseInt(donationMetrics.rows[0].item_donations || '0'), days_tracked: 1 },
+      service_donations: { value: parseInt(donationMetrics.rows[0].service_donations || '0'), days_tracked: 1 },
+      volunteer_hours: { value: parseInt(donationMetrics.rows[0].volunteer_hours || '0'), days_tracked: 1 },
+      total_money_donated: { value: parseFloat(donationMetrics.rows[0].total_money_donated || '0'), days_tracked: 1 },
+      unique_donors: { value: parseInt(donationMetrics.rows[0].unique_donors || '0'), days_tracked: 1 },
+
+      // Ride stats
+      total_rides: { value: parseInt(rideMetrics.rows[0].total_rides || '0'), days_tracked: 1 },
+      rides_this_week: { value: parseInt(rideMetrics.rows[0].rides_this_week || '0'), days_tracked: 1 },
+      rides_this_month: { value: parseInt(rideMetrics.rows[0].rides_this_month || '0'), days_tracked: 1 },
+      active_rides: { value: parseInt(rideMetrics.rows[0].active_rides || '0'), days_tracked: 1 },
+      completed_rides: { value: parseInt(rideMetrics.rows[0].completed_rides || '0'), days_tracked: 1 },
+      total_seats_offered: { value: parseInt(rideMetrics.rows[0].total_seats_offered || '0'), days_tracked: 1 },
+      unique_drivers: { value: parseInt(rideMetrics.rows[0].unique_drivers || '0'), days_tracked: 1 },
+
+      // Event stats
+      total_events: { value: parseInt(eventMetrics.rows[0].total_events || '0'), days_tracked: 1 },
+      events_this_week: { value: parseInt(eventMetrics.rows[0].events_this_week || '0'), days_tracked: 1 },
+      events_this_month: { value: parseInt(eventMetrics.rows[0].events_this_month || '0'), days_tracked: 1 },
+      active_events: { value: parseInt(eventMetrics.rows[0].active_events || '0'), days_tracked: 1 },
+      completed_events: { value: parseInt(eventMetrics.rows[0].completed_events || '0'), days_tracked: 1 },
+      total_event_attendees: { value: parseInt(eventMetrics.rows[0].total_event_attendees || '0'), days_tracked: 1 },
+      virtual_events: { value: parseInt(eventMetrics.rows[0].virtual_events || '0'), days_tracked: 1 },
+
+      // Activity stats
+      total_activities: { value: parseInt(activityMetrics.rows[0].total_activities || '0'), days_tracked: 1 },
+      activities_today: { value: parseInt(activityMetrics.rows[0].activities_today || '0'), days_tracked: 1 },
+      activities_this_week: { value: parseInt(activityMetrics.rows[0].activities_this_week || '0'), days_tracked: 1 },
+      total_logins: { value: parseInt(activityMetrics.rows[0].total_logins || '0'), days_tracked: 1 },
+      donation_activities: { value: parseInt(activityMetrics.rows[0].donation_activities || '0'), days_tracked: 1 },
+      chat_activities: { value: parseInt(activityMetrics.rows[0].chat_activities || '0'), days_tracked: 1 },
+      active_users_tracked: { value: parseInt(activityMetrics.rows[0].active_users_tracked || '0'), days_tracked: 1 },
+
+      // Chat stats
+      total_messages: { value: parseInt(chatMetrics.rows[0].total_messages || '0'), days_tracked: 1 },
+      total_conversations: { value: parseInt(chatMetrics.rows[0].total_conversations || '0'), days_tracked: 1 },
+      messages_this_week: { value: parseInt(chatMetrics.rows[0].messages_this_week || '0'), days_tracked: 1 },
+      group_conversations: { value: parseInt(chatMetrics.rows[0].group_conversations || '0'), days_tracked: 1 },
+      direct_conversations: { value: parseInt(chatMetrics.rows[0].direct_conversations || '0'), days_tracked: 1 },
+
+
+    };
+
+    // Add computed stats to the main stats object
+    Object.assign(stats, computed);
+
+    // Add derived metrics after base stats are set
+    stats.avg_donation_amount = { 
+      value: stats.money_donations?.value > 0 ? Math.round(stats.total_money_donated.value / stats.money_donations.value) : 0, 
+      days_tracked: 1 
+    };
+    stats.avg_seats_per_ride = { 
+      value: stats.total_rides?.value > 0 ? Math.round(stats.total_seats_offered.value / stats.total_rides.value) : 0, 
+      days_tracked: 1 
+    };
+    stats.user_engagement_rate = { 
+      value: stats.total_users?.value > 0 ? Math.round((stats.weekly_active_users.value / stats.total_users.value) * 100) : 0, 
+      days_tracked: 1 
+    };
+
+    // Legacy compatibility
+    if (!stats.total_contributions) {
+      stats.total_contributions = { 
+        value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0), 
         days_tracked: 1 
       };
     }

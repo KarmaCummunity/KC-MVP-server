@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Chat API for conversations and messages with Postgres persistence and Redis caching.
+// - Reached from: Routes under '/api/chat'.
+// - Provides: Create conversation, list user conversations (with unread counts), send message, and cache invalidation.
+// - Storage: Tables chat_conversations, chat_messages, message_read_receipts; caches keyed by user/patterns.
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';

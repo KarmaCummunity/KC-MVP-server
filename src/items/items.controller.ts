@@ -1,3 +1,9 @@
+// File overview:
+// - Purpose: Generic REST controller over logical collections stored in Postgres JSONB, with Redis utilities.
+// - Reached from: Routes under '/api' (e.g., /api/posts/:userId/:itemId), plus helper endpoints for cache/activity.
+// - Provides: CRUD (read/list/create/update/delete) via `ItemsService`, and Redis demos: user-activity, popular-collections, cache-stats, test-redis, demo-activity.
+// - Params: `collection` path param, optional `userId`, `itemId`, and query `q` for text search in list.
+// - External deps: `ItemsService` (PG + Redis), DTOs for validation.
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { ItemsService } from './items.service';
 import { QueryByUserDto, UpsertItemDto } from './dto/item.dto';
@@ -110,7 +116,7 @@ export class ItemsController {
   @Post('test-redis')
   async testRedis(@Body() body: { userId?: string; collection?: string; itemId?: string; data?: any }) {
     try {
-      const { userId = 'test_user', collection = 'posts', itemId = `test_${Date.now()}`, data = { message: 'Test Redis integration', timestamp: new Date().toISOString() } } = body;
+      const { userId = '550e8400-e29b-41d4-a716-446655440000', collection = 'posts', itemId = `test_${Date.now()}`, data = { message: 'Test Redis integration', timestamp: new Date().toISOString() } } = body;
       
       // Create a test item
       const createResult = await this.itemsService.create(collection, userId, itemId, data);
@@ -143,7 +149,7 @@ export class ItemsController {
   async getDemoActivity() {
     try {
       // Use a demo user ID
-      const demoUserId = 'demo_user_12345';
+      const demoUserId = '550e8400-e29b-41d4-a716-446655440000';
       const activity = await this.itemsService.getUserActivity(demoUserId);
       
       return {

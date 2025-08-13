@@ -1,3 +1,8 @@
+// File overview:
+// - Purpose: Minimal auth endpoints for email/password and Google OAuth; stores users in legacy JSONB `users` and mirrors to `user_profiles` if present.
+// - Reached from: Routes under '/auth'.
+// - Provides: check-email, register, login, google; normalizes email and returns public user shape.
+// - External deps: argon2 for hashing, google-auth-library for ID token verification.
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
