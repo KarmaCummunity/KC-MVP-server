@@ -11,12 +11,15 @@ ENV NODE_ENV=production
 LABEL Name="kc-mvp-server" Version="1.1.0"
 
 COPY package*.json ./
-RUN npm ci && npm cache clean --force
+RUN npm ci --include=dev && npm cache clean --force
 
 COPY . .
 
 # Build: prefer nest build via npm script; fallback to tsc
 RUN rm -f *.tsbuildinfo && (npm run build || npx tsc -p tsconfig.build.json)
+
+# Clean dev dependencies after build to reduce image size
+RUN npm prune --production
 
 # Ensure dist exists and include SQL schema into dist
 RUN test -f ./dist/main.js || (echo "dist/main.js missing" && exit 1)
