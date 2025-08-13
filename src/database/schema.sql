@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Create a view to map old user_id to new user_profiles.id for backward compatibility
+CREATE OR REPLACE VIEW user_id_mapping AS
+SELECT 
+    user_id as old_user_id,
+    id as new_user_id
+FROM users u
+JOIN user_profiles up ON u.data->>'email' = up.email
+WHERE u.data->>'email' IS NOT NULL;
+
 -- Organizations table
 CREATE TABLE IF NOT EXISTS organizations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -54,7 +63,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     logo_url TEXT,
     is_verified BOOLEAN DEFAULT false,
     status VARCHAR(20) DEFAULT 'active', -- active, inactive, pending
-    created_by UUID REFERENCES user_profiles(id),
+    created_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -62,8 +71,8 @@ CREATE TABLE IF NOT EXISTS organizations (
 -- Organization applications (for org admin approval)
 CREATE TABLE IF NOT EXISTS organization_applications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES user_profiles(id),
-    organization_id UUID REFERENCES organizations(id),
+    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
     applicant_email VARCHAR(255) NOT NULL,
     org_name VARCHAR(255) NOT NULL,
     org_description TEXT,
@@ -72,7 +81,7 @@ CREATE TABLE IF NOT EXISTS organization_applications (
     contact_info JSONB,
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected
     application_data JSONB,
-    reviewed_by UUID REFERENCES user_profiles(id),
+    reviewed_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     reviewed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -97,8 +106,8 @@ CREATE TABLE IF NOT EXISTS donation_categories (
 -- Donations table with detailed tracking
 CREATE TABLE IF NOT EXISTS donations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    donor_id UUID REFERENCES user_profiles(id),
-    recipient_id UUID REFERENCES user_profiles(id), -- can be null for general donations
+    donor_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    recipient_id UUID, -- REFERENCES user_profiles(id), -- can be null for general donations
     organization_id UUID REFERENCES organizations(id), -- can be null
     category_id UUID REFERENCES donation_categories(id),
     title VARCHAR(255) NOT NULL,
@@ -120,7 +129,7 @@ CREATE TABLE IF NOT EXISTS donations (
 -- Rides table (Trump/carpooling)
 CREATE TABLE IF NOT EXISTS rides (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    driver_id UUID REFERENCES user_profiles(id),
+    driver_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255),
     from_location JSONB NOT NULL, -- {name, city, coordinates}
     to_location JSONB NOT NULL, -- {name, city, coordinates}
@@ -140,7 +149,7 @@ CREATE TABLE IF NOT EXISTS rides (
 CREATE TABLE IF NOT EXISTS ride_bookings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     ride_id UUID REFERENCES rides(id),
-    passenger_id UUID REFERENCES user_profiles(id),
+    passenger_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     seats_requested INTEGER DEFAULT 1,
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, cancelled
     message TEXT,
@@ -152,7 +161,7 @@ CREATE TABLE IF NOT EXISTS ride_bookings (
 -- Community events
 CREATE TABLE IF NOT EXISTS community_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organizer_id UUID REFERENCES user_profiles(id),
+    organizer_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     organization_id UUID REFERENCES organizations(id),
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -176,7 +185,7 @@ CREATE TABLE IF NOT EXISTS community_events (
 CREATE TABLE IF NOT EXISTS event_attendees (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     event_id UUID REFERENCES community_events(id),
-    user_id UUID REFERENCES user_profiles(id),
+    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     status VARCHAR(20) DEFAULT 'going', -- going, maybe, not_going
     registered_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(event_id, user_id)
@@ -188,7 +197,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
     title VARCHAR(255),
     type VARCHAR(20) DEFAULT 'direct', -- direct, group
     participants UUID[] NOT NULL,
-    created_by UUID REFERENCES user_profiles(id),
+    created_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     last_message_id UUID,
     last_message_at TIMESTAMPTZ DEFAULT NOW(),
     metadata JSONB,
@@ -200,7 +209,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
 CREATE TABLE IF NOT EXISTS chat_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     conversation_id UUID REFERENCES chat_conversations(id),
-    sender_id UUID REFERENCES user_profiles(id),
+    sender_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     content TEXT,
     message_type VARCHAR(20) DEFAULT 'text', -- text, image, file, voice, location, donation
     file_url TEXT,
@@ -220,7 +229,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE TABLE IF NOT EXISTS message_read_receipts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     message_id UUID REFERENCES chat_messages(id),
-    user_id UUID REFERENCES user_profiles(id),
+    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     read_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(message_id, user_id)
 );
@@ -228,7 +237,7 @@ CREATE TABLE IF NOT EXISTS message_read_receipts (
 -- User activity tracking for analytics
 CREATE TABLE IF NOT EXISTS user_activities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES user_profiles(id),
+    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     activity_type VARCHAR(50) NOT NULL, -- login, donation, chat, view_category, etc.
     activity_data JSONB,
     ip_address INET,
@@ -252,8 +261,8 @@ CREATE TABLE IF NOT EXISTS community_stats (
 -- User following relationships
 CREATE TABLE IF NOT EXISTS user_follows (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    follower_id UUID REFERENCES user_profiles(id),
-    following_id UUID REFERENCES user_profiles(id),
+    follower_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    following_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(follower_id, following_id)
 );
@@ -261,7 +270,7 @@ CREATE TABLE IF NOT EXISTS user_follows (
 -- User notifications
 CREATE TABLE IF NOT EXISTS user_notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES user_profiles(id),
+    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255),
     content TEXT,
     notification_type VARCHAR(50), -- donation, message, event, system
