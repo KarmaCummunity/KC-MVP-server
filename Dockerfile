@@ -42,6 +42,8 @@ LABEL Name="kc-mvp-server" Version="1.1.0"
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
+# Copy SQL schema files that aren't included in TypeScript build
+COPY --from=builder /app/src/database/schema.sql ./dist/database/
 
 # Final assertion that dist exists
 RUN test -f ./dist/main.js
