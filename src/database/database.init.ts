@@ -162,6 +162,28 @@ export class DatabaseInit implements OnModuleInit {
         `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')));`
       );
 
+      // Ensure minimal relational tables required by new controllers exist
+      // community_stats is used by StatsController; create it even in legacy mode
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS community_stats (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          stat_type VARCHAR(50) NOT NULL,
+          stat_value BIGINT DEFAULT 0,
+          city VARCHAR(100),
+          date_period DATE,
+          metadata JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(stat_type, city, date_period)
+        );
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_community_stats_type ON community_stats (stat_type, date_period);
+      `);
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, date_period);
+      `);
+
       console.log('✅ Backward compatibility tables ensured');
     } catch (err) {
       console.error('❌ Backward compatibility setup failed:', err);
