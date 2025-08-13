@@ -7,6 +7,7 @@ import { DatabaseModule } from './database/database.module';
 import { DatabaseInit } from './database/database.init';
 import { ItemsModule } from './items/items.module';
 import { RedisModule } from './redis/redis.module';
+import { RedisCacheModule } from './redis/redis-cache.module';
 import { AuthController } from './controllers/auth.controller';
 import { RedisTestController } from './controllers/redis-test.controller';
 
@@ -15,6 +16,7 @@ import { RedisTestController } from './controllers/redis-test.controller';
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     RedisModule,
+    RedisCacheModule,
     ItemsModule,
   ],
   controllers: [HealthController, PlacesController, ChatController, AuthController, RedisTestController],
