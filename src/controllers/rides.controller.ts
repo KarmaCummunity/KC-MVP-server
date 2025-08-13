@@ -103,7 +103,7 @@ export class RidesController {
         INSERT INTO user_activities (user_id, activity_type, activity_data)
         VALUES ($1, $2, $3)
       `, [
-        rideData.driver_id,
+        driverUuid,
         'ride_created',
         JSON.stringify({ 
           ride_id: ride.id, 
@@ -283,12 +283,40 @@ export class RidesController {
         return { success: false, error: 'Not enough available seats' };
       }
 
+      // Resolve passenger ID (supports legacy/Firebase UID -> UUID mapping)
+      let passengerUuid = bookingData.passenger_id;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(passengerUuid)) {
+        const { rows: existingUsers } = await client.query(`
+          SELECT id FROM user_profiles 
+          WHERE settings->>'legacy_id' = $1 OR email = $2 
+          LIMIT 1
+        `, [passengerUuid, `${passengerUuid}@legacy.com`]);
+
+        if (existingUsers.length > 0) {
+          passengerUuid = existingUsers[0].id;
+          console.log(`🔄 Found existing user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
+        } else {
+          const { rows: newUsers } = await client.query(`
+            INSERT INTO user_profiles (email, name, settings)
+            VALUES ($1, $2, $3)
+            RETURNING id
+          `, [
+            `${passengerUuid}@legacy.com`,
+            `User ${passengerUuid}`,
+            JSON.stringify({ legacy_id: passengerUuid, source: 'legacy-app' })
+          ]);
+          passengerUuid = newUsers[0].id;
+          console.log(`✨ Created new user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
+        }
+      }
+
       // Create booking
       const { rows: bookingRows } = await client.query(`
         INSERT INTO ride_bookings (ride_id, passenger_id, seats_requested, message)
         VALUES ($1, $2, $3, $4)
         RETURNING *
-      `, [rideId, bookingData.passenger_id, requestedSeats, bookingData.message || '']);
+      `, [rideId, passengerUuid, requestedSeats, bookingData.message || '']);
 
       const booking = bookingRows[0];
 
@@ -297,7 +325,7 @@ export class RidesController {
         INSERT INTO user_activities (user_id, activity_type, activity_data)
         VALUES ($1, $2, $3)
       `, [
-        bookingData.passenger_id,
+        passengerUuid,
         'ride_booking_created',
         JSON.stringify({ 
           ride_id: rideId,
