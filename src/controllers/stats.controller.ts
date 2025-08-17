@@ -2,6 +2,22 @@
 // - Purpose: Stats/analytics endpoints for community, trends, city-level, category/user analytics, dashboard, and real-time metrics.
 // - Reached from: Routes under '/api/stats'.
 // - Provides: Aggregations over `community_stats`, donations/rides/users; caches responses with TTL; cache invalidation helpers.
+
+// TODO: CRITICAL - This file is extremely long (529+ lines). Split into specialized services:
+//   - CommunityStatsService for community-wide analytics
+//   - TrendsAnalyticsService for trend analysis
+//   - UserStatsService for user-specific analytics
+//   - DashboardStatsService for dashboard data
+//   - StatsCache service for cache management
+// TODO: Add comprehensive DTO validation for all query parameters
+// TODO: Implement proper pagination for large datasets
+// TODO: Add comprehensive error handling and validation
+// TODO: Replace hardcoded SQL queries with proper query builder
+// TODO: Add comprehensive caching strategies with proper invalidation
+// TODO: Implement proper authorization for sensitive stats
+// TODO: Add comprehensive logging and monitoring for analytics queries
+// TODO: Add comprehensive unit tests for all statistical calculations
+// TODO: Implement proper data privacy and anonymization
 import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -19,6 +35,10 @@ export class StatsController {
 
   @Get('community')
   async getCommunityStats(@Query('city') city?: string, @Query('period') period?: string) {
+    // TODO: Add comprehensive input validation for city and period parameters
+    // TODO: Implement proper DTO for query parameters with validation
+    // TODO: Add proper cache key generation utility to prevent key collisions
+    // TODO: Add comprehensive error handling for cache operations
     const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
     const cached = await this.redisCache.get(cacheKey);
     
@@ -58,11 +78,14 @@ export class StatsController {
     const { rows } = await this.pool.query(query, params);
 
     // Format response
+    // TODO: Replace 'any' type with proper statistics response interface
+    // TODO: Add proper data validation and error handling
+    // TODO: Implement proper data transformation utilities
     const stats: any = {};
     rows.forEach(row => {
       stats[row.stat_type] = {
-        value: parseInt(row.total_value),
-        days_tracked: parseInt(row.days_tracked)
+        value: parseInt(row.total_value), // TODO: Add proper number parsing with validation
+        days_tracked: parseInt(row.days_tracked) // TODO: Add proper number parsing with validation
       };
     });
 

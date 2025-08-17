@@ -3,6 +3,21 @@
 // - Reached from: Routes under '/api/users'.
 // - Provides: Endpoints for CRUD-like operations and analytics; uses Redis caching for profiles/lists.
 // - Storage: `user_profiles`, `user_follows`, `user_activities` (and joins to donations/rides).
+
+// TODO: CRITICAL - This file is too long (509 lines). Split into multiple services:
+//   - UserService for business logic
+//   - UserProfileService for profile operations  
+//   - UserStatsService for analytics
+//   - UserFollowService for follow/unfollow logic
+// TODO: Add comprehensive DTO validation for all endpoints
+// TODO: Implement proper pagination with cursor-based approach instead of offset
+// TODO: Add comprehensive error handling with proper HTTP status codes
+// TODO: Standardize response format across all endpoints
+// TODO: Add proper database constraint validation and conflict handling
+// TODO: Implement soft deletes instead of hard deletes where applicable
+// TODO: Add comprehensive logging and monitoring
+// TODO: Add unit and integration tests for all endpoints
+// TODO: Optimize database queries - many N+1 query problems
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -12,6 +27,9 @@ import * as argon2 from 'argon2';
 
 @Controller('api/users')
 export class UsersController {
+  // TODO: Move constants to a dedicated constants file
+  // TODO: Make cache TTL configurable through environment variables
+  // TODO: Implement different TTL values for different types of data
   private readonly CACHE_TTL = 15 * 60; // 15 minutes
 
   constructor(
@@ -21,6 +39,10 @@ export class UsersController {
 
   @Post('register')
   async registerUser(@Body() userData: any) {
+    // TODO: Replace 'any' with proper DTO interface
+    // TODO: Add comprehensive input validation (email format, password strength)
+    // TODO: Add rate limiting to prevent spam registrations
+    // TODO: Add email verification flow before account activation
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -94,6 +116,9 @@ export class UsersController {
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Register user error:', error);
+      // TODO: Implement proper error logging with context and stack traces
+      // TODO: Return more specific error messages based on error type
+      // TODO: Add error monitoring/alerting for registration failures
       return { success: false, error: 'Failed to register user' };
     } finally {
       client.release();
@@ -257,6 +282,9 @@ export class UsersController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string
   ) {
+    // TODO: Implement proper cache key structure and versioning
+    // TODO: Add cache invalidation strategy when users are updated
+    // TODO: Implement cache warming for frequently accessed data
     const cacheKey = `users_list_${city || 'all'}_${search || ''}_${limit || '50'}_${offset || '0'}`;
     const cached = await this.redisCache.get(cacheKey);
     

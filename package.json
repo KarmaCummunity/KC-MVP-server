@@ -4,6 +4,10 @@
   "description": "Karma Community MVP Server (NestJS + Postgres + Redis)",
   "private": true,
   "license": "MIT",
+  
+  "_TODO_DEPENDENCIES": "// TODO: Audit all dependencies for security vulnerabilities and outdated versions",
+  "_TODO_TESTING": "// TODO: Add comprehensive testing framework and test scripts",
+  "_TODO_DEPLOYMENT": "// TODO: Add proper deployment scripts and CI/CD integration",
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "rm -f *.tsbuildinfo && tsc -p tsconfig.build.json",
@@ -15,7 +19,9 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "init:db": "ts-node -r tsconfig-paths/register src/scripts/init-db.ts",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    
+    "_TODO_ADD_SCRIPTS": "// TODO: Add missing scripts: test, test:watch, test:coverage, migration:run, migration:revert, seed, security-audit"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

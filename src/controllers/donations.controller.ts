@@ -3,6 +3,21 @@
 // - Reached from: Routes under '/api/donations'.
 // - Provides: Create/update/delete donation, list with filters, per-user donations, category endpoints, summary stats.
 // - Storage: `donations`, `donation_categories`, `user_profiles`, `community_stats`; Redis caches with TTL.
+
+// TODO: CRITICAL - This file is long (292+ lines). Split into specialized services:
+//   - DonationsCategoryService for category operations
+//   - DonationsService for CRUD operations
+//   - DonationsStatsService for analytics
+//   - DonationsCacheService for cache management
+// TODO: Add comprehensive DTO validation for all endpoints with class-validator
+// TODO: Implement proper pagination with cursor-based approach
+// TODO: Add comprehensive error handling with proper HTTP status codes
+// TODO: Implement proper authorization and access control
+// TODO: Add comprehensive logging and monitoring for all operations
+// TODO: Remove hardcoded cache TTL and make it configurable
+// TODO: Add comprehensive unit tests for all donation operations
+// TODO: Implement proper data sanitization and validation
+// TODO: Add comprehensive API documentation with Swagger decorators
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -11,6 +26,9 @@ import { RedisCacheService } from '../redis/redis-cache.service';
 
 @Controller('api/donations')
 export class DonationsController {
+  // TODO: Move cache TTL to configuration service
+  // TODO: Implement different TTL values for different types of data
+  // TODO: Add cache invalidation strategies
   private readonly CACHE_TTL = 10 * 60; // 10 minutes
 
   constructor(
@@ -54,6 +72,10 @@ export class DonationsController {
 
   @Post()
   async createDonation(@Body() donationData: any) {
+    // TODO: Replace 'any' with proper CreateDonationDTO interface
+    // TODO: Add comprehensive input validation and sanitization
+    // TODO: Add proper authentication and authorization checks
+    // TODO: Implement rate limiting for donation creation
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');

@@ -4,6 +4,17 @@
 // - Provides: CORS configuration (origin from env), global ValidationPipe, loads dotenv.
 // - Env inputs: PORT, CORS_ORIGIN and DB/Redis envs used indirectly by modules.
 // - Downstream flow: Creates `AppModule` → loads controllers/modules for API routes.
+
+// TODO: Add comprehensive server startup logging with configuration summary
+// TODO: Add graceful shutdown handling (SIGTERM, SIGINT)
+// TODO: Add proper environment validation before startup
+// TODO: Implement health check endpoints before marking server as ready
+// TODO: Add security middleware (helmet, rate limiting, etc.)
+// TODO: Add request/response logging middleware
+// TODO: Add API documentation setup (Swagger)
+// TODO: Add proper error handling for startup failures
+// TODO: Add metrics collection and monitoring setup
+// TODO: Configure proper timeouts and limits
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -25,7 +36,10 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+        // TODO: Add more comprehensive ValidationPipe configuration
+      // TODO: Add proper error formatting for validation failures
+      // TODO: Add request/response size limits
+      app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console

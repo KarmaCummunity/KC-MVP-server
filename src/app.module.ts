@@ -4,6 +4,17 @@
 // - Provides: Controllers for health, places (Google), chat, auth, redis-test, session, rate-limit, donations, rides, users, stats.
 // - Imports: ConfigModule (global), DatabaseModule (PG pool), RedisModule/RedisCacheModule, AuthModule, ItemsModule.
 // - Providers: `DatabaseInit` runs schema/compat setup on startup.
+
+// TODO: Add proper module organization - group related controllers into feature modules
+// TODO: Add environment-specific configuration validation
+// TODO: Add health check module with proper database/redis connectivity checks
+// TODO: Implement proper module imports/exports structure
+// TODO: Add API versioning support
+// TODO: Add comprehensive logging module (Winston, etc.)
+// TODO: Add API documentation module (Swagger/OpenAPI)
+// TODO: Add security module with helmet, rate limiting, etc.
+// TODO: Remove test controllers from production builds
+// TODO: Add metrics and monitoring module (Prometheus, etc.)
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { HealthController } from './controllers/health.controller';

@@ -3,6 +3,21 @@
 // - Reached from: Routes under '/auth'.
 // - Provides: check-email, register, login, google; normalizes email and returns public user shape.
 // - External deps: argon2 for hashing, google-auth-library for ID token verification.
+
+// TODO: CRITICAL - This file is too long (358 lines). Break into separate services:
+//   - AuthService for business logic
+//   - UserService for user operations
+//   - GoogleAuthService for OAuth handling
+// TODO: Add comprehensive input validation with class-validator DTOs
+// TODO: Implement proper JWT token-based authentication instead of basic auth
+// TODO: Add rate limiting to prevent brute force attacks
+// TODO: Add proper logging service instead of console.log/console.error
+// TODO: Remove hardcoded user data and implement proper user creation flow
+// TODO: Add comprehensive error handling with proper HTTP status codes
+// TODO: Implement proper transaction management for database operations
+// TODO: Add unit tests for all authentication methods
+// TODO: Add security headers and CSRF protection
+// TODO: Remove duplicate code between register and google auth flows
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -26,6 +41,9 @@ export class AuthController {
   private googleClient: OAuth2Client;
 
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {
+    // TODO: Validate that Google client ID is properly configured
+    // TODO: Add proper configuration service instead of direct env access
+    // TODO: Add error handling for missing Google configuration
     const clientId = process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
     this.googleClient = new OAuth2Client(clientId);
   }
@@ -125,6 +143,10 @@ export class AuthController {
 
   @Get('check-email')
   async checkEmail(@Query('email') email?: string) {
+    // TODO: Add proper DTO validation for email parameter
+    // TODO: Add rate limiting to prevent email enumeration attacks
+    // TODO: Add proper error handling with try-catch
+    // TODO: Add logging for security monitoring
     const normalized = this.normalizeEmail(email || '');
     if (!normalized) {
       return { exists: false };
@@ -162,6 +184,9 @@ export class AuthController {
       phone: '+9720000000',
       avatar: 'https://i.pravatar.cc/150?img=1',
       bio: 'משתמש חדש בקארמה קומיוניטי',
+      // TODO: Remove hardcoded user data - use proper defaults or user input
+      // TODO: Generate proper avatar URL or use user uploaded image
+      // TODO: Localize default bio text based on user language preference
       karmaPoints: 0,
       joinDate: nowIso,
       isActive: true,
