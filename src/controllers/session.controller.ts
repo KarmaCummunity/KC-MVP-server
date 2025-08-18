@@ -1,5 +1,5 @@
 // File overview:
-// - Purpose: Session endpoints for login (demo), validation, listing, logout (single/all), protected test, and stats.
+// - Purpose: Session endpoints for login, validation, listing, logout (single/all), protected test, and stats.
 // - Reached from: Routes under '/session'.
 // - Provides: Uses `SessionService` for Redis-backed sessions and `RateLimitService` for throttling.
 import { Controller, Get, Post, Delete, Body, Headers, Ip, Req, Param } from '@nestjs/common';
@@ -47,7 +47,6 @@ export class SessionController {
       }
 
       // TODO: Add real password verification here
-      // For demo purposes, accept any email/password
       const userId = `user_${email.split('@')[0]}_${Date.now()}`;
       
       // Create session
@@ -196,7 +195,7 @@ export class SessionController {
   }
 
   /**
-   * Demo: Protected endpoint that requires session
+   * Protected endpoint that requires session
    * GET /session/protected
    */
   @Get('protected')
