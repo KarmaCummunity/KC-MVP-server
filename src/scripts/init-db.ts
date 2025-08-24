@@ -9,6 +9,7 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 async function run() {
+  console.log('🔧 Starting database initialization...');
   const pool = new Pool({
     host: process.env.POSTGRES_HOST || 'localhost',
     port: Number(process.env.POSTGRES_PORT || 5432),
@@ -17,9 +18,18 @@ async function run() {
     database: process.env.POSTGRES_DB || 'kc_db',
   });
 
+  console.log('🔧 Database connection config:', {
+    host: process.env.POSTGRES_HOST || 'localhost',
+    port: process.env.POSTGRES_PORT || 5432,
+    user: process.env.POSTGRES_USER || 'kc',
+    database: process.env.POSTGRES_DB || 'kc_db',
+  });
+
   const client = await pool.connect();
+  console.log('✅ Connected to database');
   try {
     await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+    console.log('✅ UUID extension ensured');
     // Minimal relational tables to satisfy new controllers when skipping full schema
     await client.query(`
       CREATE TABLE IF NOT EXISTS community_stats (

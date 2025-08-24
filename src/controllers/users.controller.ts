@@ -39,90 +39,15 @@ export class UsersController {
 
   @Post('register')
   async registerUser(@Body() userData: any) {
-    // TODO: Replace 'any' with proper DTO interface
-    // TODO: Add comprehensive input validation (email format, password strength)
-    // TODO: Add rate limiting to prevent spam registrations
-    // TODO: Add email verification flow before account activation
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Check if user already exists
-      const { rows: existingUsers } = await client.query(
-        `SELECT id FROM user_profiles WHERE LOWER(email) = LOWER($1)`,
-        [userData.email]
-      );
-
-      if (existingUsers.length > 0) {
-        await client.query('ROLLBACK');
-        return { success: false, error: 'User already exists' };
-      }
-
-      // Hash password if provided
-      let passwordHash = null;
-      if (userData.password) {
-        passwordHash = await argon2.hash(userData.password);
-      }
-
-      // Insert user
-      const { rows } = await client.query(`
-        INSERT INTO user_profiles (
-          email, name, phone, avatar_url, bio, city, country, 
-          interests, password_hash, settings
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id, email, name, phone, avatar_url, bio, karma_points, 
-                 join_date, city, country, interests, roles, settings
-      `, [
-        userData.email.toLowerCase().trim(),
-        userData.name || userData.email.split('@')[0],
-        userData.phone || null,
-        userData.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(userData.name || 'User')}&background=random`,
-        userData.bio || 'משתמש חדש בקארמה קומיוניטי',
-        userData.city || null,
-        userData.country || 'Israel',
-        userData.interests || [],
-        passwordHash,
-        userData.settings || {
-          "language": "he",
-          "dark_mode": false,
-          "notifications_enabled": true,
-          "privacy": "public"
-        }
-      ]);
-
-      const user = rows[0];
-
-      // Track registration activity
-      await client.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        user.id,
-        'user_registered',
-        JSON.stringify({ email: user.email, name: user.name })
-      ]);
-
-      // Update community stats
-      await client.query(`
-        INSERT INTO community_stats (stat_type, stat_value, date_period)
-        VALUES ('active_members', 1, CURRENT_DATE)
-        ON CONFLICT (stat_type, city, date_period) 
-        DO UPDATE SET stat_value = community_stats.stat_value + 1, updated_at = NOW()
-      `);
-
-      await client.query('COMMIT');
-
-      return { success: true, data: user };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      console.error('Register user error:', error);
-      // TODO: Implement proper error logging with context and stack traces
-      // TODO: Return more specific error messages based on error type
-      // TODO: Add error monitoring/alerting for registration failures
-      return { success: false, error: 'Failed to register user' };
-    } finally {
-      client.release();
-    }
+    // Registration via this relational route is intentionally disabled.
+    // Rationale:
+    // - We centralize identity in /auth/* controllers (legacy JSONB + Google flow).
+    // - Avoid duplicate logic and inconsistent constraints between tables.
+    // Next step (optional):
+    // - If we re-enable here, enforce the same policies as /auth/register and
+    //   write-through to both JSONB users and relational user_profiles with transactions.
+    // For now, direct clients to /auth/register.
+    return { success: false, error: 'Registration is disabled. Please use Google Sign-In to verify your email, then set a password.' };
   }
 
   @Post('login')
