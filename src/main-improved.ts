@@ -91,9 +91,13 @@ async function bootstrap() {
     logger.log(`🔒 Google OAuth configured: ${!!process.env.GOOGLE_CLIENT_ID}`);
     
   } catch (error) {
-    logger.error('❌ Failed to start server:', error.message);
-    if (error.stack && process.env.NODE_ENV === 'development') {
-      logger.error(error.stack);
+    if (error instanceof Error) {
+      logger.error('❌ Failed to start server:', error.message);
+      if (error.stack && process.env.NODE_ENV === 'development') {
+        logger.error(error.stack);
+      }
+    } else {
+      logger.error('❌ Failed to start server: Unknown error', error);
     }
     process.exit(1);
   }
