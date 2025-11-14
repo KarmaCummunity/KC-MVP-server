@@ -19,7 +19,7 @@ declare global {
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  private readonly logger = new Logger(JwtAuthGuard.name);
+  protected readonly logger = new Logger(JwtAuthGuard.name);
 
   constructor(
     private readonly jwtService: JwtService,
@@ -97,7 +97,7 @@ export class JwtAuthGuard implements CanActivate {
       }
 
       this.logger.error('Authentication guard error', {
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         ip: request.ip,
         path: request.path,
         method: request.method
@@ -182,7 +182,7 @@ export class OptionalAuthGuard implements CanActivate {
       // Ignore authentication errors for optional auth
       this.logger.debug('Optional auth: proceeding without authentication', {
         path: request.path,
-        reason: error.message
+        reason: error instanceof Error ? error.message : String(error)
       });
     }
 

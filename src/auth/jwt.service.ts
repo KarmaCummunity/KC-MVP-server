@@ -129,7 +129,7 @@ export class JwtService {
       return payload;
     } catch (error) {
       this.logger.warn('Token verification failed', { 
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         tokenLength: token?.length 
       });
       throw new UnauthorizedException('Invalid token');
@@ -196,7 +196,7 @@ export class JwtService {
         });
       }
     } catch (error) {
-      this.logger.warn('Failed to revoke token', { error: error.message });
+      this.logger.warn('Failed to revoke token', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -209,7 +209,7 @@ export class JwtService {
       this.logger.log('User session revoked', { sessionId });
     } catch (error) {
       this.logger.error('Failed to revoke user session', { 
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         sessionId 
       });
     }
@@ -248,7 +248,7 @@ export class JwtService {
       return sessions;
     } catch (error) {
       this.logger.error('Failed to get user active sessions', { 
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         userId 
       });
       return [];
