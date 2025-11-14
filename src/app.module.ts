@@ -1,7 +1,7 @@
 // File overview:
 // - Purpose: Root Nest module wiring configuration, database, redis, auth, and feature controllers.
 // - Reached from: `main.ts` NestFactory.create(AppModule).
-// - Provides: Controllers for health, places (Google), chat, auth, redis-test, session, rate-limit, donations, rides, users, stats.
+// - Provides: Controllers for health, places (Google), chat, auth, session, rate-limit, donations, rides, users, stats.
 // - Imports: ConfigModule (global), DatabaseModule (PG pool), RedisModule/RedisCacheModule, AuthModule, ItemsModule.
 // - Providers: `DatabaseInit` runs schema/compat setup on startup.
 
@@ -26,7 +26,6 @@ import { ItemsModule } from './items/items.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisCacheModule } from './redis/redis-cache.module';
 import { AuthController } from './controllers/auth.controller';
-import { RedisTestController } from './controllers/redis-test.controller';
 import { SessionController } from './controllers/session.controller';
 import { RateLimitController } from './controllers/rate-limit.controller';
 import { AuthModule } from './auth/auth.module';
@@ -50,7 +49,6 @@ import { StatsController } from './controllers/stats.controller';
     PlacesController, 
     ChatController, 
     AuthController, 
-    RedisTestController, 
     SessionController, 
     RateLimitController,
     // New comprehensive controllers

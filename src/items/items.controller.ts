@@ -1,7 +1,7 @@
 // File overview:
 // - Purpose: Generic REST controller over logical collections stored in Postgres JSONB, with Redis utilities.
 // - Reached from: Routes under '/api' (e.g., /api/posts/:userId/:itemId), plus helper endpoints for cache/activity.
-// - Provides: CRUD (read/list/create/update/delete) via `ItemsService`, and Redis demos: user-activity, popular-collections, cache-stats, test-redis, demo-activity.
+// - Provides: CRUD (read/list/create/update/delete) via `ItemsService`, and Redis utilities: user-activity, popular-collections, cache-stats.
 // - Params: `collection` path param, optional `userId`, `itemId`, and query `q` for text search in list.
 // - External deps: `ItemsService` (PG + Redis), DTOs for validation.
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
@@ -111,60 +111,6 @@ export class ItemsController {
     }
   }
 
-  // Simple test endpoints for Redis functionality
-  
-  @Post('test-redis')
-  async testRedis(@Body() body: { userId?: string; collection?: string; itemId?: string; data?: any }) {
-    try {
-      const { userId = '550e8400-e29b-41d4-a716-446655440000', collection = 'posts', itemId = `test_${Date.now()}`, data = { message: 'Test Redis integration', timestamp: new Date().toISOString() } } = body;
-      
-      // Create a test item
-      const createResult = await this.itemsService.create(collection, userId, itemId, data);
-      
-      // Read it back
-      const readResult = await this.itemsService.read(collection, userId, itemId);
-      
-      // Get user activity
-      const activity = await this.itemsService.getUserActivity(userId);
-      
-      return {
-        success: true,
-        message: 'Redis test completed successfully',
-        results: {
-          created: createResult,
-          retrieved: readResult,
-          userActivity: activity,
-        },
-        testData: { userId, collection, itemId, data },
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  @Get('demo-activity')
-  async getDemoActivity() {
-    try {
-      // Use a demo user ID
-      const demoUserId = '550e8400-e29b-41d4-a716-446655440000';
-      const activity = await this.itemsService.getUserActivity(demoUserId);
-      
-      return {
-        success: true,
-        message: 'Demo user activity from Redis',
-        userId: demoUserId,
-        ...activity,
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
 }
 
 
