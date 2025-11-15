@@ -18,6 +18,8 @@
     "lint": "eslint ./src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "init:db": "ts-node -r tsconfig-paths/register src/scripts/init-db.ts",
+    "reset:db": "ts-node -r tsconfig-paths/register scripts/reset-db.ts",
+    "reset:db:full": "./scripts/reset-db-full.sh",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     

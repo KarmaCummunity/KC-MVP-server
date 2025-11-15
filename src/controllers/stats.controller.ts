@@ -34,16 +34,27 @@ export class StatsController {
   ) {}
 
   @Get('community')
-  async getCommunityStats(@Query('city') city?: string, @Query('period') period?: string) {
+  async getCommunityStats(
+    @Query('city') city?: string, 
+    @Query('period') period?: string,
+    @Query('forceRefresh') forceRefresh?: string
+  ) {
     // TODO: Add comprehensive input validation for city and period parameters
     // TODO: Implement proper DTO for query parameters with validation
     // TODO: Add proper cache key generation utility to prevent key collisions
     // TODO: Add comprehensive error handling for cache operations
     const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
-    const cached = await this.redisCache.get(cacheKey);
     
-    if (cached) {
-      return { success: true, data: cached };
+    // Only use cache if forceRefresh is not true
+    if (forceRefresh !== 'true') {
+      const cached = await this.redisCache.get(cacheKey);
+      
+      if (cached) {
+        return { success: true, data: cached };
+      }
+    } else {
+      // Clear cache when force refresh is requested
+      await this.redisCache.delete(cacheKey);
     }
 
     let dateFilter = '';
@@ -607,6 +618,22 @@ export class StatsController {
         value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0), 
         days_tracked: 1 
       };
+    }
+  }
+
+  @Post('community/reset')
+  async resetCommunityStats() {
+    try {
+      // Delete all community_stats records
+      await this.pool.query(`DELETE FROM community_stats`);
+      
+      // Clear all stats-related caches
+      await this.clearStatsCaches();
+      
+      return { success: true, message: 'Community statistics reset successfully' };
+    } catch (error) {
+      console.error('Reset community stats error:', error);
+      return { success: false, error: 'Failed to reset community statistics' };
     }
   }
 
