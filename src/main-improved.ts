@@ -73,6 +73,30 @@ async function bootstrap() {
     
     logger.log(`🌐 CORS enabled for origins: ${corsOrigin}`);
 
+    // Extra CORS fallback middleware (handles proxies not honoring default CORS)
+    const defaultOrigins = [
+      'https://karma-community-kc.com',
+      'https://www.karma-community-kc.com',
+      'http://localhost:19006',
+      'http://localhost:3000',
+      'http://127.0.0.1:3000'
+    ];
+    const allowedOrigins = (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()) : defaultOrigins);
+    app.use((req: any, res: any, next: any) => {
+      const origin = req.headers.origin;
+      if (origin && (allowedOrigins.includes(origin) || corsOrigin === '*')) {
+        res.header('Access-Control-Allow-Origin', origin);
+        res.header('Vary', 'Origin');
+      }
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      if (req.method === 'OPTIONS') {
+        return res.sendStatus(204);
+      }
+      next();
+    });
+
     // Enhanced validation pipe with security settings
     app.useGlobalPipes(new ValidationPipe({ 
       whitelist: true, 
