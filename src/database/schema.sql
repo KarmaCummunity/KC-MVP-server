@@ -327,3 +327,29 @@ CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON user_profiles FO
 CREATE TRIGGER update_organizations_updated_at BEFORE UPDATE ON organizations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_donations_updated_at BEFORE UPDATE ON donations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_rides_updated_at BEFORE UPDATE ON rides FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Tasks table for group task management
+CREATE TABLE IF NOT EXISTS tasks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'open', -- open, in_progress, done, archived
+    priority VARCHAR(10) NOT NULL DEFAULT 'medium', -- low, medium, high
+    category VARCHAR(50), -- development, marketing, operations, etc.
+    due_date TIMESTAMPTZ,
+    assignees UUID[] DEFAULT ARRAY[]::UUID[],
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[],
+    checklist JSONB, -- [{id, text, done}]
+    created_by UUID,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
+CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category);
+CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees);
+CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
+
+CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

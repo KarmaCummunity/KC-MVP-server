@@ -37,6 +37,7 @@ import { RidesController } from './controllers/rides.controller';
 import { UsersController } from './controllers/users.controller';
 import { StatsController } from './controllers/stats.controller';
 import { RedisTestController } from './controllers/redis-test.controller';
+import { TasksController } from './controllers/tasks.controller';
 
 @Module({
   imports: [
@@ -59,7 +60,8 @@ import { RedisTestController } from './controllers/redis-test.controller';
     RidesController,
     UsersController,
     StatsController,
-    RedisTestController
+    RedisTestController,
+    TasksController
   ],
   providers: [DatabaseInit],
 })
