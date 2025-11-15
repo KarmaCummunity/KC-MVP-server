@@ -31,7 +31,7 @@ async function bootstrap() {
     origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Auth-Token', 'Origin', 'Accept'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   });
@@ -53,7 +53,7 @@ async function bootstrap() {
     }
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }
