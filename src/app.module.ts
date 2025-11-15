@@ -36,6 +36,7 @@ import { DonationsController } from './controllers/donations.controller';
 import { RidesController } from './controllers/rides.controller';
 import { UsersController } from './controllers/users.controller';
 import { StatsController } from './controllers/stats.controller';
+import { RedisTestController } from './controllers/redis-test.controller';
 
 @Module({
   imports: [
@@ -57,7 +58,8 @@ import { StatsController } from './controllers/stats.controller';
     DonationsController,
     RidesController,
     UsersController,
-    StatsController
+    StatsController,
+    RedisTestController
   ],
   providers: [DatabaseInit],
 })
