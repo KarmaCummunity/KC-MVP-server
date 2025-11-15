@@ -291,16 +291,29 @@ export class DonationsController {
 
   @Delete(':id')
   async deleteDonation(@Param('id') id: string) {
-    const { rowCount } = await this.pool.query(`
-      UPDATE donations SET status = 'cancelled', updated_at = NOW() WHERE id = $1
+    // First check if donation exists
+    const { rows } = await this.pool.query(`
+      SELECT id, status FROM donations WHERE id = $1
     `, [id]);
 
-    if (rowCount === 0) {
+    if (rows.length === 0) {
       return { success: false, error: 'Donation not found' };
     }
 
+    // Delete from database
+    const { rowCount } = await this.pool.query(`
+      DELETE FROM donations WHERE id = $1
+    `, [id]);
+
+    if (rowCount === 0) {
+      return { success: false, error: 'Failed to delete donation' };
+    }
+
+    // Clear all related caches
     await this.clearDonationCaches();
-    return { success: true, message: 'Donation cancelled successfully' };
+    await this.clearCommunityStatsCaches();
+
+    return { success: true, message: 'Donation deleted successfully' };
   }
 
   @Get('user/:userId')
