@@ -81,11 +81,13 @@ export class DonationsController {
       await client.query('BEGIN');
 
       // Insert donation
+      const isRecurring = donationData.is_recurring ?? donationData.isRecurring ?? false;
+
       const { rows } = await client.query(`
         INSERT INTO donations (
           donor_id, recipient_id, organization_id, category_id, 
           title, description, amount, currency, type, status,
-          location, images, tags, metadata, expires_at
+          is_recurring, location, images, tags, metadata, expires_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *
       `, [
@@ -99,6 +101,7 @@ export class DonationsController {
         donationData.currency || 'ILS',
         donationData.type,
         'active',
+        isRecurring,
         donationData.location ? JSON.stringify(donationData.location) : null,
         donationData.images || [],
         donationData.tags || [],
@@ -260,19 +263,21 @@ export class DonationsController {
           description = COALESCE($2, description),
           amount = COALESCE($3, amount),
           status = COALESCE($4, status),
-          location = COALESCE($5, location),
-          images = COALESCE($6, images),
-          tags = COALESCE($7, tags),
-          metadata = COALESCE($8, metadata),
-          expires_at = COALESCE($9, expires_at),
+          is_recurring = COALESCE($5, is_recurring),
+          location = COALESCE($6, location),
+          images = COALESCE($7, images),
+          tags = COALESCE($8, tags),
+          metadata = COALESCE($9, metadata),
+          expires_at = COALESCE($10, expires_at),
           updated_at = NOW()
-      WHERE id = $10
+      WHERE id = $11
       RETURNING *
     `, [
       updateData.title,
       updateData.description,
       updateData.amount,
       updateData.status,
+      updateData.is_recurring ?? updateData.isRecurring ?? null,
       updateData.location ? JSON.stringify(updateData.location) : null,
       updateData.images,
       updateData.tags,

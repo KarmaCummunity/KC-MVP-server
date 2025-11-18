@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS donations (
     currency VARCHAR(3) DEFAULT 'ILS',
     type VARCHAR(20) NOT NULL, -- money, item, service, time, trump
     status VARCHAR(20) DEFAULT 'active', -- active, completed, cancelled, expired
+    is_recurring BOOLEAN DEFAULT false,
     location JSONB, -- {city, address, coordinates}
     images TEXT[], -- array of image URLs
     tags TEXT[],

@@ -277,6 +277,7 @@ export class DatabaseInit implements OnModuleInit {
           currency VARCHAR(3) DEFAULT 'ILS',
           type VARCHAR(20) NOT NULL,
           status VARCHAR(20) DEFAULT 'active',
+          is_recurring BOOLEAN DEFAULT false,
           location JSONB,
           images TEXT[],
           tags TEXT[],
@@ -320,6 +321,17 @@ export class DatabaseInit implements OnModuleInit {
             WHERE table_name='donations' AND column_name='created_at'
           ) THEN
             CREATE INDEX IF NOT EXISTS idx_donations_created ON donations (created_at);
+          END IF;
+        END$$;
+      `);
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='donations' AND column_name='is_recurring'
+          ) THEN
+            ALTER TABLE donations ADD COLUMN is_recurring BOOLEAN DEFAULT false;
           END IF;
         END$$;
       `);
