@@ -17,10 +17,6 @@ export class TasksController {
   @Get()
   async listTasks(
     @Query('status') status?: TaskStatus,
-    @Query('priority') priority?: TaskPriority,
-    @Query('category') category?: string,
-    @Query('assignee') assignee?: string, // UUID to filter tasks containing this user
-    @Query('q') q?: string, // search in title/description
     @Query('limit') limitParam?: string,
     @Query('offset') offsetParam?: string,
   ) {
@@ -33,26 +29,10 @@ export class TasksController {
       params.push(status);
       filters.push(`status = $${params.length}`);
     }
-    if (priority) {
-      params.push(priority);
-      filters.push(`priority = $${params.length}`);
-    }
-    if (category) {
-      params.push(category);
-      filters.push(`category = $${params.length}`);
-    }
-    if (assignee) {
-      params.push(assignee);
-      filters.push(`$${params.length} = ANY(assignees)`);
-    }
-    if (q) {
-      params.push(`%${q.toLowerCase()}%`);
-      filters.push(`(LOWER(title) LIKE $${params.length} OR LOWER(description) LIKE $${params.length})`);
-    }
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
     const sql = `
-      SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+      SELECT id, title, description, status, priority, due_date, assignees, tags, checklist, created_by, created_at, updated_at
       FROM tasks
       ${where}
       ORDER BY 
@@ -71,7 +51,7 @@ export class TasksController {
   @Get(':id')
   async getTask(@Param('id') id: string) {
     const { rows } = await this.pool.query(
-      `SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+      `SELECT id, title, description, status, priority, due_date, assignees, tags, checklist, created_by, created_at, updated_at
        FROM tasks WHERE id = $1`,
       [id],
     );
@@ -88,10 +68,8 @@ export class TasksController {
       description = null,
       status = 'open',
       priority = 'medium',
-      category = null,
       due_date = null,
       assignees = [],
-      assigneesEmails = [], // optional: resolve emails to uuids
       tags = [],
       checklist = null,
       created_by = null,
@@ -101,22 +79,18 @@ export class TasksController {
       return { success: false, error: 'title is required' };
     }
 
-    // Resolve assignees by email if provided
-    const resolvedAssignees = await this.resolveAssignees(assignees, assigneesEmails);
-
     const sql = `
-      INSERT INTO tasks (title, description, status, priority, category, due_date, assignees, tags, checklist, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::UUID[], $8::TEXT[], $9::JSONB, $10)
-      RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+      INSERT INTO tasks (title, description, status, priority, due_date, assignees, tags, checklist, created_by)
+      VALUES ($1, $2, $3, $4, $5, $6::UUID[], $7::TEXT[], $8::JSONB, $9)
+      RETURNING id, title, description, status, priority, due_date, assignees, tags, checklist, created_by, created_at, updated_at
     `;
     const params = [
       title,
       description,
       status,
       priority,
-      category,
       due_date,
-      resolvedAssignees,
+      Array.isArray(assignees) ? assignees : [],
       Array.isArray(tags) ? tags : [],
       checklist,
       created_by,
@@ -134,10 +108,8 @@ export class TasksController {
       'description',
       'status',
       'priority',
-      'category',
       'due_date',
       'assignees',
-      'assigneesEmails',
       'tags',
       'checklist',
     ] as const;
@@ -146,17 +118,17 @@ export class TasksController {
 
     for (const key of allowed) {
       if (key in body) {
-        if (key === 'assignees' || key === 'assigneesEmails') {
-          // defer resolution after loop
-          continue;
-        }
         params.push(
-          key === 'tags'
+          key === 'assignees'
+            ? (Array.isArray(body[key]) ? body[key] : [])
+            : key === 'tags'
             ? (Array.isArray(body[key]) ? body[key] : [])
             : body[key],
         );
         const idx = params.length;
-        if (key === 'tags') {
+        if (key === 'assignees') {
+          sets.push(`assignees = $${idx}::UUID[]`);
+        } else if (key === 'tags') {
           sets.push(`tags = $${idx}::TEXT[]`);
         } else if (key === 'checklist') {
           sets.push(`checklist = $${idx}::JSONB`);
@@ -164,13 +136,6 @@ export class TasksController {
           sets.push(`${key} = $${idx}`);
         }
       }
-    }
-
-    // Resolve assignees if provided by UUIDs/emails
-    if ('assignees' in body || 'assigneesEmails' in body) {
-      const resolved = await this.resolveAssignees(body.assignees, body.assigneesEmails);
-      params.push(resolved);
-      sets.push(`assignees = $${params.length}::UUID[]`);
     }
 
     if (!sets.length) {
@@ -181,7 +146,7 @@ export class TasksController {
     const sql = `
       UPDATE tasks SET ${sets.join(', ')}, updated_at = NOW()
       WHERE id = $${params.length}
-      RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+      RETURNING id, title, description, status, priority, due_date, assignees, tags, checklist, created_by, created_at, updated_at
     `;
 
     const { rows } = await this.pool.query(sql, params);
@@ -198,21 +163,6 @@ export class TasksController {
       return { success: false, error: 'Task not found' };
     }
     return { success: true, message: 'Task deleted' };
-  }
-
-  private async resolveAssignees(assignees?: any, assigneesEmails?: any): Promise<string[]> {
-    const uuids: string[] = Array.isArray(assignees) ? assignees.filter(Boolean) : [];
-    const emails: string[] = Array.isArray(assigneesEmails) ? assigneesEmails.filter(Boolean) : [];
-    if (!emails.length) return uuids;
-    if (!emails.length) return uuids;
-    const uniqueEmails = Array.from(new Set(emails.map((e) => String(e).toLowerCase().trim()).filter(Boolean)));
-    if (!uniqueEmails.length) return uuids;
-    const placeholders = uniqueEmails.map((_, i) => `$${i + 1}`).join(', ');
-    const sql = `SELECT id FROM user_profiles WHERE LOWER(email) IN (${placeholders})`;
-    const { rows } = await this.pool.query(sql, uniqueEmails);
-    const found = rows.map((r: any) => r.id).filter(Boolean);
-    const merged = Array.from(new Set([...uuids, ...found]));
-    return merged;
   }
 }
 
