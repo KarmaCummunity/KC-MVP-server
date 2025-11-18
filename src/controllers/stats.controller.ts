@@ -34,6 +34,8 @@ export class StatsController {
   ) {}
 
   @Get('community')
+  // שינוי: הוספת תמיכה ב-forceRefresh parameter לטעינה מחדש של נתונים
+  // Change: Added support for forceRefresh parameter to reload data
   async getCommunityStats(
     @Query('city') city?: string, 
     @Query('period') period?: string,
@@ -46,6 +48,8 @@ export class StatsController {
     const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
     
     // Only use cache if forceRefresh is not true
+    // שינוי: תמיכה ב-forceRefresh לדילוג על cache וטעינה מחדש מהמסד נתונים
+    // Change: Support for forceRefresh to skip cache and reload from database
     if (forceRefresh !== 'true') {
       const cached = await this.redisCache.get(cacheKey);
       
@@ -54,6 +58,7 @@ export class StatsController {
       }
     } else {
       // Clear cache when force refresh is requested
+      // ניקוי cache כאשר מתבקש force refresh
       await this.redisCache.delete(cacheKey);
     }
 
@@ -89,6 +94,8 @@ export class StatsController {
     const { rows } = await this.pool.query(query, params);
 
     // Format response
+    // שינוי: פורמט תגובה עם מבנה value object לתמיכה במיפוי בצד הלקוח
+    // Change: Response format with value object structure for client-side mapping support
     // TODO: Replace 'any' type with proper statistics response interface
     // TODO: Add proper data validation and error handling
     // TODO: Implement proper data transformation utilities
@@ -101,6 +108,8 @@ export class StatsController {
     });
 
     // Add computed stats
+    // הוספת סטטיסטיקות מחושבות (unique_donors, total_money_donated, וכו')
+    // Adding computed stats (unique_donors, total_money_donated, etc.)
     await this.addComputedStats(stats, city);
 
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
@@ -475,6 +484,7 @@ export class StatsController {
           COUNT(CASE WHEN d.type = 'service' THEN 1 END) as service_donations,
           COUNT(CASE WHEN d.type = 'time' THEN 1 END) as volunteer_hours,
           SUM(CASE WHEN d.type = 'money' THEN d.amount ELSE 0 END) as total_money_donated,
+          SUM(CASE WHEN d.type = 'money' AND d.is_recurring = true AND d.status = 'active' THEN d.amount ELSE 0 END) as recurring_donations_amount,
           COUNT(DISTINCT CASE WHEN d.is_recurring = true AND up.is_active = true THEN d.donor_id END) as unique_donors
         FROM donations d
         LEFT JOIN user_profiles up ON up.id = d.donor_id
@@ -562,6 +572,7 @@ export class StatsController {
       service_donations: { value: parseInt(donationMetrics.rows[0].service_donations || '0'), days_tracked: 1 },
       volunteer_hours: { value: parseInt(donationMetrics.rows[0].volunteer_hours || '0'), days_tracked: 1 },
       total_money_donated: { value: parseFloat(donationMetrics.rows[0].total_money_donated || '0'), days_tracked: 1 },
+      recurring_donations_amount: { value: parseFloat(donationMetrics.rows[0].recurring_donations_amount || '0'), days_tracked: 1 },
       unique_donors: { value: parseInt(donationMetrics.rows[0].unique_donors || '0'), days_tracked: 1 },
 
       // Ride stats
