@@ -437,8 +437,11 @@ export class StatsController {
   }
 
   private async addComputedStats(stats: any, city?: string) {
-    const cityCondition = city ? 'AND city = $1' : '';
     const params = city ? [city] : [];
+    const userCityCondition = city ? 'AND city = $1' : '';
+    const donationCityCondition = city ? 'AND (d.location->>\'city\' = $1)' : '';
+    const rideCityCondition = city ? 'AND (from_location->>\'city\' = $1)' : '';
+    const eventCityCondition = city ? 'AND (location->>\'city\' = $1)' : '';
 
     // Basic counts and metrics
     const queries = await Promise.all([
@@ -454,25 +457,28 @@ export class StatsController {
           COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
         FROM user_profiles 
-        WHERE 1=1 ${cityCondition}
+        WHERE 1=1 ${userCityCondition}
+          AND email IS NOT NULL
+          AND email <> ''
       `, params),
 
       // Donation metrics
       this.pool.query(`
         SELECT 
           COUNT(*) as total_donations,
-          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_this_week,
-          COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as donations_this_month,
-          COUNT(CASE WHEN status = 'active' THEN 1 END) as active_donations,
-          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_donations,
-          COUNT(CASE WHEN type = 'money' THEN 1 END) as money_donations,
-          COUNT(CASE WHEN type = 'item' THEN 1 END) as item_donations,
-          COUNT(CASE WHEN type = 'service' THEN 1 END) as service_donations,
-          COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_hours,
-          SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
-          COUNT(DISTINCT donor_id) as unique_donors
-        FROM donations 
-        WHERE 1=1 ${cityCondition.replace('city', 'location->>\'city\'')}
+          COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_this_week,
+          COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as donations_this_month,
+          COUNT(CASE WHEN d.status = 'active' THEN 1 END) as active_donations,
+          COUNT(CASE WHEN d.status = 'completed' THEN 1 END) as completed_donations,
+          COUNT(CASE WHEN d.type = 'money' THEN 1 END) as money_donations,
+          COUNT(CASE WHEN d.type = 'item' AND d.status = 'active' THEN 1 END) as item_donations,
+          COUNT(CASE WHEN d.type = 'service' THEN 1 END) as service_donations,
+          COUNT(CASE WHEN d.type = 'time' THEN 1 END) as volunteer_hours,
+          SUM(CASE WHEN d.type = 'money' THEN d.amount ELSE 0 END) as total_money_donated,
+          COUNT(DISTINCT CASE WHEN d.is_recurring = true AND up.is_active = true THEN d.donor_id END) as unique_donors
+        FROM donations d
+        LEFT JOIN user_profiles up ON up.id = d.donor_id
+        WHERE 1=1 ${donationCityCondition}
       `, params),
 
       // Ride metrics
@@ -486,7 +492,7 @@ export class StatsController {
           SUM(available_seats) as total_seats_offered,
           COUNT(DISTINCT driver_id) as unique_drivers
         FROM rides 
-        WHERE 1=1 ${cityCondition.replace('city', 'from_location->>\'city\'')}
+        WHERE 1=1 ${rideCityCondition}
       `, params),
 
       // Event metrics
@@ -500,7 +506,7 @@ export class StatsController {
           SUM(current_attendees) as total_event_attendees,
           COUNT(CASE WHEN is_virtual = true THEN 1 END) as virtual_events
         FROM community_events 
-        WHERE 1=1 ${cityCondition.replace('city', 'location->>\'city\'')}
+        WHERE 1=1 ${eventCityCondition}
       `, params),
 
       // Activity and engagement metrics
