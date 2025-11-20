@@ -190,6 +190,36 @@ export class StatsController {
     return { success: true, data: citiesData };
   }
 
+  @Post('track-visit')
+  async trackSiteVisit() {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Track site visit - global stat, no city filter
+      await client.query(`
+        INSERT INTO community_stats (stat_type, stat_value, city, date_period)
+        VALUES ('site_visits', 1, NULL, CURRENT_DATE)
+        ON CONFLICT (stat_type, city, date_period) 
+        DO UPDATE SET 
+          stat_value = community_stats.stat_value + 1,
+          updated_at = NOW()
+      `);
+
+      // Clear relevant caches
+      await this.clearStatsCaches('site_visits', undefined);
+
+      await client.query('COMMIT');
+      return { success: true, message: 'Site visit tracked successfully' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Track site visit error:', error);
+      return { success: false, error: 'Failed to track site visit' };
+    } finally {
+      client.release();
+    }
+  }
+
   @Post('increment')
   async incrementStat(@Body() statData: any) {
     const client = await this.pool.connect();
@@ -544,10 +574,18 @@ export class StatsController {
         FROM chat_conversations cc
         LEFT JOIN chat_messages cm ON cc.id = cm.conversation_id
         WHERE cm.is_deleted = false
+      `, []),
+
+      // Site visits - total from community_stats
+      this.pool.query(`
+        SELECT 
+          COALESCE(SUM(stat_value), 0) as site_visits
+        FROM community_stats 
+        WHERE stat_type = 'site_visits'
       `, [])
     ]);
 
-    const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics] = queries;
+    const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics] = queries;
 
     // Map all computed stats
     const computed = {
@@ -609,6 +647,8 @@ export class StatsController {
       group_conversations: { value: parseInt(chatMetrics.rows[0].group_conversations || '0'), days_tracked: 1 },
       direct_conversations: { value: parseInt(chatMetrics.rows[0].direct_conversations || '0'), days_tracked: 1 },
 
+      // Site visits
+      site_visits: { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
 
     };
 
