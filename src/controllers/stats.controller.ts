@@ -116,6 +116,38 @@ export class StatsController {
     return { success: true, data: stats };
   }
 
+  @Get('community/version')
+  // Lightweight endpoint to check if stats have changed
+  // נקודת קצה קלת משקל לבדיקה אם הסטטיסטיקות השתנו
+  async getCommunityStatsVersion(@Query('city') city?: string) {
+    const cacheKey = `community_stats_version_${city || 'global'}`;
+    
+    // Check cache first (1 minute TTL for version check)
+    const cached = await this.redisCache.get(cacheKey);
+    if (cached) {
+      return { success: true, version: cached };
+    }
+
+    // Get the latest update timestamp from community_stats
+    const query = `
+      SELECT MAX(updated_at) as last_update
+      FROM community_stats
+      ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
+    `;
+    
+    const params = city ? [city] : [];
+    const { rows } = await this.pool.query(query, params);
+    
+    // Create version hash from timestamp
+    const lastUpdate = rows[0]?.last_update || new Date();
+    const version = new Date(lastUpdate).getTime().toString();
+    
+    // Cache for 1 minute
+    await this.redisCache.set(cacheKey, version, 60);
+    
+    return { success: true, version };
+  }
+
   @Get('community/trends')
   async getCommunityTrends(@Query('stat_type') statType: string, @Query('city') city?: string, @Query('days') days?: string) {
     const cacheKey = `community_trends_${statType}_${city || 'global'}_${days || '30'}`;
