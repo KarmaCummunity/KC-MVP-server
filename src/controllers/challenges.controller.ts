@@ -126,7 +126,7 @@ class CreateRecordBreakDto {
   reason?: string;
 }
 
-@Controller('challenges')
+@Controller('api/challenges')
 export class ChallengesController {
   private readonly logger = new Logger(ChallengesController.name);
 
@@ -173,7 +173,10 @@ export class ChallengesController {
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
       this.logger.error('Error creating challenge:', error);
-      throw new InternalServerErrorException('Failed to create challenge');
+      this.logger.error('Error details:', error.message, error.stack);
+      throw new InternalServerErrorException(
+        `Failed to create challenge: ${error.message || 'Unknown error'}`
+      );
     } finally {
       client.release();
     }
@@ -202,7 +205,10 @@ export class ChallengesController {
       return { success: true, data: result.rows };
     } catch (error: any) {
       this.logger.error('Error fetching challenges:', error);
-      throw new InternalServerErrorException('Failed to fetch challenges');
+      this.logger.error('Error details:', error.message, error.stack);
+      throw new InternalServerErrorException(
+        `Failed to fetch challenges: ${error.message || 'Unknown error'}`
+      );
     } finally {
       client.release();
     }

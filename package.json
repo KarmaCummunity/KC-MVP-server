@@ -1,6 +1,6 @@
 {
   "name": "kc-mvp-server",
-  "version": "1.7.6",
+  "version": "2.1.0",
   "description": "Karma Community MVP Server (NestJS + Postgres + Redis)",
   "private": true,
   "license": "MIT",

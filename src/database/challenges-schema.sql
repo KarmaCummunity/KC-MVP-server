@@ -100,3 +100,4 @@ COMMENT ON TABLE challenge_reset_logs IS 'Log of all challenge resets with mood 
 COMMENT ON TABLE challenge_record_breaks IS 'Log of personal record breaks';
 COMMENT ON TABLE challenge_global_stats IS 'Global statistics per user across all challenges';
 
+
