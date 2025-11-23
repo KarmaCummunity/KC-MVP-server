@@ -48,6 +48,12 @@ export class ItemsService {
       // Stats
       'stats',
       'community_stats',
+      // Challenges
+      'challenges',
+      'deleted_challenges',
+      'challenge_reset_logs',
+      'challenge_record_breaks',
+      'challenge_global_stats',
     ]);
     if (!allowed.has(collection)) {
       throw new Error(`Unknown collection: ${collection}`);

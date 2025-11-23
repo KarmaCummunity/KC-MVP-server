@@ -595,7 +595,10 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       // Initialize global community stats
+      // IMPORTANT: Using ON CONFLICT DO NOTHING to preserve existing data on redeployment
+      // This ensures that stats like site_visits don't reset when the server restarts
       const defaultStats = [
+        { stat_type: 'site_visits', stat_value: 0 },
         { stat_type: 'money_donations', stat_value: 0 },
         { stat_type: 'volunteer_hours', stat_value: 0 },
         { stat_type: 'rides_completed', stat_value: 0 },
@@ -607,11 +610,22 @@ export class DatabaseInit implements OnModuleInit {
       ];
 
       for (const stat of defaultStats) {
-        await client.query(`
+        // ON CONFLICT DO NOTHING: If the stat exists for today, don't change it
+        // This preserves accumulated values during server restarts/redeployments
+        const result = await client.query(`
           INSERT INTO community_stats (stat_type, stat_value, date_period)
           VALUES ($1, $2, CURRENT_DATE)
           ON CONFLICT (stat_type, city, date_period) DO NOTHING
+          RETURNING stat_type, stat_value
         `, [stat.stat_type, stat.stat_value]);
+        
+        // If result has rows, it means we created a new stat entry
+        // If no rows, it means the stat already existed and was preserved
+        if (result.rows.length > 0) {
+          console.log(`✨ Created new stat: ${stat.stat_type} = ${stat.stat_value}`);
+        } else {
+          console.log(`✅ Preserved existing stat: ${stat.stat_type}`);
+        }
       }
 
       // Create a test user for API testing

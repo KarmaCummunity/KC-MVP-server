@@ -27,18 +27,18 @@ type TimeUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
 class CreateChallengeDto {
   @IsString()
   @Length(1, 50, { message: 'שם האתגר חייב להיות בין 1-50 תווים' })
-  name: string;
+  name: string = '';
 
   @IsEnum(['seconds', 'minutes', 'hours', 'days', 'weeks', 'months'])
-  timeUnit: TimeUnit;
+  timeUnit: TimeUnit = 'days';
 
   @IsNumber()
   @Min(1)
   @Max(1000000)
-  customResetAmount: number;
+  customResetAmount: number = 0;
 
   @IsString()
-  userId: string;
+  userId: string = '';
 }
 
 class UpdateChallengeDto {
@@ -76,46 +76,46 @@ class UpdateChallengeDto {
 
 class CreateResetLogDto {
   @IsString()
-  challengeId: string;
+  challengeId: string = '';
 
   @IsString()
-  userId: string;
+  userId: string = '';
 
   @IsNumber()
   @Min(1)
-  amountReduced: number;
+  amountReduced: number = 0;
 
   @IsString()
   @Length(1, 500)
-  reason: string;
+  reason: string = '';
 
   @IsNumber()
   @Min(1)
   @Max(5)
-  mood: number;
+  mood: number = 0;
 
   @IsNumber()
-  valueBeforeReset: number;
+  valueBeforeReset: number = 0;
 
   @IsNumber()
-  valueAfterReset: number;
+  valueAfterReset: number = 0;
 }
 
 class CreateRecordBreakDto {
   @IsString()
-  challengeId: string;
+  challengeId: string = '';
 
   @IsString()
-  userId: string;
+  userId: string = '';
 
   @IsNumber()
-  oldRecord: number;
+  oldRecord: number = 0;
 
   @IsNumber()
-  newRecord: number;
+  newRecord: number = 0;
 
   @IsNumber()
-  improvement: number;
+  improvement: number = 0;
 
   @IsOptional()
   @IsString()
