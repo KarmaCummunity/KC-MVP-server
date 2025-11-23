@@ -341,7 +341,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignees UUID[] DEFAULT ARRAY[]::UUID[],
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
-    created_by UUID,
+    created_by TEXT, -- Changed from UUID to TEXT to support Firebase UIDs
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

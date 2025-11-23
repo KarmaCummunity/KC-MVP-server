@@ -99,7 +99,6 @@ async function run() {
       'messages',
       'notifications',
       'bookmarks',
-      'tasks',
       'settings',
       'media',
       'blocked_users',
@@ -117,6 +116,25 @@ async function run() {
       // eslint-disable-next-line no-console
       console.log(`Ensuring table: ${t}`);
       await client.query(baseTable(t));
+    }
+
+    // Check if tasks table exists in new schema format (with 'title' column)
+    // If it does, skip creating the legacy JSONB version
+    const newTasks = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'tasks' AND column_name = 'title'
+      ) AS exists;
+    `);
+    
+    if (!newTasks?.rows?.[0]?.exists) {
+      // Create legacy JSONB tasks table only if new schema doesn't exist
+      // eslint-disable-next-line no-console
+      console.log('Ensuring table: tasks (legacy JSONB format)');
+      await client.query(baseTable('tasks'));
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('✅ Tasks table exists in new schema format - skipping legacy creation');
     }
 
     // Index for email lookup in users table

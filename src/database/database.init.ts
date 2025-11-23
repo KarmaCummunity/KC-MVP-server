@@ -136,6 +136,9 @@ export class DatabaseInit implements OnModuleInit {
       }
       
       console.log(`✅ Schema tables created successfully from: ${schemaPath}`);
+      
+      // Run challenges schema
+      await this.runChallengesSchema(client);
     } catch (err) {
       console.error('❌ Schema creation failed:', err);
       throw err;
@@ -173,11 +176,12 @@ export class DatabaseInit implements OnModuleInit {
         'community_events', 'event_attendees',
         'chat_conversations', 'chat_messages', 'message_read_receipts',
         'user_activities', 'community_stats', 'user_follows', 'user_notifications',
+        'tasks', // tasks table is now in new relational schema format
       ]);
 
       const potentialLegacy = [
         'users', 'posts', 'followers', 'following', 'chats', 'messages', 'notifications', 'bookmarks',
-        'donations', 'tasks', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
+        'donations', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
         'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications',
         'analytics'
       ];
@@ -624,6 +628,47 @@ export class DatabaseInit implements OnModuleInit {
       console.log('✅ Default data initialized');
     } catch (err) {
       console.error('❌ Default data initialization failed:', err);
+      // Don't throw here as it's not critical
+    }
+  }
+
+  private async runChallengesSchema(client: any) {
+    try {
+      // Support both build (dist) and dev (src) paths
+      const candidates = [
+        path.join(__dirname, 'challenges-schema.sql'),
+        path.join(process.cwd(), 'dist', 'database', 'challenges-schema.sql'),
+        path.join(process.cwd(), 'src', 'database', 'challenges-schema.sql'),
+        path.resolve(__dirname, '../../src/database/challenges-schema.sql'),
+      ];
+
+      let schemaPath = '';
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          schemaPath = p;
+          break;
+        }
+      }
+
+      if (!schemaPath) {
+        console.warn('⚠️ challenges-schema.sql not found, skipping challenges tables');
+        return;
+      }
+
+      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+      
+      // Split by semicolons and execute each statement
+      const statements = schemaSql.split(';').filter(stmt => stmt.trim());
+      
+      for (const statement of statements) {
+        if (statement.trim()) {
+          await client.query(statement.trim());
+        }
+      }
+      
+      console.log(`✅ Challenges schema tables created successfully from: ${schemaPath}`);
+    } catch (err) {
+      console.error('❌ Challenges schema creation failed:', err);
       // Don't throw here as it's not critical
     }
   }

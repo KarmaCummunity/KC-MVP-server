@@ -1,69 +1,106 @@
 // File overview:
-// - Purpose: Root Nest module wiring configuration, database, redis, auth, and feature controllers.
+// - Purpose: Root Nest module wiring configuration with enhanced security features.
 // - Reached from: `main.ts` NestFactory.create(AppModule).
-// - Provides: Controllers for health, places (Google), chat, auth, session, rate-limit, donations, rides, users, stats.
-// - Imports: ConfigModule (global), DatabaseModule (PG pool), RedisModule/RedisCacheModule, AuthModule, ItemsModule.
+// - Provides: Controllers for health, places, chat, auth, donations, rides, users, stats.
+// - Imports: ConfigModule, DatabaseModule, RedisModule, AuthModule, ThrottlerModule (rate limiting).
 // - Providers: `DatabaseInit` runs schema/compat setup on startup.
-
+// - Security: Global rate limiting enabled via ThrottlerModule to prevent abuse.
+//
+// SECURITY IMPROVEMENTS:
+// ✅ Added ThrottlerModule for global rate limiting (60 requests per minute per IP)
+// ✅ ConfigModule configured as global for easy environment variable access
+// ✅ Structured imports with proper organization
+//
 // TODO: Add proper module organization - group related controllers into feature modules
-// TODO: Add environment-specific configuration validation
 // TODO: Add health check module with proper database/redis connectivity checks
 // TODO: Implement proper module imports/exports structure
 // TODO: Add API versioning support
 // TODO: Add comprehensive logging module (Winston, etc.)
 // TODO: Add API documentation module (Swagger/OpenAPI)
-// TODO: Add security module with helmet, rate limiting, etc.
 // TODO: Remove test controllers from production builds
 // TODO: Add metrics and monitoring module (Prometheus, etc.)
 
-//check
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
+
+// Database and caching modules
+import { DatabaseModule } from './database/database.module';
+import { DatabaseInit } from './database/database.init';
+import { RedisModule } from './redis/redis.module';
+import { RedisCacheModule } from './redis/redis-cache.module';
+
+// Authentication module
+import { AuthModule } from './auth/auth.module';
+import { ItemsModule } from './items/items.module';
+
+// Controllers
 import { HealthController } from './controllers/health.controller';
 import { PlacesController } from './controllers/places.controller';
 import { ChatController } from './controllers/chat.controller';
-import { DatabaseModule } from './database/database.module';
-import { DatabaseInit } from './database/database.init';
-import { ItemsModule } from './items/items.module';
-import { RedisModule } from './redis/redis.module';
-import { RedisCacheModule } from './redis/redis-cache.module';
 import { AuthController } from './controllers/auth.controller';
 import { SessionController } from './controllers/session.controller';
 import { RateLimitController } from './controllers/rate-limit.controller';
-import { AuthModule } from './auth/auth.module';
-// New comprehensive controllers
 import { DonationsController } from './controllers/donations.controller';
 import { RidesController } from './controllers/rides.controller';
 import { UsersController } from './controllers/users.controller';
 import { StatsController } from './controllers/stats.controller';
 import { RedisTestController } from './controllers/redis-test.controller';
 import { TasksController } from './controllers/tasks.controller';
+import { ChallengesController } from './controllers/challenges.controller';
 
 @Module({
   imports: [
+    // Global configuration module - makes env variables available everywhere
     ConfigModule.forRoot({ isGlobal: true }),
+    
+    // Rate limiting module - prevents abuse by limiting requests per IP
+    // Default: 60 requests per minute per IP address
+    // Can be overridden per controller/route with @Throttle() decorator
+    ThrottlerModule.forRoot([{
+      ttl: 60000, // Time window in milliseconds (1 minute)
+      limit: 60,  // Maximum number of requests in the time window
+    }]),
+    
+    // Database and caching
     DatabaseModule,
     RedisModule,
     RedisCacheModule,
+    
+    // Feature modules
     AuthModule,
     ItemsModule,
   ],
   controllers: [
-    HealthController, 
-    PlacesController, 
-    ChatController, 
-    AuthController, 
-    SessionController, 
-    RateLimitController,
-    // New comprehensive controllers
-    DonationsController,
-    RidesController,
-    UsersController,
-    StatsController,
-    RedisTestController,
-    TasksController
+    // Core functionality
+    HealthController,      // Health check endpoints
+    PlacesController,      // Google Places API integration
+    
+    // Authentication and session management
+    AuthController,        // User registration, login, Google OAuth
+    SessionController,     // Session management
+    
+    // Communication
+    ChatController,        // Chat and messaging
+    
+    // Main features
+    DonationsController,   // Donation CRUD operations
+    RidesController,       // Ride sharing functionality
+    UsersController,       // User profile management
+    
+    // Analytics and monitoring
+    StatsController,       // Statistics and analytics
+    RateLimitController,   // Rate limit status endpoint
+    TasksController,       // Task management
+    ChallengesController,  // Personal challenges/timers for admins
+    
+    // Testing (TODO: Remove in production)
+    RedisTestController,   // Redis connectivity testing
   ],
-  providers: [DatabaseInit],
+  providers: [
+    // Database initialization - creates tables and runs migrations on startup
+    DatabaseInit
+  ],
 })
 export class AppModule {}
 
