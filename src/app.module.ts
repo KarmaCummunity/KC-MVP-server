@@ -48,6 +48,8 @@ import { StatsController } from './controllers/stats.controller';
 import { RedisTestController } from './controllers/redis-test.controller';
 import { TasksController } from './controllers/tasks.controller';
 import { ChallengesController } from './controllers/challenges.controller';
+import { ItemsDeliveryController } from './controllers/items-delivery.controller';
+import { ItemsDeliveryService } from './controllers/items-delivery.service';
 
 @Module({
   imports: [
@@ -86,6 +88,7 @@ import { ChallengesController } from './controllers/challenges.controller';
     // Main features
     DonationsController,   // Donation CRUD operations
     RidesController,       // Ride sharing functionality
+    ItemsDeliveryController, // Items delivery and search
     UsersController,       // User profile management
     
     // Analytics and monitoring
@@ -99,7 +102,9 @@ import { ChallengesController } from './controllers/challenges.controller';
   ],
   providers: [
     // Database initialization - creates tables and runs migrations on startup
-    DatabaseInit
+    DatabaseInit,
+    // Items delivery service
+    ItemsDeliveryService,
   ],
 })
 export class AppModule {}

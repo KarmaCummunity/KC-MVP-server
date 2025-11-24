@@ -12,8 +12,8 @@
 // ✅ Proper error handling with appropriate HTTP status codes
 // ✅ Email normalization and validation
 //
-// TODO: Implement JWT token-based authentication instead of returning user objects
-// TODO: Add refresh token mechanism for better security
+// ✅ JWT token-based authentication implemented
+// ✅ Refresh token mechanism implemented
 // TODO: Add password strength requirements
 // TODO: Add email verification flow
 // TODO: Add 2FA (Two-Factor Authentication) support
@@ -22,7 +22,7 @@
 // TODO: Implement proper session management
 // TODO: Add rate limiting per user (not just global)
 // TODO: Split into separate services (AuthService, UserService, GoogleAuthService)
-import { Body, Controller, Get, Post, Query, Logger, BadRequestException, InternalServerErrorException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Logger, BadRequestException, InternalServerErrorException, UseGuards, UnauthorizedException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import * as argon2 from 'argon2';
@@ -31,6 +31,7 @@ import { PG_POOL } from '../database/database.module';
 import { IsString, IsEmail, IsOptional, Length, validate } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { JwtService } from '../auth/jwt.service';
 
 // DTO for Google Auth with proper validation
 // Ensures tokens are within expected length ranges to prevent malformed data
@@ -44,6 +45,30 @@ class GoogleAuthDto {
   @IsOptional() 
   @Length(50, 2000, { message: 'Access token length is invalid' })
   accessToken?: string;
+}
+
+// DTO for refresh token request
+class RefreshTokenDto {
+  @IsString()
+  @Length(100, 5000, { message: 'Refresh token length is invalid' })
+  refreshToken!: string;
+}
+
+// DTO for logout request
+class LogoutDto {
+  @IsString()
+  @IsOptional()
+  @Length(100, 5000, { message: 'Access token length is invalid' })
+  accessToken?: string;
+
+  @IsString()
+  @IsOptional()
+  @Length(100, 5000, { message: 'Refresh token length is invalid' })
+  refreshToken?: string;
+
+  @IsString()
+  @IsOptional()
+  sessionId?: string;
 }
 
 // DTO for login with validation
@@ -100,7 +125,10 @@ export class AuthController {
   private readonly logger = new Logger(AuthController.name);
   private googleClient: OAuth2Client;
 
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    private readonly jwtService: JwtService,
+  ) {
     const clientId = process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
     
     if (!clientId) {
@@ -600,9 +628,28 @@ export class AuthController {
       // Best-effort relational upsert (if user_profiles exists)
       await this.upsertUserProfileFromLegacy(userData);
 
+      // Generate JWT tokens for the authenticated user
+      const publicUser = this.toPublicUser(userData);
+      const tokenPair = await this.jwtService.createTokenPair({
+        id: publicUser.id,
+        email: publicUser.email,
+        roles: publicUser.roles || ['user'],
+      });
+
       // SECURITY: Log success without exposing sensitive data
       this.logger.log(`✅ Google authentication successful (user ID: ${userId.substring(0, 8)}...)`);
-      return { ok: true, user: this.toPublicUser(userData) };
+      
+      // Return tokens and user data in the format expected by the client
+      return {
+        success: true,
+        tokens: {
+          accessToken: tokenPair.accessToken,
+          refreshToken: tokenPair.refreshToken,
+          expiresIn: tokenPair.expiresIn,
+          refreshExpiresIn: tokenPair.refreshExpiresIn,
+        },
+        user: publicUser,
+      };
     } catch (error: any) {
       // SECURITY: Generic error message, log details separately
       this.logger.error('Google authentication failed', { 
@@ -616,6 +663,197 @@ export class AuthController {
       }
       
       throw new InternalServerErrorException('Google authentication failed');
+    }
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * 
+   * Security:
+   * - Rate limited to prevent abuse
+   * - Validates refresh token signature and expiration
+   * - Checks token is not revoked (exists in Redis)
+   * - Returns new access token with same session
+   * 
+   * @param refreshTokenDto - Refresh token
+   * @returns New access token and expiration
+   */
+  @Post('refresh')
+  @Throttle({ default: { limit: 20, ttl: 60000 } }) // 20 refresh attempts per minute
+  async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
+    try {
+      // Validate input
+      const errors = await validate(refreshTokenDto);
+      if (errors.length > 0) {
+        throw new BadRequestException('Invalid refresh token format');
+      }
+
+      // SECURITY: Log refresh attempt without exposing token
+      this.logger.log('Token refresh attempt', { 
+        hasToken: !!refreshTokenDto.refreshToken,
+        timestamp: new Date().toISOString()
+      });
+
+      // Use JWT service to refresh the access token
+      const result = await this.jwtService.refreshAccessToken(refreshTokenDto.refreshToken);
+
+      this.logger.log('✅ Access token refreshed successfully');
+      
+      return {
+        success: true,
+        accessToken: result.accessToken,
+        expiresIn: result.expiresIn,
+      };
+
+    } catch (error: any) {
+      // SECURITY: Generic error message, log details separately
+      this.logger.error('Token refresh failed', { 
+        error: error?.message || String(error),
+      });
+      
+      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      throw new InternalServerErrorException('Token refresh failed');
+    }
+  }
+
+  /**
+   * Logout user and revoke tokens
+   * 
+   * Security:
+   * - Rate limited to prevent abuse
+   * - Revokes access and refresh tokens
+   * - Blacklists tokens to prevent reuse
+   * - Cleans up session data
+   * 
+   * @param logoutDto - Tokens and session ID to revoke
+   * @returns Success status
+   */
+  @Post('logout')
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 logout attempts per minute
+  async logout(@Body() logoutDto: LogoutDto) {
+    try {
+      // Validate input
+      const errors = await validate(logoutDto);
+      if (errors.length > 0) {
+        throw new BadRequestException('Invalid logout request');
+      }
+
+      // SECURITY: Log logout attempt without exposing tokens
+      this.logger.log('Logout attempt', { 
+        hasAccessToken: !!logoutDto.accessToken,
+        hasRefreshToken: !!logoutDto.refreshToken,
+        hasSessionId: !!logoutDto.sessionId,
+        timestamp: new Date().toISOString()
+      });
+
+      // Revoke access token if provided
+      if (logoutDto.accessToken) {
+        try {
+          await this.jwtService.revokeToken(logoutDto.accessToken);
+        } catch (error) {
+          // Log but don't fail if token is already invalid
+          this.logger.warn('Failed to revoke access token during logout', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
+      // Revoke refresh token if provided
+      if (logoutDto.refreshToken) {
+        try {
+          await this.jwtService.revokeToken(logoutDto.refreshToken);
+        } catch (error) {
+          this.logger.warn('Failed to revoke refresh token during logout', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
+      // Revoke session if session ID provided
+      if (logoutDto.sessionId) {
+        try {
+          await this.jwtService.revokeUserSession(logoutDto.sessionId);
+        } catch (error) {
+          this.logger.warn('Failed to revoke session during logout', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+
+      this.logger.log('✅ Logout completed successfully');
+      
+      return {
+        success: true,
+        message: 'Logged out successfully',
+      };
+
+    } catch (error: any) {
+      // SECURITY: Generic error message, log details separately
+      this.logger.error('Logout failed', { 
+        error: error?.message || String(error),
+      });
+      
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      
+      // Even if logout fails, return success to client (client-side cleanup is most important)
+      return {
+        success: true,
+        message: 'Logout completed',
+      };
+    }
+  }
+
+  /**
+   * Validate session - check if access token is valid
+   * 
+   * Security:
+   * - Rate limited
+   * - Validates token signature and expiration
+   * - Checks token is not blacklisted
+   * 
+   * @returns Success status and user info from token
+   */
+  @Get('sessions')
+  @Throttle({ default: { limit: 60, ttl: 60000 } }) // 60 validation attempts per minute
+  async validateSession(@Query('token') token?: string, @Query('authorization') authHeader?: string) {
+    try {
+      // Extract token from query param or Authorization header
+      const accessToken = token || authHeader?.replace('Bearer ', '');
+      
+      if (!accessToken) {
+        throw new BadRequestException('Access token required');
+      }
+
+      // Verify token using JWT service
+      const payload = await this.jwtService.verifyToken(accessToken);
+
+      // Return user info from token payload
+      return {
+        success: true,
+        valid: true,
+        user: {
+          id: payload.userId,
+          email: payload.email,
+          roles: payload.roles,
+        },
+        sessionId: payload.sessionId,
+      };
+
+    } catch (error: any) {
+      this.logger.warn('Session validation failed', { 
+        error: error?.message || String(error),
+      });
+      
+      return {
+        success: false,
+        valid: false,
+        error: error instanceof Error ? error.message : 'Invalid session',
+      };
     }
   }
 }
