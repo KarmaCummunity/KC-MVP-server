@@ -38,6 +38,7 @@ import helmet from 'helmet';
  * - GOOGLE_CLIENT_ID: For Google OAuth authentication
  * - DATABASE_URL: PostgreSQL connection string
  * - REDIS_URL: Redis connection string
+ * - JWT_SECRET: Secret key for JWT token signing (minimum 32 characters)
  * 
  * If any required variable is missing, the process exits with error code 1.
  */
@@ -47,12 +48,14 @@ function validateEnvironment(): void {
   const required = [
     { key: 'GOOGLE_CLIENT_ID', fallback: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID' },
     { key: 'DATABASE_URL', fallback: null },
-    { key: 'REDIS_URL', fallback: null }
+    { key: 'REDIS_URL', fallback: null },
+    { key: 'JWT_SECRET', fallback: null, minLength: 32 }
   ];
   
   const missing: string[] = [];
+  const invalid: Array<{ key: string; requirement: string; current: number }> = [];
   
-  for (const { key, fallback } of required) {
+  for (const { key, fallback, minLength } of required) {
     if (!process.env[key]) {
       if (fallback && process.env[fallback]) {
         logger.warn(`Using ${fallback} as fallback for ${key}`);
@@ -61,12 +64,33 @@ function validateEnvironment(): void {
         missing.push(key);
       }
     }
+    
+    // Validate minimum length if specified
+    if (minLength && process.env[key] && process.env[key]!.length < minLength) {
+      invalid.push({ key, requirement: `minimum ${minLength} characters`, current: process.env[key]!.length });
+    }
   }
   
   if (missing.length > 0) {
     logger.error(`❌ Missing REQUIRED environment variables: ${missing.join(', ')}`);
     logger.error('💡 Set these variables in your .env file or environment');
     logger.error('⚠️  Server cannot start without proper configuration');
+    if (missing.includes('JWT_SECRET')) {
+      logger.error('💡 For JWT_SECRET, generate a secure random string:');
+      logger.error('   node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    }
+    process.exit(1);
+  }
+  
+  if (invalid.length > 0) {
+    logger.error(`❌ Invalid environment variables:`);
+    for (const { key, requirement, current } of invalid) {
+      logger.error(`   ${key}: requires ${requirement}, but has ${current} characters`);
+    }
+    if (invalid.some(v => v.key === 'JWT_SECRET')) {
+      logger.error('💡 Generate a secure JWT_SECRET (32+ characters):');
+      logger.error('   node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    }
     process.exit(1);
   }
   

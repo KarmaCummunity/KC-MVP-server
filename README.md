@@ -42,9 +42,14 @@ POSTGRES_DB=kc_db
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 
+# JWT Secret - חובה! מינימום 32 תווים
+# ליצירת secret מאובטח: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
+
 # Production (Railway/Vercel): השתמשו בערכי הסביבה שמוקצים
 # DATABASE_URL=postgres://user:pass@host:5432/dbname
 # REDIS_URL=redis://default:pass@host:6379
+# JWT_SECRET=your-production-jwt-secret-minimum-32-characters
 ```
 
 ## 📡 Endpoints
