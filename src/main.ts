@@ -165,6 +165,11 @@ async function bootstrap(): Promise<void> {
       // Referrer-Policy - controls referrer information
       referrerPolicy: {
         policy: 'strict-origin-when-cross-origin'
+      },
+      // Cross-Origin-Opener-Policy - allows postMessage for OAuth popups
+      // Set to "same-origin-allow-popups" to allow OAuth window.postMessage calls
+      crossOriginOpenerPolicy: {
+        policy: 'same-origin-allow-popups'
       }
     }));
     

@@ -16,3 +16,4 @@ restartPolicyMaxRetries = 10
 NODE_ENV = "production"
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com"
 CORS_ORIGIN = "https://karma-community-kc.com,https://www.karma-community-kc.com"
+JWT_SECRET = "495e8b4123c87ffdc9623ae0db9d8cf2522377627aec8f08051039419cf6ad60"
