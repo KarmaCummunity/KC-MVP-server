@@ -349,13 +349,29 @@ export class StatsController {
       return { success: true, data: cached };
     }
 
-    // User growth
+    // User growth - from both user_profiles and users (legacy)
     const userGrowth = await this.pool.query(`
+      WITH all_users AS (
+        SELECT join_date
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+          AND join_date >= CURRENT_DATE - INTERVAL '30 days'
+        
+        UNION ALL
+        
+        SELECT COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+          AND COALESCE((data->>'joinDate')::timestamptz, created_at) >= CURRENT_DATE - INTERVAL '30 days'
+      )
       SELECT 
         DATE(join_date) as date,
         COUNT(*) as new_users
-      FROM user_profiles 
-      WHERE join_date >= CURRENT_DATE - INTERVAL '30 days'
+      FROM all_users
       GROUP BY DATE(join_date)
       ORDER BY date ASC
     `);
@@ -372,13 +388,31 @@ export class StatsController {
       ORDER BY count DESC
     `);
 
-    // User distribution by city
+    // User distribution by city - from both user_profiles and users (legacy)
     const usersByCity = await this.pool.query(`
+      WITH all_users AS (
+        SELECT city
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+          AND city IS NOT NULL AND is_active = true
+        
+        UNION ALL
+        
+        SELECT (data->'location'->>'city')::varchar as city
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND (data->'location'->>'city') IS NOT NULL
+          AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
       SELECT 
         city,
         COUNT(*) as user_count
-      FROM user_profiles 
-      WHERE city IS NOT NULL AND is_active = true
+      FROM all_users
+      WHERE city IS NOT NULL
       GROUP BY city
       ORDER BY user_count DESC
       LIMIT 10
@@ -404,42 +438,87 @@ export class StatsController {
     }
 
     // Key metrics for the last 24 hours, 7 days, and 30 days
+    // Count users from both user_profiles and users (legacy) tables
+    const allUsersJoinDate = await this.pool.query(`
+      WITH all_users AS (
+        SELECT join_date
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+        
+        UNION ALL
+        
+        SELECT COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
+      SELECT 
+        COUNT(CASE WHEN join_date >= CURRENT_DATE THEN 1 END) as new_users_today,
+        COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_week,
+        COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_month,
+        COUNT(*) as total_users
+      FROM all_users
+    `);
+    
     const metrics = await this.pool.query(`
       SELECT 
         -- Today's stats
         COUNT(CASE WHEN d.created_at >= CURRENT_DATE THEN 1 END) as donations_today,
         COUNT(CASE WHEN r.created_at >= CURRENT_DATE THEN 1 END) as rides_today,
-        COUNT(CASE WHEN up.join_date >= CURRENT_DATE THEN 1 END) as new_users_today,
         
         -- This week's stats
         COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_week,
         COUNT(CASE WHEN r.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as rides_week,
-        COUNT(CASE WHEN up.join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_week,
         
         -- This month's stats
         COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as donations_month,
         COUNT(CASE WHEN r.created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as rides_month,
-        COUNT(CASE WHEN up.join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_month,
         
         -- Total stats
         COUNT(d.id) as total_donations,
         COUNT(r.id) as total_rides,
-        COUNT(up.id) as total_users,
         SUM(CASE WHEN d.type = 'money' THEN d.amount ELSE 0 END) as total_money_donated
         
-      FROM user_profiles up
-      FULL OUTER JOIN donations d ON 1=1
+      FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
+    
+    // Merge user stats with other metrics
+    const mergedMetrics = {
+      ...metrics.rows[0],
+      new_users_today: allUsersJoinDate.rows[0].new_users_today,
+      new_users_week: allUsersJoinDate.rows[0].new_users_week,
+      new_users_month: allUsersJoinDate.rows[0].new_users_month,
+      total_users: allUsersJoinDate.rows[0].total_users,
+    };
 
-    // Active users
+    // Active users - from both user_profiles and users (legacy)
     const activeUsers = await this.pool.query(`
+      WITH all_users AS (
+        SELECT last_active
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+          AND is_active = true
+        
+        UNION ALL
+        
+        SELECT COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
       SELECT 
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active
-      FROM user_profiles
-      WHERE is_active = true
+      FROM all_users
     `);
 
     // Top categories
@@ -457,7 +536,7 @@ export class StatsController {
     `);
 
     const dashboard = {
-      metrics: metrics.rows[0],
+      metrics: mergedMetrics,
       active_users: activeUsers.rows[0],
       top_categories: topCategories.rows
     };
@@ -487,19 +566,44 @@ export class StatsController {
     `);
 
     // Current active donations and rides
-    const currentActive = await this.pool.query(`
+    const donationsRides = await this.pool.query(`
       SELECT 
         COUNT(CASE WHEN d.status = 'active' THEN 1 END) as active_donations,
-        COUNT(CASE WHEN r.status = 'active' THEN 1 END) as active_rides,
-        COUNT(CASE WHEN up.last_active >= NOW() - INTERVAL '5 minutes' THEN 1 END) as users_online
-      FROM user_profiles up
-      FULL OUTER JOIN donations d ON 1=1
+        COUNT(CASE WHEN r.status = 'active' THEN 1 END) as active_rides
+      FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
+    
+    // Users online - from both user_profiles and users (legacy)
+    const usersOnline = await this.pool.query(`
+      WITH all_users AS (
+        SELECT last_active
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+        
+        UNION ALL
+        
+        SELECT COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
+      SELECT 
+        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '5 minutes' THEN 1 END) as users_online
+      FROM all_users
+    `);
+    
+    const currentActive = {
+      ...donationsRides.rows[0],
+      users_online: usersOnline.rows[0].users_online,
+    };
 
     const realTimeData = {
       recent_activity: recentActivity.rows,
-      current_active: currentActive.rows[0],
+      current_active: currentActive,
       last_updated: new Date().toISOString()
     };
 
@@ -537,16 +641,33 @@ export class StatsController {
           break;
 
         case 'totalUsers':
-          // Get all registered users
+          // Get all registered users from both user_profiles and users (legacy) tables
           query = `
-            SELECT 
-              name,
-              email,
-              city,
-              join_date,
-              created_at
-            FROM user_profiles 
-            WHERE email IS NOT NULL AND email <> ''
+            (
+              SELECT 
+                name,
+                email,
+                city,
+                join_date as join_date,
+                created_at
+              FROM user_profiles 
+              WHERE email IS NOT NULL AND email <> ''
+            )
+            UNION
+            (
+              SELECT 
+                COALESCE(data->>'name', 'ללא שם') as name,
+                data->>'email' as email,
+                COALESCE(data->'location'->>'city', '') as city,
+                COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+                created_at
+              FROM users
+              WHERE data->>'email' IS NOT NULL
+                AND LOWER(data->>'email') <> ''
+                AND LOWER(data->>'email') NOT IN (
+                  SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+                )
+            )
             ORDER BY created_at DESC
             LIMIT 500
           `;
@@ -648,10 +769,42 @@ export class StatsController {
 
     // Basic counts and metrics
     const queries = await Promise.all([
-      // User metrics
+      // User metrics - count from both user_profiles and users (legacy) tables
+      // Count unique users: from user_profiles + users that don't exist in user_profiles
       this.pool.query(`
+        WITH all_users AS (
+          -- Users from user_profiles
+          SELECT 
+            LOWER(email) as email_key,
+            is_active,
+            last_active,
+            join_date,
+            city,
+            roles
+          FROM user_profiles
+          WHERE email IS NOT NULL AND email <> ''
+            ${userCityCondition}
+          
+          UNION
+          
+          -- Users from legacy users table that don't exist in user_profiles
+          SELECT 
+            LOWER(data->>'email') as email_key,
+            COALESCE((data->>'isActive')::boolean, true) as is_active,
+            COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
+            COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+            (data->'location'->>'city')::varchar as city,
+            COALESCE((data->'roles')::text[], ARRAY['user']) as roles
+          FROM users
+          WHERE data->>'email' IS NOT NULL
+            AND LOWER(data->>'email') <> ''
+            AND LOWER(data->>'email') NOT IN (
+              SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+            )
+            ${userCityCondition ? `AND (data->'location'->>'city')::varchar = $1` : ''}
+        )
         SELECT 
-          COUNT(DISTINCT id) as total_users,
+          COUNT(DISTINCT email_key) as total_users,
           COUNT(CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as active_members,
           COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active_users,
           COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
@@ -659,10 +812,7 @@ export class StatsController {
           COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
           COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
-        FROM user_profiles 
-        WHERE 1=1 ${userCityCondition}
-          AND email IS NOT NULL
-          AND email <> ''
+        FROM all_users
       `, params),
 
       // Donation metrics

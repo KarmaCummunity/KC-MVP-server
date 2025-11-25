@@ -553,15 +553,44 @@ export class UsersController {
     }
 
     const { rows } = await this.pool.query(`
+      WITH all_users AS (
+        -- Users from user_profiles
+        SELECT 
+          email,
+          is_active,
+          last_active,
+          join_date,
+          karma_points,
+          total_donations_amount
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+        
+        UNION
+        
+        -- Users from legacy users table that don't exist in user_profiles
+        SELECT 
+          LOWER(data->>'email') as email,
+          COALESCE((data->>'isActive')::boolean, true) as is_active,
+          COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
+          COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+          COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
+          0 as total_donations_amount
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
       SELECT 
-        COUNT(*) as total_users,
+        COUNT(DISTINCT email) as total_users,
         COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active_users,
         COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
         AVG(karma_points) as avg_karma_points,
         SUM(total_donations_amount) as total_platform_donations
-      FROM user_profiles
+      FROM all_users
     `);
 
     const stats = rows[0];
