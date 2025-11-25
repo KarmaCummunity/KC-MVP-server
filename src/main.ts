@@ -196,6 +196,7 @@ async function bootstrap(): Promise<void> {
           'https://dev.karma-community-kc.com',
           'http://localhost:19006',
           'http://localhost:3000',
+          'http://localhost:8081',
           'http://127.0.0.1:3000'
         ];
     
