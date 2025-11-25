@@ -80,4 +80,14 @@ JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
 1. התחבר ל-Railway
 2. צור פרויקט חדש או התחבר לפרויקט קיים
 3. Railway יקרא את `railway.json` ויפרוס אוטומטית
-4. האפליקציה תהיה זמינה ב-URL שתקבל
+4. **חובה: הגדר משתני סביבה ב-Railway Dashboard:**
+   - כנס ל-Service של ה-Backend
+   - לחץ על "Variables" או "Environment Variables"
+   - הוסף את המשתנים הבאים:
+     - `JWT_SECRET` = `495e8b4123c87ffdc9623ae0db9d8cf2522377627aec8f08051039419cf6ad60` (או צור חדש: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+     - `DATABASE_URL` (נוצר אוטומטית אם מחובר ל-Postgres Plugin)
+     - `REDIS_URL` (אם יש Redis Plugin)
+     - `GOOGLE_CLIENT_ID` (או `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`)
+5. האפליקציה תהיה זמינה ב-URL שתקבל
+
+**⚠️ חשוב:** משתני סביבה רגישים כמו `JWT_SECRET` **חייבים** להיות מוגדרים ב-Railway Dashboard, לא רק בקבצי הקונפיגורציה!
