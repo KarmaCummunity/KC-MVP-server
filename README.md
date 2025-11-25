@@ -2,6 +2,18 @@
 
 שרת NestJS לאפליקציית Karma Community עם Postgres ו-Redis, ו־REST גנרי תואם ל־`DatabaseService` בפרונט.
 
+**גרסה נוכחית:** 1.7.5  
+**עדכון אחרון:** 2025-11-23 - תיקון שמירת נתוני ביקורים באתר
+
+## 🆕 מה חדש בגרסה 1.7.5
+
+- ✅ **תיקון חשוב:** נתוני הביקורים באתר (ושאר הסטטיסטיקות) נשמרים כעת בצורה קבועה בין עדכוני השרת
+- ✅ הוספנו `site_visits` לסטטיסטיקות ההתחלתיות
+- ✅ לוגים משופרים להצגת שמירת/יצירת נתונים
+- ✅ תיעוד מפורט על שמירת נתונים ב-Railway
+
+**ראה:** `CHANGELOG.md`, `FIX_SUMMARY.md`, `RAILWAY_DATA_PERSISTENCE.md`
+
 ## 🚀 הפעלה מקומית
 
 ```bash
@@ -30,9 +42,14 @@ POSTGRES_DB=kc_db
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 
+# JWT Secret - חובה! מינימום 32 תווים
+# ליצירת secret מאובטח: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
+
 # Production (Railway/Vercel): השתמשו בערכי הסביבה שמוקצים
 # DATABASE_URL=postgres://user:pass@host:5432/dbname
 # REDIS_URL=redis://default:pass@host:6379
+# JWT_SECRET=your-production-jwt-secret-minimum-32-characters
 ```
 
 ## 📡 Endpoints
@@ -63,4 +80,14 @@ REDIS_PORT=6379
 1. התחבר ל-Railway
 2. צור פרויקט חדש או התחבר לפרויקט קיים
 3. Railway יקרא את `railway.json` ויפרוס אוטומטית
-4. האפליקציה תהיה זמינה ב-URL שתקבל
+4. **חובה: הגדר משתני סביבה ב-Railway Dashboard:**
+   - כנס ל-Service של ה-Backend
+   - לחץ על "Variables" או "Environment Variables"
+   - הוסף את המשתנים הבאים:
+     - `JWT_SECRET` = `495e8b4123c87ffdc9623ae0db9d8cf2522377627aec8f08051039419cf6ad60` (או צור חדש: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+     - `DATABASE_URL` (נוצר אוטומטית אם מחובר ל-Postgres Plugin)
+     - `REDIS_URL` (אם יש Redis Plugin)
+     - `GOOGLE_CLIENT_ID` (או `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`)
+5. האפליקציה תהיה זמינה ב-URL שתקבל
+
+**⚠️ חשוב:** משתני סביבה רגישים כמו `JWT_SECRET` **חייבים** להיות מוגדרים ב-Railway Dashboard, לא רק בקבצי הקונפיגורציה!

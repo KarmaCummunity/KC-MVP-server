@@ -292,12 +292,48 @@ export class UsersController {
       return { success: true, data: cached };
     }
 
-    let query = `
-      SELECT id, name, avatar_url, city, karma_points, last_active,
-             total_donations_amount, total_volunteer_hours, join_date
-      FROM user_profiles 
-      WHERE is_active = true
+    // Query both user_profiles and users (legacy) tables to get all users
+    // Use UNION to combine both sources, excluding duplicates
+    let baseQuery = `
+      (
+        SELECT 
+          id::text as id,
+          name,
+          avatar_url,
+          city,
+          karma_points,
+          last_active,
+          total_donations_amount,
+          total_volunteer_hours,
+          join_date,
+          COALESCE(bio, '') as bio
+        FROM user_profiles 
+        WHERE is_active = true
+      )
+      UNION
+      (
+        SELECT 
+          user_id as id,
+          COALESCE(data->>'name', 'ללא שם') as name,
+          COALESCE(data->>'avatar', '') as avatar_url,
+          COALESCE(data->'location'->>'city', '') as city,
+          COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
+          COALESCE((data->>'lastActive')::timestamptz, updated_at) as last_active,
+          0 as total_donations_amount,
+          0 as total_volunteer_hours,
+          COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+          COALESCE(data->>'bio', '') as bio
+        FROM users
+        WHERE 
+          (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
+          AND NOT EXISTS (
+            SELECT 1 FROM user_profiles up 
+            WHERE up.email = users.data->>'email'
+          )
+      )
     `;
+    
+    let query = `SELECT * FROM (${baseQuery}) AS all_users WHERE 1=1`;
 
     const params: any[] = [];
     let paramCount = 0;

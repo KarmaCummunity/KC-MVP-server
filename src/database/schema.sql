@@ -341,7 +341,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignees UUID[] DEFAULT ARRAY[]::UUID[],
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
-    created_by UUID,
+    created_by TEXT, -- Changed from UUID to TEXT to support Firebase UIDs
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -354,3 +354,64 @@ CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees
 CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
 
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Items table for item donations/deliveries
+CREATE TABLE IF NOT EXISTS items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    owner_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    category VARCHAR(50) NOT NULL, -- furniture, clothes, electronics, general, etc.
+    condition VARCHAR(20), -- new, like_new, used, for_parts
+    location JSONB, -- {city, address, coordinates: {lat, lng}}
+    price DECIMAL(10,2) DEFAULT 0, -- 0 means free
+    images TEXT[], -- array of image URLs
+    tags TEXT[],
+    quantity INTEGER DEFAULT 1,
+    status VARCHAR(20) DEFAULT 'available', -- available, reserved, delivered, expired, cancelled
+    delivery_method VARCHAR(20), -- pickup, delivery, shipping
+    metadata JSONB, -- flexible field for additional data
+    expires_at TIMESTAMPTZ, -- when item listing expires
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Item requests/bookings for delivery workflow
+CREATE TABLE IF NOT EXISTS item_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    item_id UUID, -- REFERENCES items(id), -- Temporarily disabled for backward compatibility
+    requester_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, scheduled, completed, cancelled
+    message TEXT,
+    proposed_time TIMESTAMPTZ,
+    delivery_method VARCHAR(20), -- pickup, delivery, shipping
+    meeting_location JSONB, -- {address, city, coordinates: {lat, lng}}
+    owner_response TEXT, -- response from item owner
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for items table
+CREATE INDEX IF NOT EXISTS idx_items_owner ON items (owner_id);
+CREATE INDEX IF NOT EXISTS idx_items_category ON items (category);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items (status);
+CREATE INDEX IF NOT EXISTS idx_items_condition ON items (condition);
+CREATE INDEX IF NOT EXISTS idx_items_location ON items USING GIN (location);
+CREATE INDEX IF NOT EXISTS idx_items_created ON items (created_at);
+CREATE INDEX IF NOT EXISTS idx_items_price ON items (price);
+CREATE INDEX IF NOT EXISTS idx_items_tags ON items USING GIN (tags);
+
+-- Full-text search index for items (using pg_trgm)
+CREATE INDEX IF NOT EXISTS idx_items_title_trgm ON items USING GIN (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_items_description_trgm ON items USING GIN (description gin_trgm_ops);
+
+-- Indexes for item_requests table
+CREATE INDEX IF NOT EXISTS idx_item_requests_item ON item_requests (item_id);
+CREATE INDEX IF NOT EXISTS idx_item_requests_requester ON item_requests (requester_id);
+CREATE INDEX IF NOT EXISTS idx_item_requests_status ON item_requests (status);
+CREATE INDEX IF NOT EXISTS idx_item_requests_created ON item_requests (created_at);
+
+-- Triggers for updated_at timestamps
+CREATE TRIGGER update_items_updated_at BEFORE UPDATE ON items FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_item_requests_updated_at BEFORE UPDATE ON item_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

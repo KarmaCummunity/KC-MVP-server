@@ -116,6 +116,38 @@ export class StatsController {
     return { success: true, data: stats };
   }
 
+  @Get('community/version')
+  // Lightweight endpoint to check if stats have changed
+  // נקודת קצה קלת משקל לבדיקה אם הסטטיסטיקות השתנו
+  async getCommunityStatsVersion(@Query('city') city?: string) {
+    const cacheKey = `community_stats_version_${city || 'global'}`;
+    
+    // Check cache first (1 minute TTL for version check)
+    const cached = await this.redisCache.get(cacheKey);
+    if (cached) {
+      return { success: true, version: cached };
+    }
+
+    // Get the latest update timestamp from community_stats
+    const query = `
+      SELECT MAX(updated_at) as last_update
+      FROM community_stats
+      ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
+    `;
+    
+    const params = city ? [city] : [];
+    const { rows } = await this.pool.query(query, params);
+    
+    // Create version hash from timestamp
+    const lastUpdate = rows[0]?.last_update || new Date();
+    const version = new Date(lastUpdate).getTime().toString();
+    
+    // Cache for 1 minute
+    await this.redisCache.set(cacheKey, version, 60);
+    
+    return { success: true, version };
+  }
+
   @Get('community/trends')
   async getCommunityTrends(@Query('stat_type') statType: string, @Query('city') city?: string, @Query('days') days?: string) {
     const cacheKey = `community_trends_${statType}_${city || 'global'}_${days || '30'}`;
@@ -473,6 +505,138 @@ export class StatsController {
 
     await this.redisCache.set(cacheKey, realTimeData, 60); // 1 minute cache
     return { success: true, data: realTimeData };
+  }
+
+  @Get('details/:statType')
+  async getStatDetails(@Param('statType') statType: string) {
+    // TODO: Add proper pagination for large datasets
+    // TODO: Add proper data anonymization for sensitive data
+    const cacheKey = `stat_details_${statType}`;
+    const cached = await this.redisCache.get(cacheKey);
+    
+    if (cached) {
+      return { success: true, data: cached };
+    }
+
+    let query = '';
+    let params: any[] = [];
+    
+    try {
+      switch (statType) {
+        case 'siteVisits':
+          // Get recent site visits with timestamps
+          query = `
+            SELECT 
+              created_at as timestamp,
+              NULL as user_agent
+            FROM community_stats 
+            WHERE stat_type = 'site_visits'
+            ORDER BY created_at DESC
+            LIMIT 100
+          `;
+          break;
+
+        case 'totalUsers':
+          // Get all registered users
+          query = `
+            SELECT 
+              name,
+              email,
+              city,
+              join_date,
+              created_at
+            FROM user_profiles 
+            WHERE email IS NOT NULL AND email <> ''
+            ORDER BY created_at DESC
+            LIMIT 500
+          `;
+          break;
+
+        case 'totalMoneyDonated':
+          // Get all money donations with donor info
+          query = `
+            SELECT 
+              d.amount,
+              d.created_at,
+              d.created_at as donation_date,
+              up.name as donor_name,
+              dc.name_he as category_name
+            FROM donations d
+            LEFT JOIN user_profiles up ON up.id = d.donor_id
+            LEFT JOIN donation_categories dc ON dc.id = d.category_id
+            WHERE d.type = 'money' AND d.amount > 0
+            ORDER BY d.created_at DESC
+            LIMIT 500
+          `;
+          break;
+
+        case 'itemDonations':
+          // Get all item donations
+          query = `
+            SELECT 
+              d.title,
+              d.title as item_name,
+              d.created_at,
+              up.name as donor_name
+            FROM donations d
+            LEFT JOIN user_profiles up ON up.id = d.donor_id
+            WHERE d.type = 'item' AND d.status = 'active'
+            ORDER BY d.created_at DESC
+            LIMIT 500
+          `;
+          break;
+
+        case 'completedRides':
+          // Get all completed rides
+          query = `
+            SELECT 
+              r.from_location->>'city' as from_city,
+              r.to_location->>'city' as to_city,
+              r.departure_time as ride_date,
+              r.created_at,
+              up.name as driver_name
+            FROM rides r
+            LEFT JOIN user_profiles up ON up.id = r.driver_id
+            WHERE r.status = 'completed'
+            ORDER BY r.created_at DESC
+            LIMIT 500
+          `;
+          break;
+
+        case 'uniqueDonors':
+        case 'recurringDonationsAmount':
+          // Get recurring donors
+          query = `
+            SELECT 
+              up.name as donor_name,
+              d.amount,
+              d.created_at as start_date,
+              'חודשי' as frequency
+            FROM donations d
+            INNER JOIN user_profiles up ON up.id = d.donor_id
+            WHERE d.is_recurring = true 
+              AND d.type = 'money' 
+              AND d.status = 'active'
+              AND up.is_active = true
+            ORDER BY d.amount DESC, d.created_at DESC
+            LIMIT 500
+          `;
+          break;
+
+        default:
+          return { success: false, error: 'Unknown stat type' };
+      }
+
+      const { rows } = await this.pool.query(query, params);
+      
+      // Cache for 5 minutes
+      await this.redisCache.set(cacheKey, rows, 5 * 60);
+      
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Get stat details error:', error);
+      return { success: false, error: 'Failed to load stat details' };
+    }
   }
 
   private async addComputedStats(stats: any, city?: string) {

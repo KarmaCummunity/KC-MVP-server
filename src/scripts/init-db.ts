@@ -99,7 +99,6 @@ async function run() {
       'messages',
       'notifications',
       'bookmarks',
-      'tasks',
       'settings',
       'media',
       'blocked_users',
@@ -117,6 +116,25 @@ async function run() {
       // eslint-disable-next-line no-console
       console.log(`Ensuring table: ${t}`);
       await client.query(baseTable(t));
+    }
+
+    // Check if tasks table exists in new schema format (with 'title' column)
+    // If it does, skip creating the legacy JSONB version
+    const newTasks = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'tasks' AND column_name = 'title'
+      ) AS exists;
+    `);
+    
+    if (!newTasks?.rows?.[0]?.exists) {
+      // Create legacy JSONB tasks table only if new schema doesn't exist
+      // eslint-disable-next-line no-console
+      console.log('Ensuring table: tasks (legacy JSONB format)');
+      await client.query(baseTable('tasks'));
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('✅ Tasks table exists in new schema format - skipping legacy creation');
     }
 
     // Index for email lookup in users table
@@ -389,6 +407,89 @@ async function run() {
       );
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`);
+
+    // Ensure user_profiles table - required by StatsController
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id TEXT UNIQUE,
+        email VARCHAR(255),
+        display_name VARCHAR(255),
+        full_name VARCHAR(255),
+        phone VARCHAR(50),
+        city VARCHAR(100),
+        address TEXT,
+        profile_image TEXT,
+        bio TEXT,
+        date_of_birth DATE,
+        gender VARCHAR(20),
+        join_date TIMESTAMPTZ DEFAULT NOW(),
+        is_active BOOLEAN DEFAULT true,
+        is_verified BOOLEAN DEFAULT false,
+        last_active TIMESTAMPTZ DEFAULT NOW(),
+        karma_points INTEGER DEFAULT 0,
+        total_donations INTEGER DEFAULT 0,
+        total_received INTEGER DEFAULT 0,
+        is_recurring BOOLEAN DEFAULT false,
+        notification_preferences JSONB DEFAULT '{}'::jsonb,
+        privacy_settings JSONB DEFAULT '{}'::jsonb,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    // Create indexes only if columns exist (safe on re-run)
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='user_profiles' AND column_name='user_id'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles (user_id);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='user_profiles' AND column_name='email'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_email ON user_profiles (LOWER(email));
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='user_profiles' AND column_name='city'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='user_profiles' AND column_name='is_active'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_is_active ON user_profiles (is_active);
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='user_profiles' AND column_name='last_active'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_user_profiles_last_active ON user_profiles (last_active);
+        END IF;
+      END$$;
+    `);
+
+    // Ensure user_activities table - required by StatsController for real-time tracking
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_activities (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID,
+        activity_type VARCHAR(50) NOT NULL,
+        activity_data JSONB,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_user ON user_activities (user_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_type ON user_activities (activity_type);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_created ON user_activities (created_at);`);
 
     // Seed default donation categories if empty
     const { rows: catCountRows } = await client.query('SELECT COUNT(*)::int as count FROM donation_categories');
