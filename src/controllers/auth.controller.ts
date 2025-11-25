@@ -652,10 +652,13 @@ export class AuthController {
       };
     } catch (error: any) {
       // SECURITY: Generic error message, log details separately
+      const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
+      const isDevelopment = environment === 'development';
+      
       this.logger.error('Google authentication failed', { 
         error: error?.message || String(error),
         // Only include stack trace in development
-        stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+        stack: isDevelopment ? error?.stack : undefined
       });
       
       if (error instanceof BadRequestException) {

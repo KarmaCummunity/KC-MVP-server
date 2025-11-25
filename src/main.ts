@@ -175,10 +175,37 @@ async function bootstrap(): Promise<void> {
     
     logger.log('🛡️  Security headers configured (Helmet.js)');
 
+    // Determine environment for CORS configuration
+    const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
+    const isProduction = environment === 'production';
+    
     // Configure CORS (Cross-Origin Resource Sharing)
-    const corsOrigin = process.env.CORS_ORIGIN || '*';
+    const corsOrigin = process.env.CORS_ORIGIN;
+    
+    if (!corsOrigin) {
+      logger.warn('⚠️  WARNING: CORS_ORIGIN not set! Using default origins based on environment.');
+    }
+    
+    // Default origins based on environment
+    const defaultOrigins = isProduction
+      ? [
+          'https://karma-community-kc.com',
+          'https://www.karma-community-kc.com'
+        ]
+      : [
+          'https://dev.karma-community-kc.com',
+          'http://localhost:19006',
+          'http://localhost:3000',
+          'http://localhost:8081',
+          'http://127.0.0.1:3000'
+        ];
+    
+    const allowedOrigins = corsOrigin 
+      ? corsOrigin.split(',').map(s => s.trim())
+      : defaultOrigins;
+    
     app.enableCors({
-      origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
+      origin: allowedOrigins,
       credentials: true,
       methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Auth-Token', 'Origin', 'Accept'],
@@ -186,24 +213,20 @@ async function bootstrap(): Promise<void> {
       optionsSuccessStatus: 204,
     });
     
-    logger.log(`🌐 CORS enabled for origins: ${corsOrigin === '*' ? 'ALL (*)' : corsOrigin}`);
+    logger.log(`🌐 CORS enabled for ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'} environment`);
+    logger.log(`🌐 Allowed origins: ${allowedOrigins.join(', ')}`);
 
     // Extra CORS fallback middleware for proxy compatibility
     // Some proxies don't properly forward CORS headers, so we add them manually
-    const defaultOrigins = [
-      'https://karma-community-kc.com',
-      'https://www.karma-community-kc.com',
-      'http://localhost:19006',
-      'http://localhost:3000',
-      'http://127.0.0.1:3000'
-    ];
-    const allowedOrigins = (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()) : defaultOrigins);
     
     app.use((req: any, res: any, next: any) => {
       const origin = req.headers.origin;
-      if (origin && (allowedOrigins.includes(origin) || corsOrigin === '*')) {
+      if (origin && allowedOrigins.includes(origin)) {
         res.header('Access-Control-Allow-Origin', origin);
         res.header('Vary', 'Origin');
+      } else if (origin && !isProduction) {
+        // In development, log blocked origins for debugging
+        logger.warn(`🚫 Blocked CORS request from origin: ${origin} (not in allowed list)`);
       }
       res.header('Access-Control-Allow-Credentials', 'true');
       res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
@@ -222,7 +245,7 @@ async function bootstrap(): Promise<void> {
       whitelist: true, // Strip properties that don't have decorators
       transform: true, // Automatically transform payloads to DTO instances
       forbidNonWhitelisted: true, // Throw error if non-whitelisted properties exist
-      disableErrorMessages: process.env.NODE_ENV === 'production', // Hide detailed errors in production
+      disableErrorMessages: isProduction, // Hide detailed errors in production
       transformOptions: {
         enableImplicitConversion: true, // Convert string numbers to actual numbers
       },
@@ -232,21 +255,58 @@ async function bootstrap(): Promise<void> {
     await app.listen(port, '0.0.0.0');
     
     // Log successful startup with configuration summary
+    const isDevelopment = environment === 'development';
     logger.log('═══════════════════════════════════════════════════');
     logger.log('🚀 Karma Community Server started successfully!');
     logger.log('═══════════════════════════════════════════════════');
     logger.log(`📍 Port: ${port}`);
-    logger.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    logger.log(`📍 Environment: ${environment.toUpperCase()} ${isProduction ? '🔴 PRODUCTION' : isDevelopment ? '🟢 DEVELOPMENT' : '🟡 OTHER'}`);
     logger.log(`🔒 Google OAuth: ${process.env.GOOGLE_CLIENT_ID ? '✅ Configured' : '❌ Not configured'}`);
-    logger.log(`💾 Database: ${process.env.DATABASE_URL ? '✅ Connected' : '❌ Not connected'}`);
-    logger.log(`⚡ Redis: ${process.env.REDIS_URL ? '✅ Connected' : '❌ Not connected'}`);
+    
+    // Show database connection details (masked for security)
+    const dbUrl = process.env.DATABASE_URL;
+    if (dbUrl) {
+      try {
+        const dbUrlObj = new URL(dbUrl);
+        const dbName = dbUrlObj.pathname.replace('/', '') || 'unknown';
+        const dbHost = dbUrlObj.hostname || 'unknown';
+        logger.log(`💾 Database: ✅ Connected to ${dbName}@${dbHost}`);
+      } catch {
+        logger.log(`💾 Database: ✅ Connected (URL configured)`);
+      }
+    } else {
+      logger.log(`💾 Database: ❌ Not connected - DATABASE_URL missing!`);
+    }
+    
+    // Show Redis connection details (masked for security)
+    const redisUrl = process.env.REDIS_URL;
+    if (redisUrl) {
+      try {
+        const redisUrlObj = new URL(redisUrl);
+        const redisHost = redisUrlObj.hostname || 'unknown';
+        logger.log(`⚡ Redis: ✅ Connected to ${redisHost}`);
+      } catch {
+        logger.log(`⚡ Redis: ✅ Connected (URL configured)`);
+      }
+    } else {
+      logger.log(`⚡ Redis: ❌ Not connected - REDIS_URL missing!`);
+    }
+    
+    // Warn if running in production without proper environment flag
+    if (isProduction && !process.env.ENVIRONMENT && process.env.NODE_ENV !== 'production') {
+      logger.warn('⚠️  WARNING: Running in production mode but ENVIRONMENT is not explicitly set to "production"');
+    }
+    
     logger.log('═══════════════════════════════════════════════════');
     
   } catch (error) {
     // Handle startup errors gracefully
     if (error instanceof Error) {
       logger.error('❌ Failed to start server:', error.message);
-      if (error.stack && process.env.NODE_ENV !== 'production') {
+      // Use environment variable if available, otherwise default to development
+      const errorEnv = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
+      const isProduction = errorEnv === 'production';
+      if (error.stack && !isProduction) {
         logger.error('Stack trace:', error.stack);
       }
     } else {
