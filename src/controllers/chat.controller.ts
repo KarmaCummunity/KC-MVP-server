@@ -16,11 +16,50 @@ export class ChatController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
+
+  private async resolveUserId(userId: string): Promise<string> {
+    // Check if it's already a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(userId)) {
+      return userId;
+    }
+
+    const isEmail = userId.includes('@');
+
+    // Use ONLY the real users table (not user_profiles)
+    const { rows: existingUsers } = await this.pool.query(`
+      SELECT user_id FROM users 
+      WHERE 
+        user_id = $1
+        OR LOWER(data->>'email') = LOWER($1)
+        OR data->>'googleId' = $1
+        OR data->>'id' = $1
+        OR data->'settings'->>'legacy_id' = $1
+        OR data->'settings'->>'firebase_id' = $1
+        OR data->'settings'->>'google_id' = $1
+      LIMIT 1
+    `, [userId]);
+
+    if (existingUsers.length > 0) {
+      return existingUsers[0].user_id;
+    }
+
+    // If user doesn't exist, return the userId as-is (don't create fake users)
+    // The caller should handle missing users appropriately
+    return userId;
+  }
 
   @Post('conversations')
   async createConversation(@Body() conversationData: any) {
     const client = await this.pool.connect();
+
+    // Resolve user IDs before starting transaction
+    const resolvedCreatedBy = await this.resolveUserId(conversationData.created_by);
+    const resolvedParticipants = await Promise.all(
+      (conversationData.participants || []).map((p: string) => this.resolveUserId(p))
+    );
+
     try {
       await client.query('BEGIN');
 
@@ -31,8 +70,8 @@ export class ChatController {
       `, [
         conversationData.title || null,
         conversationData.type || 'direct',
-        conversationData.participants,
-        conversationData.created_by,
+        resolvedParticipants,
+        resolvedCreatedBy,
         conversationData.metadata ? JSON.stringify(conversationData.metadata) : null
       ]);
 
@@ -42,11 +81,11 @@ export class ChatController {
         INSERT INTO user_activities (user_id, activity_type, activity_data)
         VALUES ($1, $2, $3)
       `, [
-        conversationData.created_by,
+        resolvedCreatedBy,
         'conversation_created',
-        JSON.stringify({ 
+        JSON.stringify({
           conversation_id: conversation.id,
-          participants_count: conversationData.participants.length
+          participants_count: resolvedParticipants.length
         })
       ]);
 
@@ -65,37 +104,42 @@ export class ChatController {
 
   @Get('conversations/user/:userId')
   async getUserConversations(@Param('userId') userId: string) {
-    const cacheKey = `user_conversations_${userId}`;
+    // Resolve userId to actual user_id from users table (handles Google IDs, emails, etc.)
+    const resolvedUserId = await this.resolveUserId(userId);
+
+    const cacheKey = `user_conversations_${resolvedUserId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
+    // Convert resolvedUserId to UUID if it's a valid UUID, otherwise use text comparison
+    // Since user_id in users table is text (can be email or Google ID), we need to handle both cases
     const { rows } = await this.pool.query(`
       SELECT 
         cc.*,
         cm.content as last_message_content,
         cm.message_type as last_message_type,
         cm.created_at as last_message_time,
-        up.name as last_sender_name,
+        COALESCE(u.data->>'name', 'ללא שם') as last_sender_name,
         (
           SELECT COUNT(*)
           FROM chat_messages cm2
           WHERE cm2.conversation_id = cc.id 
-            AND cm2.sender_id != $1
+            AND cm2.sender_id::text != $1
             AND cm2.id NOT IN (
               SELECT message_id 
               FROM message_read_receipts 
-              WHERE user_id = $1
+              WHERE user_id::text = $1
             )
         ) as unread_count
       FROM chat_conversations cc
       LEFT JOIN chat_messages cm ON cc.last_message_id = cm.id
-      LEFT JOIN user_profiles up ON cm.sender_id = up.id
+      LEFT JOIN users u ON cm.sender_id = u.user_id
       WHERE $1 = ANY(cc.participants)
       ORDER BY cc.last_message_at DESC
-    `, [userId]);
+    `, [resolvedUserId]);
 
     await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
     return { success: true, data: rows };
@@ -104,6 +148,10 @@ export class ChatController {
   @Post('messages')
   async sendMessage(@Body() messageData: any) {
     const client = await this.pool.connect();
+
+    // Resolve sender ID before starting transaction
+    const resolvedSenderId = await this.resolveUserId(messageData.sender_id);
+
     try {
       await client.query('BEGIN');
 
@@ -115,7 +163,7 @@ export class ChatController {
         RETURNING *
       `, [
         messageData.conversation_id,
-        messageData.sender_id,
+        resolvedSenderId,
         messageData.content,
         messageData.message_type || 'text',
         messageData.file_url || null,

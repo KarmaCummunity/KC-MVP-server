@@ -794,10 +794,18 @@ export class StatsController {
             COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
             COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
             (data->'location'->>'city')::varchar as city,
-            COALESCE((data->'roles')::text[], ARRAY['user']) as roles
+            COALESCE(
+              CASE 
+                WHEN jsonb_typeof(data->'roles') = 'array' 
+                THEN ARRAY(SELECT jsonb_array_elements_text(data->'roles'))
+                ELSE ARRAY['user']
+              END,
+              ARRAY['user']
+            ) as roles
           FROM users
           WHERE data->>'email' IS NOT NULL
             AND LOWER(data->>'email') <> ''
+            AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
             AND LOWER(data->>'email') NOT IN (
               SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
             )
@@ -805,12 +813,12 @@ export class StatsController {
         )
         SELECT 
           COUNT(DISTINCT email_key) as total_users,
-          COUNT(CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as active_members,
-          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active_users,
-          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
-          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_this_week,
-          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
-          COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
+          COUNT(DISTINCT CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN email_key END) as active_members,
+          COUNT(DISTINCT CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN email_key END) as daily_active_users,
+          COUNT(DISTINCT CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN email_key END) as weekly_active_users,
+          COUNT(DISTINCT CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN email_key END) as new_users_this_week,
+          COUNT(DISTINCT CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN email_key END) as new_users_this_month,
+          COUNT(DISTINCT CASE WHEN 'org_admin' = ANY(roles) THEN email_key END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
         FROM all_users
       `, params),
@@ -1009,21 +1017,7 @@ export class StatsController {
   }
 
   private async clearStatsCaches(statType?: string, city?: string) {
-    const patterns = [
-      'community_stats_*',
-      'community_trends_*',
-      'city_stats_*',
-      'dashboard_stats',
-      'real_time_stats',
-      'category_analytics',
-      'user_analytics'
-    ];
-
-    for (const pattern of patterns) {
-      const keys = await this.redisCache.getKeys(pattern);
-      for (const key of keys) {
-        await this.redisCache.delete(key);
-      }
-    }
+    // Use the shared method from RedisCacheService
+    await this.redisCache.clearStatsCaches();
   }
 }

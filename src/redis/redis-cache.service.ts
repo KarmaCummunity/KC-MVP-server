@@ -95,4 +95,37 @@ export class RedisCacheService {
       info: info.split('\r\n').slice(0, 10).join('\n'), // First 10 lines
     };
   }
+
+  /**
+   * Clear all statistics-related caches
+   * This is used when user data changes (new user registered, etc.)
+   * to ensure statistics are refreshed immediately
+   */
+  async clearStatsCaches(): Promise<void> {
+    const patterns = [
+      'community_stats_*',
+      'community_trends_*',
+      'city_stats_*',
+      'dashboard_stats',
+      'real_time_stats',
+      'category_analytics',
+      'user_analytics',
+      'community_stats_version_*',
+    ];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.getKeys(pattern);
+        if (keys.length > 0) {
+          // Delete all keys at once using pipeline for better performance
+          const pipeline = this.redis.pipeline();
+          keys.forEach(key => pipeline.del(key));
+          await pipeline.exec();
+        }
+      } catch (error) {
+        // Log error but don't throw - cache clearing should not fail the operation
+        console.warn(`Failed to clear cache pattern ${pattern}:`, error);
+      }
+    }
+  }
 }
