@@ -898,13 +898,17 @@ export class StatsController {
         WHERE cm.is_deleted = false
       `, []),
 
-      // Site visits - total from community_stats
+      // Site visits - sum of stat_value (each record can represent multiple visits on the same day)
+      // ביקורים באתר - סכום של stat_value (כל רשומה יכולה לייצג מספר ביקורים באותו יום)
+      // Note: If there are 4 records with stat_value=1 each, sum will be 4. If 1 record with stat_value=4, sum will also be 4.
+      // Apply city filter if provided (site_visits are global, so city is NULL)
       this.pool.query(`
         SELECT 
           COALESCE(SUM(stat_value), 0) as site_visits
         FROM community_stats 
         WHERE stat_type = 'site_visits'
-      `, [])
+        ${city ? 'AND city IS NULL' : ''}
+      `, params)
     ]);
 
     const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics] = queries;
@@ -969,8 +973,9 @@ export class StatsController {
       group_conversations: { value: parseInt(chatMetrics.rows[0].group_conversations || '0'), days_tracked: 1 },
       direct_conversations: { value: parseInt(chatMetrics.rows[0].direct_conversations || '0'), days_tracked: 1 },
 
-      // Site visits
-      site_visits: { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
+      // Site visits - use existing value from getCommunityStats if available, otherwise compute
+      // ביקורים באתר - השתמש בערך הקיים מ-getCommunityStats אם קיים, אחרת חשב
+      site_visits: stats.site_visits || { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
 
     };
 
