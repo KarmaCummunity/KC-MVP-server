@@ -357,24 +357,40 @@ CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECU
 
 -- Items table for item donations/deliveries
 CREATE TABLE IF NOT EXISTS items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    owner_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
     title VARCHAR(255) NOT NULL,
     description TEXT,
     category VARCHAR(50) NOT NULL, -- furniture, clothes, electronics, general, etc.
     condition VARCHAR(20), -- new, like_new, used, for_parts
-    location JSONB, -- {city, address, coordinates: {lat, lng}}
+    
+    -- Location as separate columns
+    city VARCHAR(100),
+    address TEXT,
+    coordinates VARCHAR(100), -- stored as "lat,lng" string
+    
     price DECIMAL(10,2) DEFAULT 0, -- 0 means free
-    images TEXT[], -- array of image URLs
-    tags TEXT[],
+    image_base64 TEXT, -- base64 encoded image
+    rating INTEGER DEFAULT 0,
+    tags TEXT, -- comma-separated tags
     quantity INTEGER DEFAULT 1,
     status VARCHAR(20) DEFAULT 'available', -- available, reserved, delivered, expired, cancelled
-    delivery_method VARCHAR(20), -- pickup, delivery, shipping
-    metadata JSONB, -- flexible field for additional data
-    expires_at TIMESTAMPTZ, -- when item listing expires
+    delivery_method VARCHAR(20) DEFAULT 'pickup', -- pickup, delivery, shipping
+    
+    -- Soft delete fields
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ,
+    
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for better query performance
+CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);
+CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
 
 -- Item requests/bookings for delivery workflow
 CREATE TABLE IF NOT EXISTS item_requests (

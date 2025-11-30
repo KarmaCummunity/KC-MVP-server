@@ -30,6 +30,7 @@ export class ItemsService {
       'notifications',
       'bookmarks',
       'donations',
+      'items',
       'tasks',
       'settings',
       'media',
@@ -134,11 +135,27 @@ export class ItemsService {
 
   async delete(collection: string, userId: string, itemId: string) {
     const table = this.tableFor(collection);
+    console.log(`🗑️  DELETE Request - table: ${table}, userId: ${userId}, itemId: ${itemId}`);
+    
+    // First check if item exists
+    const checkResult = await this.pool.query(
+      `SELECT * FROM ${table} WHERE user_id = $1 AND item_id = $2`,
+      [userId, itemId],
+    );
+    console.log(`🔍 Item exists check: ${checkResult.rowCount} rows found`);
+    
     const { rowCount } = await this.pool.query(
       `DELETE FROM ${table} WHERE user_id = $1 AND item_id = $2`,
       [userId, itemId],
     );
-    return { ok: (rowCount ?? 0) > 0 };
+    console.log(`✅ DELETE result: ${rowCount} rows deleted`);
+    
+    // Invalidate cache
+    await this.invalidateListCache(collection, userId);
+    const cacheKey = `item:${collection}:${userId}:${itemId}`;
+    await this.redisCache.delete(cacheKey);
+    
+    return { ok: (rowCount ?? 0) > 0, deleted: rowCount };
   }
 
   async list(collection: string, userId: string, q?: string) {

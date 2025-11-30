@@ -177,6 +177,7 @@ export class DatabaseInit implements OnModuleInit {
         'chat_conversations', 'chat_messages', 'message_read_receipts',
         'user_activities', 'community_stats', 'user_follows', 'user_notifications',
         'tasks', // tasks table is now in new relational schema format
+        'items', // items table is now in new relational schema format with separate columns
       ]);
 
       const potentialLegacy = [
@@ -184,7 +185,7 @@ export class DatabaseInit implements OnModuleInit {
         'donations', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
         'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications',
         'analytics'
-      ];
+      ]; // Note: 'items' removed - now a dedicated table with specific columns
 
       const legacyTables = potentialLegacy.filter(t => !relationalOwned.has(t));
 
@@ -217,6 +218,61 @@ export class DatabaseInit implements OnModuleInit {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, date_period);
       `);
+
+      // Ensure items table with separate columns (not JSONB)
+      console.log('🔧 Ensuring items table with dedicated columns...');
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS items (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            category VARCHAR(50) NOT NULL,
+            condition VARCHAR(20),
+            city VARCHAR(100),
+            address TEXT,
+            coordinates VARCHAR(100),
+            price DECIMAL(10,2) DEFAULT 0,
+            image_base64 TEXT,
+            rating INTEGER DEFAULT 0,
+            tags TEXT,
+            quantity INTEGER DEFAULT 1,
+            status VARCHAR(20) DEFAULT 'available',
+            delivery_method VARCHAR(20) DEFAULT 'pickup',
+            is_deleted BOOLEAN DEFAULT FALSE,
+            deleted_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          );
+        `);
+        
+        // Try to create indexes, skip if column doesn't exist
+        try {
+          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);`);
+        } catch (e) { console.log('⚠️ Skipping idx_items_owner_id'); }
+        
+        try {
+          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);`);
+        } catch (e) { console.log('⚠️ Skipping idx_items_category'); }
+        
+        try {
+          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`);
+        } catch (e) { console.log('⚠️ Skipping idx_items_status'); }
+        
+        try {
+          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);`);
+        } catch (e) { console.log('⚠️ Skipping idx_items_is_deleted'); }
+        
+        try {
+          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);`);
+        } catch (e) { console.log('⚠️ Skipping idx_items_created_at'); }
+        
+        console.log('✅ Items table ensured with dedicated columns');
+      } catch (error) {
+        console.error('❌ Failed to create items table:', error);
+        // Continue anyway - table might already exist in different format
+      }
 
       // Minimal user_profiles to satisfy joins and stats
       await client.query(`

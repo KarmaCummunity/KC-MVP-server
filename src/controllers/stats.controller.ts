@@ -657,7 +657,6 @@ export class StatsController {
           COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
           COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_this_week,
           COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
-          COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
         FROM user_profiles 
         WHERE 1=1 ${userCityCondition}
