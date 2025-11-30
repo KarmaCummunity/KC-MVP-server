@@ -163,7 +163,18 @@ export class ChatController {
       // If it's not a UUID, we need to convert participants to text array
       const whereClause = isUUID 
         ? `$1::UUID = ANY(cc.participants)`
-        : `$1::text = ANY(ARRAY(SELECT unnest(cc.participants)::text))`;
+        : `CAST($1 AS TEXT) = ANY(ARRAY(SELECT unnest(cc.participants)::text))`;
+
+      // Build the comparison clauses for unread count based on UUID type
+      // Note: cm2.sender_id and user_id are always UUID columns, so we need to convert them
+      // to text when comparing with non-UUID values, or use UUID comparison when both are UUIDs
+      const senderIdComparison = isUUID 
+        ? `cm2.sender_id != $1::UUID`
+        : `CAST(cm2.sender_id AS TEXT) != CAST($1 AS TEXT)`;
+      
+      const userIdComparison = isUUID 
+        ? `user_id = $1::UUID`
+        : `CAST(user_id AS TEXT) = CAST($1 AS TEXT)`;
 
       const { rows } = await this.pool.query(`
         SELECT 
@@ -176,11 +187,11 @@ export class ChatController {
             SELECT COUNT(*)
             FROM chat_messages cm2
             WHERE cm2.conversation_id = cc.id 
-              AND cm2.sender_id::text != $1::text
+              AND ${senderIdComparison}
               AND cm2.id NOT IN (
                 SELECT message_id 
                 FROM message_read_receipts 
-                WHERE user_id::text = $1::text
+                WHERE ${userIdComparison}
               )
           ) as unread_count
         FROM chat_conversations cc

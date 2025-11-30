@@ -33,65 +33,132 @@ export class TasksController {
         );
       `);
       
-      if (!checkTable.rows[0].exists) {
+      const tableExists = checkTable.rows[0].exists;
+      let needsRecreation = false;
+      
+      // If table exists, verify it has the required columns
+      if (tableExists) {
+        const checkColumns = await this.pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_schema = 'public' 
+          AND table_name = 'tasks'
+          AND column_name IN ('id', 'title', 'description', 'status', 'priority')
+        `);
+        
+        const requiredColumns = ['id', 'title', 'description', 'status', 'priority'];
+        const existingColumns = checkColumns.rows.map((r: any) => r.column_name);
+        const missingColumns = requiredColumns.filter(col => !existingColumns.includes(col));
+        
+        if (missingColumns.length > 0) {
+          console.warn(`⚠️ Tasks table exists but missing columns: ${missingColumns.join(', ')}. Dropping and recreating...`);
+          // Drop and recreate if columns are missing
+          await this.pool.query('DROP TABLE IF EXISTS tasks CASCADE');
+          needsRecreation = true;
+        } else {
+          // Table exists with all required columns
+          return;
+        }
+      }
+      
+      // Create table if it doesn't exist or was dropped
+      if (!tableExists || needsRecreation) {
         console.warn('⚠️ Tasks table not found, creating it...');
+        console.log('📋 Attempting to create tasks table in production...');
         
-        // Create extension
-        await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
-        
-        // Create the table
-        await this.pool.query(`
-          CREATE TABLE IF NOT EXISTS tasks (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            title VARCHAR(255) NOT NULL,
-            description TEXT,
-            status VARCHAR(20) NOT NULL DEFAULT 'open',
-            priority VARCHAR(10) NOT NULL DEFAULT 'medium',
-            category VARCHAR(50),
-            due_date TIMESTAMPTZ,
-            assignees UUID[] DEFAULT ARRAY[]::UUID[],
-            tags TEXT[] DEFAULT ARRAY[]::TEXT[],
-            checklist JSONB,
-            created_by TEXT,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-          )
-        `);
-        
-        // Create indexes
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)');
-        
-        // Create trigger function if it doesn't exist
-        await this.pool.query(`
-          CREATE OR REPLACE FUNCTION update_updated_at_column()
-          RETURNS TRIGGER AS $$
-          BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-          END;
-          $$ language 'plpgsql'
-        `);
-        
-        // Create trigger
-        await this.pool.query('DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks');
-        await this.pool.query(`
-          CREATE TRIGGER update_tasks_updated_at 
-          BEFORE UPDATE ON tasks 
-          FOR EACH ROW 
-          EXECUTE FUNCTION update_updated_at_column()
-        `);
-        
-        console.log('✅ Tasks table created successfully');
+        try {
+          // Create extension (may fail if no permissions, but continue anyway)
+          try {
+            console.log('📦 Creating uuid-ossp extension...');
+            await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+            console.log('✅ uuid-ossp extension ready');
+          } catch (extError) {
+            console.warn('⚠️ Could not create uuid-ossp extension (may already exist or no permissions):', extError);
+            // Continue - extension might already exist
+          }
+          
+          // Create the table
+          console.log('📋 Creating tasks table...');
+          await this.pool.query(`
+            CREATE TABLE IF NOT EXISTS tasks (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              title VARCHAR(255) NOT NULL,
+              description TEXT,
+              status VARCHAR(20) NOT NULL DEFAULT 'open',
+              priority VARCHAR(10) NOT NULL DEFAULT 'medium',
+              category VARCHAR(50),
+              due_date TIMESTAMPTZ,
+              assignees UUID[] DEFAULT ARRAY[]::UUID[],
+              tags TEXT[] DEFAULT ARRAY[]::TEXT[],
+              checklist JSONB,
+              created_by TEXT,
+              created_at TIMESTAMPTZ DEFAULT NOW(),
+              updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+          `);
+          console.log('✅ Tasks table CREATE statement executed');
+          
+          // Create indexes
+          console.log('📊 Creating indexes...');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)');
+          await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)');
+          console.log('✅ Indexes created');
+          
+          // Create trigger function if it doesn't exist
+          console.log('⚙️ Creating trigger function...');
+          await this.pool.query(`
+            CREATE OR REPLACE FUNCTION update_updated_at_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+              NEW.updated_at = NOW();
+              RETURN NEW;
+            END;
+            $$ language 'plpgsql'
+          `);
+          
+          // Create trigger
+          await this.pool.query('DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks');
+          await this.pool.query(`
+            CREATE TRIGGER update_tasks_updated_at 
+            BEFORE UPDATE ON tasks 
+            FOR EACH ROW 
+            EXECUTE FUNCTION update_updated_at_column()
+          `);
+          console.log('✅ Trigger created');
+          
+          // Verify table was created - wait a bit and check again
+          console.log('🔍 Verifying table creation...');
+          await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for DB to sync
+          
+          const verifyTable = await this.pool.query(`
+            SELECT EXISTS (
+              SELECT FROM information_schema.tables 
+              WHERE table_schema = 'public' 
+              AND table_name = 'tasks'
+            );
+          `);
+          
+          if (verifyTable.rows[0].exists) {
+            console.log('✅✅✅ Tasks table created and verified successfully!');
+          } else {
+            console.error('❌❌❌ Tasks table verification failed - table does not exist after creation attempt');
+            throw new Error('Tasks table creation failed - table does not exist after creation attempt. Check database permissions.');
+          }
+        } catch (createError) {
+          console.error('❌ Failed to create tasks table:', createError);
+          // Re-throw to let caller know table creation failed
+          throw new Error(`Failed to create tasks table: ${createError instanceof Error ? createError.message : String(createError)}`);
+        }
       }
     } catch (error) {
-      console.error('Error ensuring tasks table:', error);
-      // Don't throw - let the actual query fail with a clearer error
+      console.error('❌ Error ensuring tasks table:', error);
+      // Re-throw so the actual query will fail with a clear error
+      throw error;
     }
   }
 
@@ -186,9 +253,41 @@ export class TasksController {
       return { success: true, data: rows };
     } catch (error) {
       console.error('Error listing tasks:', error);
+      
+      // Check if error is about missing table/columns
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('does not exist') || errorMessage.includes('column')) {
+        return {
+          success: false,
+          error: 'Database table structure issue. Please contact administrator or check server logs.',
+        };
+      }
+      
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to list tasks',
+        error: errorMessage || 'Failed to list tasks',
+      };
+    }
+  }
+
+  /**
+   * Manual endpoint to create tasks table
+   * Useful for production when automatic creation fails
+   * GET /api/tasks/init-table
+   */
+  @Get('init-table')
+  async initTasksTable() {
+    try {
+      await this.ensureTasksTable();
+      return { 
+        success: true, 
+        message: 'Tasks table initialized successfully' 
+      };
+    } catch (error) {
+      console.error('Failed to initialize tasks table:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to initialize tasks table',
       };
     }
   }
@@ -543,6 +642,7 @@ export class TasksController {
       console.warn('Redis cache invalidation error (non-fatal):', cacheError);
     }
   }
+
 }
 
 
