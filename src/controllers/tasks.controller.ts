@@ -19,6 +19,83 @@ export class TasksController {
   ) {}
 
   /**
+   * Ensure tasks table exists, create it if missing
+   * This is a fallback in case schema.sql wasn't run
+   */
+  private async ensureTasksTable() {
+    try {
+      // Check if table exists
+      const checkTable = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'tasks'
+        );
+      `);
+      
+      if (!checkTable.rows[0].exists) {
+        console.warn('⚠️ Tasks table not found, creating it...');
+        
+        // Create extension
+        await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+        
+        // Create the table
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS tasks (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'open',
+            priority VARCHAR(10) NOT NULL DEFAULT 'medium',
+            category VARCHAR(50),
+            due_date TIMESTAMPTZ,
+            assignees UUID[] DEFAULT ARRAY[]::UUID[],
+            tags TEXT[] DEFAULT ARRAY[]::TEXT[],
+            checklist JSONB,
+            created_by TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        `);
+        
+        // Create indexes
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)');
+        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)');
+        
+        // Create trigger function if it doesn't exist
+        await this.pool.query(`
+          CREATE OR REPLACE FUNCTION update_updated_at_column()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+          END;
+          $$ language 'plpgsql'
+        `);
+        
+        // Create trigger
+        await this.pool.query('DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks');
+        await this.pool.query(`
+          CREATE TRIGGER update_tasks_updated_at 
+          BEFORE UPDATE ON tasks 
+          FOR EACH ROW 
+          EXECUTE FUNCTION update_updated_at_column()
+        `);
+        
+        console.log('✅ Tasks table created successfully');
+      }
+    } catch (error) {
+      console.error('Error ensuring tasks table:', error);
+      // Don't throw - let the actual query fail with a clearer error
+    }
+  }
+
+  /**
    * List tasks with filtering and pagination
    * Cache TTL: 10 minutes (tasks change moderately frequently)
    */
@@ -32,8 +109,14 @@ export class TasksController {
     @Query('offset') offsetParam?: string,
   ) {
     try {
-      const limit = Math.min(Math.max(parseInt(String(limitParam || '100'), 10) || 100, 1), 500);
-      const offset = Math.max(parseInt(String(offsetParam || '0'), 10) || 0, 0);
+      // Ensure table exists before querying
+      await this.ensureTasksTable();
+      
+      // Parse limit and offset - handle 0 correctly
+      const limitNum = limitParam ? parseInt(String(limitParam), 10) : 100;
+      const offsetNum = offsetParam ? parseInt(String(offsetParam), 10) : 0;
+      const limit = Math.min(Math.max(isNaN(limitNum) ? 100 : limitNum, 1), 500);
+      const offset = Math.max(isNaN(offsetNum) ? 0 : offsetNum, 0);
 
       // Build cache key from query parameters (include search query if present)
       const cacheKey = `tasks_list_${status || 'all'}_${priority || 'all'}_${category || 'all'}_${searchQuery || 'all'}_${limit}_${offset}`;
@@ -72,7 +155,8 @@ export class TasksController {
       if (searchQuery && searchQuery.trim()) {
         const searchTerm = `%${searchQuery.trim()}%`;
         params.push(searchTerm);
-        filters.push(`(title ILIKE $${params.length} OR description ILIKE $${params.length})`);
+        const searchParamIndex = params.length;
+        filters.push(`(title ILIKE $${searchParamIndex} OR description ILIKE $${searchParamIndex})`);
       }
       
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
@@ -116,6 +200,15 @@ export class TasksController {
   @Get(':id')
   async getTask(@Param('id') id: string) {
     try {
+      // Ensure table exists before querying
+      await this.ensureTasksTable();
+      
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(id)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+      
       const cacheKey = `task_${id}`;
       
       // Try to get from cache (but don't fail if Redis is unavailable)
@@ -159,6 +252,9 @@ export class TasksController {
   @Post()
   async createTask(@Body() body: any) {
     try {
+      // Ensure table exists before inserting
+      await this.ensureTasksTable();
+      
       const {
         title,
         description = null,
@@ -173,8 +269,32 @@ export class TasksController {
         created_by = null,
       } = body || {};
 
-      if (!title || typeof title !== 'string') {
-        return { success: false, error: 'title is required' };
+      if (!title || typeof title !== 'string' || !title.trim()) {
+        return { success: false, error: 'title is required and cannot be empty' };
+      }
+
+      // Validate status
+      if (status && !['open', 'in_progress', 'done', 'archived'].includes(status)) {
+        return { success: false, error: 'Invalid status value' };
+      }
+      
+      // Validate priority
+      if (priority && !['low', 'medium', 'high'].includes(priority)) {
+        return { success: false, error: 'Invalid priority value' };
+      }
+      
+      // Validate and parse due_date if provided
+      let parsedDueDate = null;
+      if (due_date) {
+        if (typeof due_date === 'string') {
+          const date = new Date(due_date);
+          if (isNaN(date.getTime())) {
+            return { success: false, error: 'Invalid due_date format' };
+          }
+          parsedDueDate = date.toISOString();
+        } else {
+          parsedDueDate = due_date;
+        }
       }
 
       // Convert emails to UUIDs if assigneesEmails is provided
@@ -203,12 +323,12 @@ export class TasksController {
         RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
       `;
       const params = [
-        title,
+        title.trim(),
         description,
         status,
         priority,
         category,
-        due_date,
+        parsedDueDate,
         assigneeUUIDs,
         Array.isArray(tags) ? tags : [],
         checklist,
@@ -235,6 +355,39 @@ export class TasksController {
   @Patch(':id')
   async updateTask(@Param('id') id: string, @Body() body: any) {
     try {
+      // Ensure table exists before updating
+      await this.ensureTasksTable();
+      
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(id)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+      
+      // Validate status if provided
+      if (body.status && !['open', 'in_progress', 'done', 'archived'].includes(body.status)) {
+        return { success: false, error: 'Invalid status value' };
+      }
+      
+      // Validate priority if provided
+      if (body.priority && !['low', 'medium', 'high'].includes(body.priority)) {
+        return { success: false, error: 'Invalid priority value' };
+      }
+      
+      // Validate and parse due_date if provided
+      let parsedDueDate = null;
+      if (body.due_date !== undefined && body.due_date !== null) {
+        if (typeof body.due_date === 'string') {
+          const date = new Date(body.due_date);
+          if (isNaN(date.getTime())) {
+            return { success: false, error: 'Invalid due_date format' };
+          }
+          parsedDueDate = date.toISOString();
+        } else {
+          parsedDueDate = body.due_date;
+        }
+      }
+      
       // Build partial update dynamically
       const allowed = [
         'title',
@@ -275,6 +428,15 @@ export class TasksController {
       for (const key of allowed) {
         if (key === 'assignees' || key === 'assigneesEmails') {
           // Skip, handled above
+          continue;
+        }
+        
+        if (key === 'due_date') {
+          // Handle due_date separately with parsed value
+          if (body.due_date !== undefined) {
+            params.push(parsedDueDate);
+            sets.push(`due_date = $${params.length}`);
+          }
           continue;
         }
         
@@ -338,6 +500,15 @@ export class TasksController {
   @Delete(':id')
   async deleteTask(@Param('id') id: string) {
     try {
+      // Ensure table exists before deleting
+      await this.ensureTasksTable();
+      
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(id)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+      
       const { rowCount } = await this.pool.query('DELETE FROM tasks WHERE id = $1', [id]);
       if (!rowCount) {
         return { success: false, error: 'Task not found' };
