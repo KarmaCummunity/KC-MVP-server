@@ -36,6 +36,10 @@ export class DonationsController {
     private readonly redisCache: RedisCacheService,
   ) {}
 
+  /**
+   * Get all donation categories with caching
+   * Cache TTL: 30 minutes (categories are static data that rarely changes)
+   */
   @Get('categories')
   async getCategories() {
     const cacheKey = 'donation_categories_all';
@@ -53,12 +57,24 @@ export class DonationsController {
       ORDER BY sort_order ASC, name_he ASC
     `);
 
-    await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
+    // Cache for 30 minutes - categories are static data
+    await this.redisCache.set(cacheKey, rows, 30 * 60);
     return { success: true, data: rows };
   }
 
+  /**
+   * Get a single donation category by slug with caching
+   * Cache TTL: 30 minutes (categories are static data)
+   */
   @Get('categories/:slug')
   async getCategoryBySlug(@Param('slug') slug: string) {
+    const cacheKey = `donation_category_${slug}`;
+    const cached = await this.redisCache.get(cacheKey);
+    
+    if (cached) {
+      return { success: true, data: cached };
+    }
+
     const { rows } = await this.pool.query(`
       SELECT * FROM donation_categories WHERE slug = $1 AND is_active = true
     `, [slug]);
@@ -67,6 +83,8 @@ export class DonationsController {
       return { success: false, error: 'Category not found' };
     }
 
+    // Cache for 30 minutes - categories are static data
+    await this.redisCache.set(cacheKey, rows[0], 30 * 60);
     return { success: true, data: rows[0] };
   }
 
@@ -236,8 +254,19 @@ export class DonationsController {
     return { success: true, data: rows };
   }
 
+  /**
+   * Get a single donation by ID with caching
+   * Cache TTL: 15 minutes (donations are relatively static but can be updated)
+   */
   @Get(':id')
   async getDonationById(@Param('id') id: string) {
+    const cacheKey = `donation_${id}`;
+    const cached = await this.redisCache.get(cacheKey);
+    
+    if (cached) {
+      return { success: true, data: cached };
+    }
+
     const { rows } = await this.pool.query(`
       SELECT d.*, dc.name_he as category_name, dc.icon as category_icon,
              up.name as donor_name, up.city as donor_city, up.avatar_url as donor_avatar,
@@ -252,6 +281,8 @@ export class DonationsController {
       return { success: false, error: 'Donation not found' };
     }
 
+    // Cache for 15 minutes
+    await this.redisCache.set(cacheKey, rows[0], 15 * 60);
     return { success: true, data: rows[0] };
   }
 
@@ -290,6 +321,8 @@ export class DonationsController {
       return { success: false, error: 'Donation not found' };
     }
 
+    // Clear specific donation cache
+    await this.redisCache.delete(`donation_${id}`);
     await this.clearDonationCaches();
     return { success: true, data: rows[0] };
   }
@@ -314,6 +347,8 @@ export class DonationsController {
       return { success: false, error: 'Failed to delete donation' };
     }
 
+    // Clear specific donation cache
+    await this.redisCache.delete(`donation_${id}`);
     // Clear all related caches
     await this.clearDonationCaches();
     await this.clearCommunityStatsCaches();
@@ -382,19 +417,30 @@ export class DonationsController {
     `, [statType, amount]);
   }
 
+  /**
+   * Clear all donation-related caches
+   * Called after create/update/delete operations to ensure data consistency
+   * Uses invalidatePattern for efficient batch deletion
+   */
   private async clearDonationCaches() {
-    const keys = await this.redisCache.getKeys('donations_*');
-    const userKeys = await this.redisCache.getKeys('user_donations_*');
-    const statsKeys = await this.redisCache.getKeys('donation_stats_*');
+    const patterns = [
+      'donations_*',           // All donation lists with filters
+      'user_donations_*',      // User-specific donation lists
+      'donation_stats_*',      // Donation statistics
+      'donation_*',            // Individual donation cache
+      'donation_category_*',   // Individual category cache
+    ];
     
-    const allKeys = [...keys, ...userKeys, ...statsKeys, 'donation_categories_all'];
-    
-    for (const key of allKeys) {
-      await this.redisCache.delete(key);
+    for (const pattern of patterns) {
+      await this.redisCache.invalidatePattern(pattern);
     }
+    
+    // Clear categories cache explicitly
+    await this.redisCache.delete('donation_categories_all');
   }
 
   private async clearCommunityStatsCaches() {
+    // Use invalidatePattern for better performance
     const patterns = [
       'community_stats_*',
       'community_trends_*',
@@ -402,10 +448,7 @@ export class DonationsController {
       'real_time_stats',
     ];
     for (const pattern of patterns) {
-      const keys = await this.redisCache.getKeys(pattern);
-      for (const key of keys) {
-        await this.redisCache.delete(key);
-      }
+      await this.redisCache.invalidatePattern(pattern);
     }
   }
 }

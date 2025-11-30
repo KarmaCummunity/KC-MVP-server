@@ -18,14 +18,33 @@ export class ChatController {
     private readonly redisCache: RedisCacheService,
   ) { }
 
+  /**
+   * Resolve user ID from various formats (UUID, email, Google ID, legacy IDs)
+   * Uses caching to avoid expensive database lookups on every request
+   * Cache TTL: 10 minutes (userId mappings are relatively static)
+   * 
+   * @param userId - Can be UUID, email, Google ID, or legacy ID
+   * @returns Resolved user_id from database, or original userId if not found
+   */
   private async resolveUserId(userId: string): Promise<string> {
-    // Check if it's already a valid UUID
+    // Check if it's already a valid UUID - no resolution needed
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(userId)) {
       return userId;
     }
 
-    const isEmail = userId.includes('@');
+    // Normalize email to lowercase for consistent lookup
+    // This matches the normalization used in auth.controller.ts
+    const normalizedUserId = userId.includes('@') 
+      ? String(userId).trim().toLowerCase() 
+      : userId;
+
+    // Check cache first to avoid expensive database query
+    const cacheKey = `user_id_resolve_${normalizedUserId}`;
+    const cached = await this.redisCache.get<string>(cacheKey);
+    if (cached) {
+      return cached;
+    }
 
     // Use ONLY the real users table (not user_profiles)
     const { rows: existingUsers } = await this.pool.query(`
@@ -39,15 +58,20 @@ export class ChatController {
         OR data->'settings'->>'firebase_id' = $1
         OR data->'settings'->>'google_id' = $1
       LIMIT 1
-    `, [userId]);
+    `, [normalizedUserId]);
 
+    let resolvedUserId: string;
     if (existingUsers.length > 0) {
-      return existingUsers[0].user_id;
+      resolvedUserId = existingUsers[0].user_id;
+    } else {
+      // If user doesn't exist, return the normalized userId (don't create fake users)
+      // The caller should handle missing users appropriately
+      resolvedUserId = normalizedUserId;
     }
 
-    // If user doesn't exist, return the userId as-is (don't create fake users)
-    // The caller should handle missing users appropriately
-    return userId;
+    // Cache for 10 minutes - userId resolution is relatively static
+    await this.redisCache.set(cacheKey, resolvedUserId, 10 * 60);
+    return resolvedUserId;
   }
 
   @Post('conversations')

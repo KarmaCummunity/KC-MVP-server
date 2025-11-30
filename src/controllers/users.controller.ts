@@ -216,7 +216,13 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
-    const cacheKey = `user_profile_${id}`;
+    // Normalize email to lowercase for consistent lookup
+    // This matches the normalization used in auth.controller.ts
+    const normalizedId = id.includes('@') 
+      ? String(id).trim().toLowerCase() 
+      : id;
+    
+    const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
     
     if (cached) {
@@ -272,7 +278,7 @@ export class UsersController {
          OR data->>'googleId' = $1
          OR data->>'id' = $1
       LIMIT 1
-    `, [id]);
+    `, [normalizedId]);
 
     if (rows.length === 0) {
       return { success: false, error: 'User not found' };
@@ -531,7 +537,8 @@ export class UsersController {
     // Log for debugging
     console.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);
 
-    await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
+    // Cache for 20 minutes - user lists are relatively static
+    await this.redisCache.set(cacheKey, rows, 20 * 60);
     return { success: true, data: rows };
   }
 
@@ -556,6 +563,12 @@ export class UsersController {
     return { success: true, data: rows };
   }
 
+  /**
+   * Get user statistics with partial caching optimization
+   * Each statistic type (donations, rides, bookings) is cached separately
+   * This allows partial cache hits - if only one stat changes, others remain cached
+   * Cache TTL: 15 minutes
+   */
   @Get(':id/stats')
   async getUserStats(@Param('id') userId: string) {
     const cacheKey = `user_stats_${userId}`;
@@ -565,35 +578,68 @@ export class UsersController {
       return { success: true, data: cached };
     }
 
-    // Get donation stats
-    const donationStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as total_donations,
-        SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
-        COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
-        COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
-      FROM donations
-      WHERE donor_id = $1
-    `, [userId]);
+    // Try to get individual cached stats using batch get for better performance
+    const donationStatsKey = `user_stats_donations_${userId}`;
+    const rideStatsKey = `user_stats_rides_${userId}`;
+    const bookingStatsKey = `user_stats_bookings_${userId}`;
+    
+    const cachedStats = await this.redisCache.getMultiple([
+      donationStatsKey,
+      rideStatsKey,
+      bookingStatsKey,
+    ]);
 
-    // Get ride stats
-    const rideStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_created,
-        SUM(available_seats) as total_seats_offered,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
-      FROM rides
-      WHERE driver_id = $1
-    `, [userId]);
+    let donationStats: any;
+    let rideStats: any;
+    let bookingStats: any;
 
-    // Get booking stats (as passenger)
-    const bookingStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_booked,
-        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
-      FROM ride_bookings
-      WHERE passenger_id = $1
-    `, [userId]);
+    // Get donation stats (from cache or DB)
+    if (cachedStats.get(donationStatsKey)) {
+      donationStats = { rows: [cachedStats.get(donationStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as total_donations,
+          SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
+          COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
+          COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
+        FROM donations
+        WHERE donor_id = $1
+      `, [userId]);
+      donationStats = result;
+      await this.redisCache.set(donationStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get ride stats (from cache or DB)
+    if (cachedStats.get(rideStatsKey)) {
+      rideStats = { rows: [cachedStats.get(rideStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_created,
+          SUM(available_seats) as total_seats_offered,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
+        FROM rides
+        WHERE driver_id = $1
+      `, [userId]);
+      rideStats = result;
+      await this.redisCache.set(rideStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get booking stats (from cache or DB)
+    if (cachedStats.get(bookingStatsKey)) {
+      bookingStats = { rows: [cachedStats.get(bookingStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_booked,
+          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
+        FROM ride_bookings
+        WHERE passenger_id = $1
+      `, [userId]);
+      bookingStats = result;
+      await this.redisCache.set(bookingStatsKey, result.rows[0], this.CACHE_TTL);
+    }
 
     const stats = {
       donations: donationStats.rows[0],
@@ -601,6 +647,7 @@ export class UsersController {
       bookings: bookingStats.rows[0]
     };
 
+    // Cache the combined result
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
     return { success: true, data: stats };
   }

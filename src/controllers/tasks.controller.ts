@@ -6,73 +6,154 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestj
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
+import { RedisCacheService } from '../redis/redis-cache.service';
 
 type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived';
 type TaskPriority = 'low' | 'medium' | 'high';
 
 @Controller('/api/tasks')
 export class TasksController {
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    private readonly redisCache: RedisCacheService,
+  ) {}
 
+  /**
+   * List tasks with filtering and pagination
+   * Cache TTL: 10 minutes (tasks change moderately frequently)
+   */
   @Get()
   async listTasks(
     @Query('status') status?: TaskStatus,
     @Query('priority') priority?: TaskPriority,
     @Query('category') category?: string,
+    @Query('q') searchQuery?: string,
     @Query('limit') limitParam?: string,
     @Query('offset') offsetParam?: string,
   ) {
-    const limit = Math.min(Math.max(parseInt(String(limitParam || '100'), 10) || 100, 1), 500);
-    const offset = Math.max(parseInt(String(offsetParam || '0'), 10) || 0, 0);
+    try {
+      const limit = Math.min(Math.max(parseInt(String(limitParam || '100'), 10) || 100, 1), 500);
+      const offset = Math.max(parseInt(String(offsetParam || '0'), 10) || 0, 0);
 
-    const filters: string[] = [];
-    const params: any[] = [];
-    
-    if (status) {
-      params.push(status);
-      filters.push(`status = $${params.length}`);
-    }
-    
-    if (priority) {
-      params.push(priority);
-      filters.push(`priority = $${params.length}`);
-    }
-    
-    if (category) {
-      params.push(category);
-      filters.push(`category = $${params.length}`);
-    }
-    
-    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+      // Build cache key from query parameters (include search query if present)
+      const cacheKey = `tasks_list_${status || 'all'}_${priority || 'all'}_${category || 'all'}_${searchQuery || 'all'}_${limit}_${offset}`;
+      
+      // Try to get from cache (but don't fail if Redis is unavailable)
+      let cached = null;
+      try {
+        cached = await this.redisCache.get(cacheKey);
+      } catch (cacheError) {
+        console.warn('Redis cache error (non-fatal):', cacheError);
+      }
+      
+      if (cached) {
+        return { success: true, data: cached };
+      }
 
-    const sql = `
-      SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
-      FROM tasks
-      ${where}
-      ORDER BY 
-        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
-        status ASC,
-        created_at DESC
-      LIMIT $${params.length + 1}
-      OFFSET $${params.length + 2}
-    `;
-    params.push(limit, offset);
+      const filters: string[] = [];
+      const params: any[] = [];
+      
+      if (status) {
+        params.push(status);
+        filters.push(`status = $${params.length}`);
+      }
+      
+      if (priority) {
+        params.push(priority);
+        filters.push(`priority = $${params.length}`);
+      }
+      
+      if (category) {
+        params.push(category);
+        filters.push(`category = $${params.length}`);
+      }
 
-    const { rows } = await this.pool.query(sql, params);
-    return { success: true, data: rows };
+      // Add text search if query parameter is provided
+      if (searchQuery && searchQuery.trim()) {
+        const searchTerm = `%${searchQuery.trim()}%`;
+        params.push(searchTerm);
+        filters.push(`(title ILIKE $${params.length} OR description ILIKE $${params.length})`);
+      }
+      
+      const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+      const sql = `
+        SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+        FROM tasks
+        ${where}
+        ORDER BY 
+          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
+          status ASC,
+          created_at DESC
+        LIMIT $${params.length + 1}
+        OFFSET $${params.length + 2}
+      `;
+      params.push(limit, offset);
+
+      const { rows } = await this.pool.query(sql, params);
+      
+      // Try to cache the result (but don't fail if Redis is unavailable)
+      try {
+        await this.redisCache.set(cacheKey, rows, 10 * 60);
+      } catch (cacheError) {
+        console.warn('Redis cache set error (non-fatal):', cacheError);
+      }
+      
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Error listing tasks:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to list tasks',
+      };
+    }
   }
 
+  /**
+   * Get a single task by ID
+   * Cache TTL: 15 minutes
+   */
   @Get(':id')
   async getTask(@Param('id') id: string) {
-    const { rows } = await this.pool.query(
-      `SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
-       FROM tasks WHERE id = $1`,
-      [id],
-    );
-    if (!rows.length) {
-      return { success: false, error: 'Task not found' };
+    try {
+      const cacheKey = `task_${id}`;
+      
+      // Try to get from cache (but don't fail if Redis is unavailable)
+      let cached = null;
+      try {
+        cached = await this.redisCache.get(cacheKey);
+      } catch (cacheError) {
+        console.warn('Redis cache error (non-fatal):', cacheError);
+      }
+      
+      if (cached) {
+        return { success: true, data: cached };
+      }
+
+      const { rows } = await this.pool.query(
+        `SELECT id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+         FROM tasks WHERE id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return { success: false, error: 'Task not found' };
+      }
+      
+      // Try to cache the result (but don't fail if Redis is unavailable)
+      try {
+        await this.redisCache.set(cacheKey, rows[0], 15 * 60);
+      } catch (cacheError) {
+        console.warn('Redis cache set error (non-fatal):', cacheError);
+      }
+      
+      return { success: true, data: rows[0] };
+    } catch (error) {
+      console.error('Error getting task:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get task',
+      };
     }
-    return { success: true, data: rows[0] };
   }
 
   @Post()
@@ -135,6 +216,12 @@ export class TasksController {
       ];
 
       const { rows } = await this.pool.query(sql, params);
+      
+      // Clear task list caches (non-blocking)
+      this.clearTaskCaches().catch((err) => {
+        console.warn('Error clearing caches after task creation:', err);
+      });
+      
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error creating task:', error);
@@ -229,6 +316,15 @@ export class TasksController {
       if (!rows.length) {
         return { success: false, error: 'Task not found' };
       }
+      
+      // Clear task caches (non-blocking)
+      this.redisCache.delete(`task_${id}`).catch((err) => {
+        console.warn('Error deleting task cache:', err);
+      });
+      this.clearTaskCaches().catch((err) => {
+        console.warn('Error clearing caches after task update:', err);
+      });
+      
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error updating task:', error);
@@ -241,11 +337,40 @@ export class TasksController {
 
   @Delete(':id')
   async deleteTask(@Param('id') id: string) {
-    const { rowCount } = await this.pool.query('DELETE FROM tasks WHERE id = $1', [id]);
-    if (!rowCount) {
-      return { success: false, error: 'Task not found' };
+    try {
+      const { rowCount } = await this.pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+      if (!rowCount) {
+        return { success: false, error: 'Task not found' };
+      }
+      
+      // Try to clear task caches (but don't fail if Redis is unavailable)
+      try {
+        await this.redisCache.delete(`task_${id}`);
+        await this.clearTaskCaches();
+      } catch (cacheError) {
+        console.warn('Redis cache delete error (non-fatal):', cacheError);
+      }
+      
+      return { success: true, message: 'Task deleted' };
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to delete task',
+      };
     }
-    return { success: true, message: 'Task deleted' };
+  }
+
+  /**
+   * Clear all task-related caches
+   * Called after create/update/delete operations to ensure data consistency
+   */
+  private async clearTaskCaches() {
+    try {
+      await this.redisCache.invalidatePattern('tasks_list_*');
+    } catch (cacheError) {
+      console.warn('Redis cache invalidation error (non-fatal):', cacheError);
+    }
   }
 }
 

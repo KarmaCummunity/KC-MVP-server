@@ -336,7 +336,8 @@ export class StatsController {
       engagement_score: (category.donation_count * 10) + (analytics[category.slug]?.clicks || 0)
     }));
 
-    await this.redisCache.set(cacheKey, categoryStats, this.CACHE_TTL);
+    // Cache for 20 minutes - analytics are relatively static
+    await this.redisCache.set(cacheKey, categoryStats, 20 * 60);
     return { success: true, data: categoryStats };
   }
 
@@ -424,7 +425,8 @@ export class StatsController {
       users_by_city: usersByCity.rows
     };
 
-    await this.redisCache.set(cacheKey, analytics, this.CACHE_TTL);
+    // Cache for 20 minutes - analytics are relatively static
+    await this.redisCache.set(cacheKey, analytics, 20 * 60);
     return { success: true, data: analytics };
   }
 
@@ -760,6 +762,17 @@ export class StatsController {
     }
   }
 
+  /**
+   * Add computed statistics to the stats object
+   * Uses individual caching for each query type to optimize performance
+   * Each metric type has its own cache key and TTL based on data volatility:
+   * - User metrics: 20 minutes (relatively static)
+   * - Donation/Ride metrics: 15 minutes (moderate changes)
+   * - Activity/Chat metrics: 5 minutes (frequent changes)
+   * 
+   * @param stats - Stats object to populate
+   * @param city - Optional city filter for location-based stats
+   */
   private async addComputedStats(stats: any, city?: string) {
     const params = city ? [city] : [];
     const userCityCondition = city ? 'AND city = $1' : '';
@@ -767,11 +780,51 @@ export class StatsController {
     const rideCityCondition = city ? 'AND (from_location->>\'city\' = $1)' : '';
     const eventCityCondition = city ? 'AND (location->>\'city\' = $1)' : '';
 
-    // Basic counts and metrics
+    // Generate cache keys for individual queries based on city filter
+    const cityKey = city || 'global';
+    const cacheKeys = {
+      userMetrics: `computed_stats_users_${cityKey}`,
+      donationMetrics: `computed_stats_donations_${cityKey}`,
+      rideMetrics: `computed_stats_rides_${cityKey}`,
+      eventMetrics: `computed_stats_events_${cityKey}`,
+      activityMetrics: `computed_stats_activities_${cityKey}`,
+      chatMetrics: `computed_stats_chat_${cityKey}`,
+      siteVisitsMetrics: `computed_stats_site_visits_${cityKey}`,
+    };
+
+    // Try to get all cached metrics at once
+    const cachedMetrics = await this.redisCache.getMultiple([
+      cacheKeys.userMetrics,
+      cacheKeys.donationMetrics,
+      cacheKeys.rideMetrics,
+      cacheKeys.eventMetrics,
+      cacheKeys.activityMetrics,
+      cacheKeys.chatMetrics,
+      cacheKeys.siteVisitsMetrics,
+    ]);
+
+    // Helper function to get cached or execute query
+    const getCachedOrQuery = async (cacheKey: string, queryFn: () => Promise<any>, ttl: number = 10 * 60) => {
+      const cached = cachedMetrics.get(cacheKey);
+      if (cached) {
+        // Return in the same format as pool.query would
+        return { rows: [cached] };
+      }
+      const result = await queryFn();
+      // Cache only the first row (query results are arrays with one object)
+      if (result && result.rows && result.rows.length > 0) {
+        await this.redisCache.set(cacheKey, result.rows[0], ttl);
+      }
+      return result;
+    };
+
+    // Basic counts and metrics - with individual caching
     const queries = await Promise.all([
       // User metrics - count from both user_profiles and users (legacy) tables
       // Count unique users: from user_profiles + users that don't exist in user_profiles
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.userMetrics,
+        () => this.pool.query(`
         WITH all_users AS (
           -- Users from user_profiles
           SELECT 
@@ -821,10 +874,12 @@ export class StatsController {
           COUNT(DISTINCT CASE WHEN 'org_admin' = ANY(roles) THEN email_key END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
         FROM all_users
-      `, params),
+      `, params), 20 * 60), // Cache for 20 minutes - user metrics are relatively static
 
       // Donation metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.donationMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_donations,
           COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_this_week,
@@ -841,10 +896,12 @@ export class StatsController {
         FROM donations d
         LEFT JOIN user_profiles up ON up.id = d.donor_id
         WHERE 1=1 ${donationCityCondition}
-      `, params),
+      `, params), 15 * 60), // Cache for 15 minutes
 
       // Ride metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.rideMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_rides,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as rides_this_week,
@@ -855,10 +912,12 @@ export class StatsController {
           COUNT(DISTINCT driver_id) as unique_drivers
         FROM rides 
         WHERE 1=1 ${rideCityCondition}
-      `, params),
+      `, params), 15 * 60), // Cache for 15 minutes
 
       // Event metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.eventMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_events,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as events_this_week,
@@ -869,10 +928,12 @@ export class StatsController {
           COUNT(CASE WHEN is_virtual = true THEN 1 END) as virtual_events
         FROM community_events 
         WHERE 1=1 ${eventCityCondition}
-      `, params),
+      `, params), 10 * 60), // Cache for 10 minutes
 
       // Activity and engagement metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.activityMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_activities,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '1 day' THEN 1 END) as activities_today,
@@ -883,10 +944,12 @@ export class StatsController {
           COUNT(DISTINCT user_id) as active_users_tracked
         FROM user_activities 
         WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
-      `, []),
+      `, []), 5 * 60), // Cache for 5 minutes - activities change frequently
 
       // Chat and social metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.chatMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(DISTINCT cm.id) as total_messages,
           COUNT(DISTINCT cc.id) as total_conversations,
@@ -896,19 +959,21 @@ export class StatsController {
         FROM chat_conversations cc
         LEFT JOIN chat_messages cm ON cc.id = cm.conversation_id
         WHERE cm.is_deleted = false
-      `, []),
+      `, []), 5 * 60), // Cache for 5 minutes - chat metrics change frequently
 
       // Site visits - sum of stat_value (each record can represent multiple visits on the same day)
       // ביקורים באתר - סכום של stat_value (כל רשומה יכולה לייצג מספר ביקורים באותו יום)
       // Note: If there are 4 records with stat_value=1 each, sum will be 4. If 1 record with stat_value=4, sum will also be 4.
       // Apply city filter if provided (site_visits are global, so city is NULL)
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.siteVisitsMetrics,
+        () => this.pool.query(`
         SELECT 
           COALESCE(SUM(stat_value), 0) as site_visits
         FROM community_stats 
         WHERE stat_type = 'site_visits'
         ${city ? 'AND city IS NULL' : ''}
-      `, params)
+      `, params), 5 * 60) // Cache for 5 minutes
     ]);
 
     const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics] = queries;
