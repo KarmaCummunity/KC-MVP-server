@@ -6,7 +6,7 @@ import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/
 import { ItemsDeliveryService } from './items-delivery.service';
 import { CreateItemDto, UpdateItemDto, ItemFiltersDto, CreateItemRequestDto, UpdateItemRequestDto } from './dto/items.dto';
 
-@Controller('api/items')
+@Controller('api/items-delivery')
 export class ItemsDeliveryController {
   constructor(private readonly itemsDeliveryService: ItemsDeliveryService) {}
 
