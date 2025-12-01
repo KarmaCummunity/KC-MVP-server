@@ -37,6 +37,7 @@ export class UsersController {
     private readonly redisCache: RedisCacheService,
   ) {}
 
+
   @Post('register')
   async registerUser(@Body() userData: any) {
     // TODO: Replace 'any' with proper DTO interface
@@ -47,10 +48,12 @@ export class UsersController {
     try {
       await client.query('BEGIN');
 
-      // Check if user already exists
+      const normalizedEmail = userData.email.toLowerCase().trim();
+      
+      // Check if user already exists in users table
       const { rows: existingUsers } = await client.query(
-        `SELECT id FROM user_profiles WHERE LOWER(email) = LOWER($1)`,
-        [userData.email]
+        `SELECT user_id FROM users WHERE LOWER(data->>'email') = LOWER($1) LIMIT 1`,
+        [normalizedEmail]
       );
 
       if (existingUsers.length > 0) {
@@ -64,61 +67,81 @@ export class UsersController {
         passwordHash = await argon2.hash(userData.password);
       }
 
-      // Insert user
-      const { rows } = await client.query(`
-        INSERT INTO user_profiles (
-          email, name, phone, avatar_url, bio, city, country, 
-          interests, password_hash, settings
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id, email, name, phone, avatar_url, bio, karma_points, 
-                 join_date, city, country, interests, roles, settings
-      `, [
-        userData.email.toLowerCase().trim(),
-        userData.name || userData.email.split('@')[0],
-        userData.phone || null,
-        userData.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(userData.name || 'User')}&background=random`,
-        userData.bio || 'משתמש חדש בקארמה קומיוניטי',
-        userData.city || null,
-        userData.country || 'Israel',
-        userData.interests || [],
+      const userId = normalizedEmail; // Use email as stable user ID
+      const nowIso = new Date().toISOString();
+      const userDataJson = {
+        id: userId,
+        email: normalizedEmail,
+        name: userData.name || normalizedEmail.split('@')[0],
+        phone: userData.phone || '+9720000000',
+        avatar: userData.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(userData.name || 'User')}&background=random`,
+        bio: userData.bio || 'משתמש חדש בקארמה קומיוניטי',
+        karmaPoints: 0,
+        joinDate: nowIso,
+        isActive: true,
+        lastActive: nowIso,
+        location: { 
+          city: userData.city || 'ישראל', 
+          country: userData.country || 'IL' 
+        },
+        interests: userData.interests || [],
+        roles: ['user'],
+        postsCount: 0,
+        followersCount: 0,
+        followingCount: 0,
         passwordHash,
-        userData.settings || {
+        emailVerified: false,
+        settings: userData.settings || {
           "language": "he",
           "dark_mode": false,
           "notifications_enabled": true,
           "privacy": "public"
         }
-      ]);
+      };
 
-      const user = rows[0];
-
-      // Track registration activity
+      // Insert user into users table (the real table)
       await client.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        user.id,
-        'user_registered',
-        JSON.stringify({ email: user.email, name: user.name })
-      ]);
-
-      // Update community stats
-      await client.query(`
-        INSERT INTO community_stats (stat_type, stat_value, date_period)
-        VALUES ('active_members', 1, CURRENT_DATE)
-        ON CONFLICT (stat_type, city, date_period) 
-        DO UPDATE SET stat_value = community_stats.stat_value + 1, updated_at = NOW()
-      `);
+        INSERT INTO users (user_id, item_id, data, created_at, updated_at)
+        VALUES ($1, $2, $3::jsonb, NOW(), NOW())
+        ON CONFLICT (user_id, item_id)
+        DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+      `, [userId, userId, userDataJson]);
 
       await client.query('COMMIT');
+
+      // Clear statistics cache when new user is registered
+      // This ensures totalUsers and other user-related stats are refreshed immediately
+      await this.redisCache.clearStatsCaches();
+
+      // Return user data in the expected format
+      const user = {
+        id: userId,
+        email: normalizedEmail,
+        name: userDataJson.name,
+        phone: userDataJson.phone,
+        avatar_url: userDataJson.avatar,
+        bio: userDataJson.bio,
+        karma_points: 0,
+        join_date: nowIso,
+        is_active: true,
+        last_active: nowIso,
+        city: userDataJson.location.city,
+        country: userDataJson.location.country,
+        interests: userDataJson.interests,
+        roles: userDataJson.roles,
+        posts_count: 0,
+        followers_count: 0,
+        following_count: 0,
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: false,
+        settings: userDataJson.settings
+      };
 
       return { success: true, data: user };
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Register user error:', error);
-      // TODO: Implement proper error logging with context and stack traces
-      // TODO: Return more specific error messages based on error type
-      // TODO: Add error monitoring/alerting for registration failures
       return { success: false, error: 'Failed to register user' };
     } finally {
       client.release();
@@ -128,43 +151,61 @@ export class UsersController {
   @Post('login')
   async loginUser(@Body() loginData: any) {
     try {
+      const normalizedEmail = loginData.email.toLowerCase().trim();
+      
+      // Use the real users table
       const { rows } = await this.pool.query(
-        `SELECT * FROM user_profiles WHERE LOWER(email) = LOWER($1)`,
-        [loginData.email]
+        `SELECT user_id, data FROM users WHERE LOWER(data->>'email') = LOWER($1) LIMIT 1`,
+        [normalizedEmail]
       );
 
       if (rows.length === 0) {
         return { success: false, error: 'User not found' };
       }
 
-      const user = rows[0];
+      const userData = rows[0].data;
+      const userId = rows[0].user_id;
 
       // Verify password if provided
-      if (loginData.password && user.password_hash) {
-        const isValid = await argon2.verify(user.password_hash, loginData.password);
+      if (loginData.password && userData.passwordHash) {
+        const isValid = await argon2.verify(userData.passwordHash, loginData.password);
         if (!isValid) {
           return { success: false, error: 'Invalid password' };
         }
       }
 
       // Update last active
+      const nowIso = new Date().toISOString();
+      userData.lastActive = nowIso;
       await this.pool.query(
-        `UPDATE user_profiles SET last_active = NOW() WHERE id = $1`,
-        [user.id]
+        `UPDATE users SET data = $1::jsonb, updated_at = NOW() WHERE user_id = $2 AND item_id = $3`,
+        [userData, userId, userId]
       );
 
-      // Track login activity
-      await this.pool.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        user.id,
-        'user_login',
-        JSON.stringify({ timestamp: new Date().toISOString() })
-      ]);
-
-      // Remove password hash from response
-      const { password_hash, ...userResponse } = user;
+      // Return user data in the expected format
+      const userResponse = {
+        id: userId,
+        email: userData.email,
+        name: userData.name,
+        phone: userData.phone,
+        avatar_url: userData.avatar,
+        bio: userData.bio || '',
+        karma_points: userData.karmaPoints || 0,
+        join_date: userData.joinDate || rows[0].created_at,
+        is_active: userData.isActive !== false,
+        last_active: nowIso,
+        city: userData.location?.city || '',
+        country: userData.location?.country || 'Israel',
+        interests: userData.interests || [],
+        roles: userData.roles || ['user'],
+        posts_count: userData.postsCount || 0,
+        followers_count: userData.followersCount || 0,
+        following_count: userData.followingCount || 0,
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: userData.emailVerified || false,
+        settings: userData.settings || {}
+      };
 
       return { success: true, data: userResponse };
     } catch (error) {
@@ -175,21 +216,69 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
-    const cacheKey = `user_profile_${id}`;
+    // Normalize email to lowercase for consistent lookup
+    // This matches the normalization used in auth.controller.ts
+    const normalizedId = id.includes('@') 
+      ? String(id).trim().toLowerCase() 
+      : id;
+    
+    const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
     
     if (cached) {
       return { success: true, data: cached };
     }
 
+    // Use the real users table (not user_profiles)
+    // Support both UUID and email/user_id lookups
     const { rows } = await this.pool.query(`
-      SELECT id, email, name, phone, avatar_url, bio, karma_points,
-             join_date, is_active, last_active, city, country, interests,
-             roles, posts_count, followers_count, following_count,
-             total_donations_amount, total_volunteer_hours, email_verified, settings
-      FROM user_profiles 
-      WHERE id = $1
-    `, [id]);
+      SELECT 
+        user_id as id,
+        data->>'email' as email,
+        COALESCE(data->>'name', 'ללא שם') as name,
+        data->>'phone' as phone,
+        COALESCE(data->>'avatar', '') as avatar_url,
+        COALESCE(data->>'bio', '') as bio,
+        COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
+        COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+        COALESCE((data->>'isActive')::boolean, true) as is_active,
+        COALESCE((data->>'lastActive')::timestamptz, updated_at) as last_active,
+        COALESCE(data->'location'->>'city', '') as city,
+        COALESCE(data->'location'->>'country', 'Israel') as country,
+        COALESCE(
+          CASE 
+            WHEN data->'interests' IS NULL OR data->'interests' = 'null'::jsonb 
+            THEN ARRAY[]::text[]
+            WHEN jsonb_typeof(data->'interests') = 'array'
+            THEN ARRAY(SELECT jsonb_array_elements_text(data->'interests'))
+            ELSE ARRAY[]::text[]
+          END,
+          ARRAY[]::text[]
+        ) as interests,
+        COALESCE(
+          CASE 
+            WHEN data->'roles' IS NULL OR data->'roles' = 'null'::jsonb 
+            THEN ARRAY['user']::text[]
+            WHEN jsonb_typeof(data->'roles') = 'array'
+            THEN ARRAY(SELECT jsonb_array_elements_text(data->'roles'))
+            ELSE ARRAY['user']::text[]
+          END,
+          ARRAY['user']::text[]
+        ) as roles,
+        COALESCE((data->>'postsCount')::integer, 0) as posts_count,
+        COALESCE((data->>'followersCount')::integer, 0) as followers_count,
+        COALESCE((data->>'followingCount')::integer, 0) as following_count,
+        0 as total_donations_amount,
+        0 as total_volunteer_hours,
+        COALESCE((data->>'emailVerified')::boolean, false) as email_verified,
+        COALESCE(data->'settings', '{}'::jsonb) as settings
+      FROM users 
+      WHERE user_id = $1 
+         OR LOWER(data->>'email') = LOWER($1)
+         OR data->>'googleId' = $1
+         OR data->>'id' = $1
+      LIMIT 1
+    `, [normalizedId]);
 
     if (rows.length === 0) {
       return { success: false, error: 'User not found' };
@@ -207,63 +296,85 @@ export class UsersController {
     try {
       await client.query('BEGIN');
 
-      // Hash new password if provided
-      let passwordHash = undefined;
-      if (updateData.password) {
-        passwordHash = await argon2.hash(updateData.password);
-      }
+      // Get existing user data
+      const { rows: existingRows } = await client.query(`
+        SELECT user_id, item_id, data FROM users 
+        WHERE user_id = $1 
+           OR LOWER(data->>'email') = LOWER($1)
+           OR data->>'googleId' = $1
+           OR data->>'id' = $1
+        LIMIT 1
+      `, [id]);
 
-      const { rows } = await client.query(`
-        UPDATE user_profiles 
-        SET name = COALESCE($1, name),
-            phone = COALESCE($2, phone),
-            avatar_url = COALESCE($3, avatar_url),
-            bio = COALESCE($4, bio),
-            city = COALESCE($5, city),
-            country = COALESCE($6, country),
-            interests = COALESCE($7, interests),
-            settings = COALESCE($8, settings),
-            password_hash = COALESCE($9, password_hash),
-            updated_at = NOW()
-        WHERE id = $10
-        RETURNING id, email, name, phone, avatar_url, bio, karma_points,
-                 join_date, is_active, last_active, city, country, interests,
-                 roles, posts_count, followers_count, following_count,
-                 total_donations_amount, total_volunteer_hours, email_verified, settings
-      `, [
-        updateData.name,
-        updateData.phone,
-        updateData.avatar_url,
-        updateData.bio,
-        updateData.city,
-        updateData.country,
-        updateData.interests,
-        updateData.settings ? JSON.stringify(updateData.settings) : null,
-        passwordHash,
-        id
-      ]);
-
-      if (rows.length === 0) {
+      if (existingRows.length === 0) {
         await client.query('ROLLBACK');
         return { success: false, error: 'User not found' };
       }
 
-      const user = rows[0];
+      const existingData = existingRows[0].data;
+      const userId = existingRows[0].user_id;
+      const itemId = existingRows[0].item_id;
 
-      // Track profile update activity
+      // Hash new password if provided
+      if (updateData.password) {
+        existingData.passwordHash = await argon2.hash(updateData.password);
+      }
+
+      // Update user data
+      if (updateData.name) existingData.name = updateData.name;
+      if (updateData.phone !== undefined) existingData.phone = updateData.phone;
+      if (updateData.avatar_url) existingData.avatar = updateData.avatar_url;
+      if (updateData.bio !== undefined) existingData.bio = updateData.bio;
+      if (updateData.city !== undefined) {
+        if (!existingData.location) existingData.location = {};
+        existingData.location.city = updateData.city;
+      }
+      if (updateData.country !== undefined) {
+        if (!existingData.location) existingData.location = {};
+        existingData.location.country = updateData.country;
+      }
+      if (updateData.interests !== undefined) existingData.interests = updateData.interests;
+      if (updateData.settings) existingData.settings = { ...existingData.settings, ...updateData.settings };
+      
+      existingData.lastActive = new Date().toISOString();
+
+      // Update user in users table
       await client.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        id,
-        'profile_updated',
-        JSON.stringify({ fields_updated: Object.keys(updateData) })
-      ]);
+        UPDATE users 
+        SET data = $1::jsonb, updated_at = NOW()
+        WHERE user_id = $2 AND item_id = $3
+      `, [existingData, userId, itemId]);
 
       await client.query('COMMIT');
 
       // Clear cache
       await this.redisCache.delete(`user_profile_${id}`);
+      await this.redisCache.delete(`user_profile_${userId}`);
+
+      // Return user data in the expected format
+      const user = {
+        id: userId,
+        email: existingData.email,
+        name: existingData.name,
+        phone: existingData.phone,
+        avatar_url: existingData.avatar,
+        bio: existingData.bio || '',
+        karma_points: existingData.karmaPoints || 0,
+        join_date: existingData.joinDate || existingRows[0].created_at,
+        is_active: existingData.isActive !== false,
+        last_active: existingData.lastActive,
+        city: existingData.location?.city || '',
+        country: existingData.location?.country || 'Israel',
+        interests: existingData.interests || [],
+        roles: existingData.roles || ['user'],
+        posts_count: existingData.postsCount || 0,
+        followers_count: existingData.followersCount || 0,
+        following_count: existingData.followingCount || 0,
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: existingData.emailVerified || false,
+        settings: existingData.settings || {}
+      };
 
       return { success: true, data: user };
     } catch (error) {
@@ -292,26 +403,70 @@ export class UsersController {
       return { success: true, data: cached };
     }
 
-    // Query both user_profiles and users (legacy) tables to get all users
-    // Use UNION to combine both sources, excluding duplicates
-    let baseQuery = `
-      (
+    // Unified query: Get all users from both user_profiles and users (legacy) tables
+    // טבלה מאוחדת: כל המשתמשים מ-user_profiles ו-users (legacy)
+    const params: any[] = [];
+    let paramCount = 0;
+    
+    // Build WHERE conditions for filtering
+    let whereConditions = '';
+    
+    if (city) {
+      paramCount++;
+      whereConditions += ` AND city ILIKE $${paramCount}`;
+      params.push(`%${city}%`);
+    }
+
+    if (search) {
+      paramCount++;
+      whereConditions += ` AND (name ILIKE $${paramCount} OR bio ILIKE $${paramCount} OR email ILIKE $${paramCount})`;
+      params.push(`%${search}%`);
+    }
+
+    // Build pagination
+    let limitClause = '';
+    let offsetClause = '';
+    
+    if (limit) {
+      paramCount++;
+      limitClause = `LIMIT $${paramCount}`;
+      params.push(parseInt(limit));
+    } else {
+      limitClause = `LIMIT 50`;
+    }
+
+    if (offset) {
+      paramCount++;
+      offsetClause = `OFFSET $${paramCount}`;
+      params.push(parseInt(offset));
+    }
+
+    // Main query: Get unique users (prefer user_profiles over legacy users)
+    const query = `
+      WITH all_users AS (
+        -- Users from user_profiles (new table) - priority
         SELECT 
           id::text as id,
-          name,
-          avatar_url,
-          city,
-          karma_points,
-          last_active,
-          total_donations_amount,
-          total_volunteer_hours,
-          join_date,
-          COALESCE(bio, '') as bio
-        FROM user_profiles 
-        WHERE is_active = true
-      )
-      UNION
-      (
+          COALESCE(name, 'ללא שם') as name,
+          COALESCE(avatar_url, '') as avatar_url,
+          COALESCE(city, '') as city,
+          COALESCE(karma_points, 0) as karma_points,
+          COALESCE(last_active, updated_at) as last_active,
+          COALESCE(total_donations_amount, 0) as total_donations_amount,
+          COALESCE(total_volunteer_hours, 0) as total_volunteer_hours,
+          COALESCE(join_date, created_at) as join_date,
+          COALESCE(bio, '') as bio,
+          LOWER(email) as email_key,
+          email,
+          is_active,
+          created_at,
+          1 as priority
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+        
+        UNION
+        
+        -- Users from legacy users table that don't exist in user_profiles
         SELECT 
           user_id as id,
           COALESCE(data->>'name', 'ללא שם') as name,
@@ -322,53 +477,68 @@ export class UsersController {
           0 as total_donations_amount,
           0 as total_volunteer_hours,
           COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
-          COALESCE(data->>'bio', '') as bio
+          COALESCE(data->>'bio', '') as bio,
+          LOWER(data->>'email') as email_key,
+          data->>'email' as email,
+          COALESCE((data->>'isActive')::boolean, true) as is_active,
+          created_at,
+          2 as priority
         FROM users
         WHERE 
-          (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
-          AND NOT EXISTS (
-            SELECT 1 FROM user_profiles up 
-            WHERE up.email = users.data->>'email'
+          data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
           )
+      ),
+      unique_users AS (
+        -- Get one record per email (prefer user_profiles)
+        SELECT DISTINCT ON (email_key)
+          id,
+          name,
+          avatar_url,
+          city,
+          karma_points,
+          last_active,
+          total_donations_amount,
+          total_volunteer_hours,
+          join_date,
+          bio,
+          email,
+          is_active,
+          created_at
+        FROM all_users
+        WHERE 1=1${whereConditions}
+        ORDER BY email_key, priority ASC, created_at DESC
       )
+      SELECT 
+        id,
+        name,
+        avatar_url,
+        city,
+        karma_points,
+        last_active,
+        total_donations_amount,
+        total_volunteer_hours,
+        join_date,
+        bio,
+        email,
+        is_active,
+        created_at
+      FROM unique_users
+      ORDER BY karma_points DESC, last_active DESC, join_date DESC
+      ${limitClause}
+      ${offsetClause}
     `;
-    
-    let query = `SELECT * FROM (${baseQuery}) AS all_users WHERE 1=1`;
-
-    const params: any[] = [];
-    let paramCount = 0;
-
-    if (city) {
-      paramCount++;
-      query += ` AND city ILIKE $${paramCount}`;
-      params.push(`%${city}%`);
-    }
-
-    if (search) {
-      paramCount++;
-      query += ` AND (name ILIKE $${paramCount} OR bio ILIKE $${paramCount})`;
-      params.push(`%${search}%`);
-    }
-
-    query += ` ORDER BY karma_points DESC, last_active DESC`;
-
-    if (limit) {
-      paramCount++;
-      query += ` LIMIT $${paramCount}`;
-      params.push(parseInt(limit));
-    } else {
-      query += ` LIMIT 50`;
-    }
-
-    if (offset) {
-      paramCount++;
-      query += ` OFFSET $${paramCount}`;
-      params.push(parseInt(offset));
-    }
 
     const { rows } = await this.pool.query(query, params);
 
-    await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
+    // Log for debugging
+    console.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);
+
+    // Cache for 20 minutes - user lists are relatively static
+    await this.redisCache.set(cacheKey, rows, 20 * 60);
     return { success: true, data: rows };
   }
 
@@ -393,6 +563,12 @@ export class UsersController {
     return { success: true, data: rows };
   }
 
+  /**
+   * Get user statistics with partial caching optimization
+   * Each statistic type (donations, rides, bookings) is cached separately
+   * This allows partial cache hits - if only one stat changes, others remain cached
+   * Cache TTL: 15 minutes
+   */
   @Get(':id/stats')
   async getUserStats(@Param('id') userId: string) {
     const cacheKey = `user_stats_${userId}`;
@@ -402,35 +578,68 @@ export class UsersController {
       return { success: true, data: cached };
     }
 
-    // Get donation stats
-    const donationStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as total_donations,
-        SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
-        COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
-        COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
-      FROM donations
-      WHERE donor_id = $1
-    `, [userId]);
+    // Try to get individual cached stats using batch get for better performance
+    const donationStatsKey = `user_stats_donations_${userId}`;
+    const rideStatsKey = `user_stats_rides_${userId}`;
+    const bookingStatsKey = `user_stats_bookings_${userId}`;
+    
+    const cachedStats = await this.redisCache.getMultiple([
+      donationStatsKey,
+      rideStatsKey,
+      bookingStatsKey,
+    ]);
 
-    // Get ride stats
-    const rideStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_created,
-        SUM(available_seats) as total_seats_offered,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
-      FROM rides
-      WHERE driver_id = $1
-    `, [userId]);
+    let donationStats: any;
+    let rideStats: any;
+    let bookingStats: any;
 
-    // Get booking stats (as passenger)
-    const bookingStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_booked,
-        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
-      FROM ride_bookings
-      WHERE passenger_id = $1
-    `, [userId]);
+    // Get donation stats (from cache or DB)
+    if (cachedStats.get(donationStatsKey)) {
+      donationStats = { rows: [cachedStats.get(donationStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as total_donations,
+          SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
+          COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
+          COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
+        FROM donations
+        WHERE donor_id = $1
+      `, [userId]);
+      donationStats = result;
+      await this.redisCache.set(donationStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get ride stats (from cache or DB)
+    if (cachedStats.get(rideStatsKey)) {
+      rideStats = { rows: [cachedStats.get(rideStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_created,
+          SUM(available_seats) as total_seats_offered,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
+        FROM rides
+        WHERE driver_id = $1
+      `, [userId]);
+      rideStats = result;
+      await this.redisCache.set(rideStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get booking stats (from cache or DB)
+    if (cachedStats.get(bookingStatsKey)) {
+      bookingStats = { rows: [cachedStats.get(bookingStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_booked,
+          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
+        FROM ride_bookings
+        WHERE passenger_id = $1
+      `, [userId]);
+      bookingStats = result;
+      await this.redisCache.set(bookingStatsKey, result.rows[0], this.CACHE_TTL);
+    }
 
     const stats = {
       donations: donationStats.rows[0],
@@ -438,6 +647,7 @@ export class UsersController {
       bookings: bookingStats.rows[0]
     };
 
+    // Cache the combined result
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
     return { success: true, data: stats };
   }
@@ -553,15 +763,44 @@ export class UsersController {
     }
 
     const { rows } = await this.pool.query(`
+      WITH all_users AS (
+        -- Users from user_profiles
+        SELECT 
+          email,
+          is_active,
+          last_active,
+          join_date,
+          karma_points,
+          total_donations_amount
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+        
+        UNION
+        
+        -- Users from legacy users table that don't exist in user_profiles
+        SELECT 
+          LOWER(data->>'email') as email,
+          COALESCE((data->>'isActive')::boolean, true) as is_active,
+          COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
+          COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
+          COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
+          0 as total_donations_amount
+        FROM users
+        WHERE data->>'email' IS NOT NULL
+          AND LOWER(data->>'email') <> ''
+          AND LOWER(data->>'email') NOT IN (
+            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
+          )
+      )
       SELECT 
-        COUNT(*) as total_users,
+        COUNT(DISTINCT email) as total_users,
         COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active_users,
         COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
         AVG(karma_points) as avg_karma_points,
         SUM(total_donations_amount) as total_platform_donations
-      FROM user_profiles
+      FROM all_users
     `);
 
     const stats = rows[0];

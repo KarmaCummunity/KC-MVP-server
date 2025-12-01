@@ -9,6 +9,7 @@ import Redis from 'ioredis';
 @Controller('/')
 export class HealthController {
   constructor(@Inject(REDIS) private readonly redis: Redis) {}
+
   @Get()
   getRoot() {
     return {

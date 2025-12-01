@@ -227,8 +227,19 @@ export class RidesController {
     return { success: true, data: rows };
   }
 
+  /**
+   * Get a single ride by ID with caching
+   * Cache TTL: 10 minutes (rides can change with bookings, so moderate TTL)
+   */
   @Get(':id')
   async getRideById(@Param('id') id: string) {
+    const cacheKey = `ride_${id}`;
+    const cached = await this.redisCache.get(cacheKey);
+    
+    if (cached) {
+      return { success: true, data: cached };
+    }
+
     const { rows } = await this.pool.query(`
       SELECT r.*, up.name as driver_name, up.avatar_url as driver_avatar,
              up.phone as driver_phone, up.email as driver_email,
@@ -248,6 +259,8 @@ export class RidesController {
       return { success: false, error: 'Ride not found' };
     }
 
+    // Cache for 10 minutes
+    await this.redisCache.set(cacheKey, rows[0], 10 * 60);
     return { success: true, data: rows[0] };
   }
 
@@ -531,6 +544,8 @@ export class RidesController {
       return { success: false, error: 'Ride not found' };
     }
 
+    // Clear specific ride cache
+    await this.redisCache.delete(`ride_${id}`);
     await this.clearRideCaches();
     return { success: true, data: rows[0] };
   }
@@ -545,19 +560,22 @@ export class RidesController {
       return { success: false, error: 'Ride not found' };
     }
 
+    // Clear specific ride cache
+    await this.redisCache.delete(`ride_${id}`);
     await this.clearRideCaches();
     return { success: true, message: 'Ride cancelled successfully' };
   }
 
   private async clearRideCaches() {
-    const keys = await this.redisCache.getKeys('rides_*');
-    const userKeys = await this.redisCache.getKeys('user_rides_*');
-    const statsKeys = await this.redisCache.getKeys('ride_stats_*');
+    const patterns = [
+      'rides_*',
+      'user_rides_*',
+      'ride_stats_*',
+      'ride_*',
+    ];
     
-    const allKeys = [...keys, ...userKeys, ...statsKeys];
-    
-    for (const key of allKeys) {
-      await this.redisCache.delete(key);
+    for (const pattern of patterns) {
+      await this.redisCache.invalidatePattern(pattern);
     }
   }
 

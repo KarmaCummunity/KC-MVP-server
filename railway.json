@@ -21,6 +21,7 @@
     "healthcheckTimeout": 300
   },
   "env": {
+    "ENVIRONMENT": "production",
     "NODE_ENV": "production",
     "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com",
     "CORS_ORIGIN": "https://karma-community-kc.com,https://www.karma-community-kc.com",
