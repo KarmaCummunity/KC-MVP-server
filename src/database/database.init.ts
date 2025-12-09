@@ -69,94 +69,110 @@ export class DatabaseInit implements OnModuleInit {
    * Split SQL statements intelligently, handling DO $$ blocks that shouldn't be split
    * Finds DO $$ ... END$$; blocks and preserves them as single statements
    */
+  /**
+   * Split SQL statements intelligently, handling quoted strings, dollar quotes, and comments.
+   */
   private splitSqlStatements(sql: string): string[] {
     const statements: string[] = [];
+    let currentStatement = '';
     let i = 0;
+    const len = sql.length;
 
-    while (i < sql.length) {
-      // Skip whitespace
-      while (i < sql.length && /\s/.test(sql[i])) {
+    while (i < len) {
+      const char = sql[i];
+
+      // Handle single quoted strings '...'
+      if (char === "'") {
+        currentStatement += char;
         i++;
+        while (i < len) {
+          currentStatement += sql[i];
+          if (sql[i] === "'") {
+            // Check for escaped quote ''
+            if (i + 1 < len && sql[i + 1] === "'") {
+              currentStatement += sql[i + 1];
+              i += 2;
+              continue;
+            }
+            i++;
+            break;
+          }
+          i++;
+        }
+        continue;
       }
 
-      if (i >= sql.length) break;
+      // Handle dollar quoted strings $tag$...$tag$
+      if (char === '$') {
+        // Check if it's a dollar quote start
+        const tagMatch = sql.substring(i).match(/^(\$[a-zA-Z0-9_]*\$)/);
+        if (tagMatch) {
+          const tag = tagMatch[1];
+          currentStatement += tag;
+          i += tag.length;
 
-      const start = i;
-
-      // Check if we're starting a DO $$ block
-      const remaining = sql.substring(i);
-      const doMatch = remaining.match(/^DO\s+\$\$/i);
-
-      if (doMatch) {
-        // Found DO $$ - now find the matching END$$; or $$;
-        i += doMatch[0].length; // Move past "DO $$"
-
-        // Look for END$$; or $$; (the closing)
-        // First try to find END$$; (more common pattern)
-        let endPattern = /END\s*\$\$\s*;/gi;
-        endPattern.lastIndex = i;
-        let match = endPattern.exec(sql);
-
-        let foundEnd = false;
-        let endPos = -1;
-
-        if (match) {
-          // Found END$$;
-          endPos = match.index + match[0].length;
-          foundEnd = true;
-        } else {
-          // Try to find just $$; (less common but possible)
-          while (i < sql.length) {
-            const dollarIndex = sql.indexOf('$$', i);
-            if (dollarIndex === -1) {
-              break; // No closing found
-            }
-
-            // Check what comes after $$
-            const afterDollar = sql.substring(dollarIndex + 2);
-            const trimmed = afterDollar.trimStart();
-
-            // Check if it's followed by semicolon (and not END before it)
-            const beforeDollar = sql.substring(Math.max(0, dollarIndex - 10), dollarIndex).trim();
-            if (trimmed.startsWith(';') && !beforeDollar.endsWith('END')) {
-              // Found the end! Calculate exact position
-              const semicolonOffset = afterDollar.indexOf(';');
-              endPos = dollarIndex + 2 + semicolonOffset + 1;
-              foundEnd = true;
-              break;
-            }
-
-            // Not the end, continue searching after this $$
-            i = dollarIndex + 2;
+          // Find closing tag
+          const closeIndex = sql.indexOf(tag, i);
+          if (closeIndex !== -1) {
+            currentStatement += sql.substring(i, closeIndex + tag.length);
+            i = closeIndex + tag.length;
+          } else {
+            // Unterminated dollar quote - consume rest
+            currentStatement += sql.substring(i);
+            i = len;
           }
+          continue;
         }
-
-        if (foundEnd && endPos > start) {
-          statements.push(sql.substring(start, endPos).trim());
-          i = endPos;
-        } else {
-          // No proper end found - take the rest (shouldn't happen with valid SQL)
-          statements.push(sql.substring(start).trim());
-          break;
-        }
-      } else {
-        // Regular statement - find next semicolon
-        const nextSemicolon = sql.indexOf(';', i);
-        if (nextSemicolon === -1) {
-          // No more semicolons
-          const rest = sql.substring(i).trim();
-          if (rest) {
-            statements.push(rest);
-          }
-          break;
-        }
-
-        statements.push(sql.substring(i, nextSemicolon + 1).trim());
-        i = nextSemicolon + 1;
       }
+
+      // Handle comments
+      if (char === '-' && i + 1 < len && sql[i + 1] === '-') {
+        // Line comment --
+        const newlineIndex = sql.indexOf('\n', i);
+        if (newlineIndex !== -1) {
+          currentStatement += sql.substring(i, newlineIndex + 1);
+          i = newlineIndex + 1;
+        } else {
+          currentStatement += sql.substring(i);
+          i = len;
+        }
+        continue;
+      }
+
+      if (char === '/' && i + 1 < len && sql[i + 1] === '*') {
+        // Block comment /* ... */
+        const closeIndex = sql.indexOf('*/', i + 2);
+        if (closeIndex !== -1) {
+          currentStatement += sql.substring(i, closeIndex + 2);
+          i = closeIndex + 2;
+        } else {
+          currentStatement += sql.substring(i);
+          i = len;
+        }
+        continue;
+      }
+
+      // Handle semicolon
+      if (char === ';') {
+        currentStatement += char;
+        if (currentStatement.trim()) {
+          statements.push(currentStatement.trim());
+        }
+        currentStatement = '';
+        i++;
+        continue;
+      }
+
+      // Regular character
+      currentStatement += char;
+      i++;
     }
 
-    return statements.filter(stmt => stmt.length > 0);
+    if (currentStatement.trim()) {
+      statements.push(currentStatement.trim());
+    }
+
+    return statements;
   }
 
   private async runSchema(client: any) {
@@ -688,12 +704,12 @@ export class DatabaseInit implements OnModuleInit {
       // Create trigger function if it doesn't exist
       await client.query(`
         CREATE OR REPLACE FUNCTION update_updated_at_column()
-        RETURNS TRIGGER AS $$
+        RETURNS TRIGGER AS '
         BEGIN
           NEW.updated_at = NOW();
           RETURN NEW;
         END;
-        $$ language 'plpgsql'
+        ' language 'plpgsql'
       `);
 
       // Create trigger for community_members
