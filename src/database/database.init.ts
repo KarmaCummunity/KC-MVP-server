@@ -204,7 +204,6 @@ export class DatabaseInit implements OnModuleInit {
             WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
           ) THEN
             ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
-            -- Add unique constraint if not exists
             IF NOT EXISTS (
               SELECT 1 FROM pg_constraint 
               WHERE conname = 'user_profiles_firebase_uid_key'
