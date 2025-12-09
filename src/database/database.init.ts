@@ -195,36 +195,14 @@ export class DatabaseInit implements OnModuleInit {
       console.log(`✅ Schema tables created successfully from: ${schemaPath}`);
 
       // Ensure firebase_uid column exists in user_profiles (for existing databases)
-      // This must be done before creating indexes that reference it
+      // This is now handled in schema.sql, but kept here for backward compatibility
       await client.query(`
-        DO $$ 
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
-          ) THEN
-            ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_constraint 
-              WHERE conname = 'user_profiles_firebase_uid_key'
-            ) THEN
-              ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_firebase_uid_key UNIQUE (firebase_uid);
-            END IF;
-          END IF;
-        END $$ ;
+        ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
       `);
 
-      // Recreate the firebase_uid index if it doesn't exist (it might have failed earlier)
+      // Create the firebase_uid index (also in schema.sql)
       await client.query(`
-        DO $$ 
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
-          ) THEN
-            CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
-          END IF;
-        END $$ ;
+        CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
       `);
 
       // Run challenges schema
