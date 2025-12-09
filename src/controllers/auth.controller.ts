@@ -39,17 +39,17 @@ import { RedisCacheService } from '../redis/redis-cache.service';
 class GoogleAuthDto {
   @IsString()
   @IsOptional()
-  @Length(100, 5000, { message: 'ID token length is invalid' })
+  @Length(10, 5000, { message: 'ID token length is invalid' })
   idToken?: string;
 
   @IsString()
   @IsOptional()
-  @Length(50, 2000, { message: 'Access token length is invalid' })
+  @Length(10, 2000, { message: 'Access token length is invalid' })
   accessToken?: string;
 
   @IsString()
   @IsOptional()
-  @Length(20, 200, { message: 'Firebase UID length is invalid' })
+  @Length(1, 200, { message: 'Firebase UID length is invalid' })
   firebaseUid?: string; // Firebase UID from Firebase Auth (different from Google ID)
 }
 
@@ -586,7 +586,7 @@ export class AuthController {
       // Use Firebase UID if provided (from Firebase Auth), otherwise use Google ID
       // Firebase UID is the actual UID from Firebase Auth, which is different from Google ID
       const firebaseUidToUse = firebaseUid || googleUser.id;
-      
+
       // Check if user exists by email or firebase_uid
       const { rows } = await this.pool.query(
         `SELECT id, email, name, avatar_url, firebase_uid, roles, settings, created_at, last_active

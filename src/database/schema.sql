@@ -343,10 +343,19 @@ END;
 ' language 'plpgsql';
 
 -- Apply triggers to relevant tables
+DROP TRIGGER IF EXISTS update_user_profiles_updated_at ON user_profiles;
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON user_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_organizations_updated_at ON organizations;
 CREATE TRIGGER update_organizations_updated_at BEFORE UPDATE ON organizations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_donations_updated_at ON donations;
 CREATE TRIGGER update_donations_updated_at BEFORE UPDATE ON donations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_rides_updated_at ON rides;
 CREATE TRIGGER update_rides_updated_at BEFORE UPDATE ON rides FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_chat_conversations_updated_at ON chat_conversations;
 CREATE TRIGGER update_chat_conversations_updated_at BEFORE UPDATE ON chat_conversations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Tasks table for group task management
@@ -373,6 +382,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees); -- UUID[] array
 CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
 
+DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Items table for item donations/deliveries
@@ -385,7 +395,8 @@ CREATE TABLE IF NOT EXISTS items (
     category VARCHAR(50) NOT NULL, -- furniture, clothes, electronics, general, etc.
     condition VARCHAR(20), -- new, like_new, used, for_parts
     
-    -- Location as separate columns
+    -- Location as separate columns plus JSONB for flexibility
+    location JSONB, -- {city, address, coordinates}
     city VARCHAR(100),
     address TEXT,
     coordinates VARCHAR(100), -- stored as "lat,lng" string
@@ -451,7 +462,10 @@ CREATE INDEX IF NOT EXISTS idx_item_requests_status ON item_requests (status);
 CREATE INDEX IF NOT EXISTS idx_item_requests_created ON item_requests (created_at);
 
 -- Triggers for updated_at timestamps
+DROP TRIGGER IF EXISTS update_items_updated_at ON items;
 CREATE TRIGGER update_items_updated_at BEFORE UPDATE ON items FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_item_requests_updated_at ON item_requests;
 CREATE TRIGGER update_item_requests_updated_at BEFORE UPDATE ON item_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Community members/people records table for admin management
@@ -474,4 +488,19 @@ CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (st
 CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);
 
 -- Trigger for updated_at timestamp
+DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members;
 CREATE TRIGGER update_community_members_updated_at BEFORE UPDATE ON community_members FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Links collection (JSONB) for generic link storage
+CREATE TABLE IF NOT EXISTS links (
+    user_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (user_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS links_user_idx ON links(user_id);
+CREATE INDEX IF NOT EXISTS links_item_idx ON links(item_id);
+CREATE INDEX IF NOT EXISTS links_data_gin ON links USING GIN (data);
+

@@ -271,6 +271,7 @@ export class DatabaseInit implements OnModuleInit {
             description TEXT,
             category VARCHAR(50) NOT NULL,
             condition VARCHAR(20),
+            location JSONB,
             city VARCHAR(100),
             address TEXT,
             coordinates VARCHAR(100),
@@ -313,6 +314,23 @@ export class DatabaseInit implements OnModuleInit {
       } catch (error) {
         console.error('❌ Failed to create items table:', error);
         // Continue anyway - table might already exist in different format
+      }
+
+      // Ensure location column exists in items
+      try {
+        await client.query(`
+            DO $$ 
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'items' AND column_name = 'location'
+              ) THEN
+                ALTER TABLE items ADD COLUMN location JSONB;
+              END IF;
+            END $$ ;
+          `);
+      } catch (e) {
+        console.log('⚠️ Failed to add location column to items:', e);
       }
 
       // Minimal user_profiles to satisfy joins and stats
@@ -363,6 +381,19 @@ export class DatabaseInit implements OnModuleInit {
       `);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`);
+
+      // Ensure metadata column exists
+      await client.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_profiles' AND column_name = 'metadata'
+          ) THEN
+            ALTER TABLE user_profiles ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;
+          END IF;
+        END $$ ;
+      `);
 
       // donation_categories to power categories and analytics
       await client.query(`
@@ -720,6 +751,43 @@ export class DatabaseInit implements OnModuleInit {
         FOR EACH ROW 
         EXECUTE FUNCTION update_updated_at_column()
       `);
+
+      // Ensure links collection table (JSONB) exists
+      console.log('🔗 Ensuring links table...');
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS links (
+          user_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          data JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, item_id)
+        );
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS links_user_idx ON links(user_id);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS links_item_idx ON links(item_id);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS links_data_gin ON links USING GIN (data);`);
+
+      // Ensure item_requests table exists
+      console.log('📦 Ensuring item_requests table...');
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS item_requests (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          item_id TEXT,
+          requester_id UUID,
+          status VARCHAR(20) DEFAULT 'pending',
+          message TEXT,
+          proposed_time TIMESTAMPTZ,
+          delivery_method VARCHAR(20),
+          meeting_location JSONB,
+          owner_response TEXT,
+          completed_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_item_requests_item ON item_requests(item_id);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_item_requests_requester ON item_requests(requester_id);`);
 
       console.log('✅ Backward compatibility tables ensured');
     } catch (err) {
