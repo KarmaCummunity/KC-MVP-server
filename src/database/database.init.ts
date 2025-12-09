@@ -12,7 +12,7 @@ import * as path from 'path';
 
 @Injectable()
 export class DatabaseInit implements OnModuleInit {
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) { }
 
   async onModuleInit() {
     try {
@@ -72,34 +72,34 @@ export class DatabaseInit implements OnModuleInit {
   private splitSqlStatements(sql: string): string[] {
     const statements: string[] = [];
     let i = 0;
-    
+
     while (i < sql.length) {
       // Skip whitespace
       while (i < sql.length && /\s/.test(sql[i])) {
         i++;
       }
-      
+
       if (i >= sql.length) break;
-      
+
       const start = i;
-      
+
       // Check if we're starting a DO $$ block
       const remaining = sql.substring(i);
       const doMatch = remaining.match(/^DO\s+\$\$/i);
-      
+
       if (doMatch) {
         // Found DO $$ - now find the matching END$$; or $$;
         i += doMatch[0].length; // Move past "DO $$"
-        
+
         // Look for END$$; or $$; (the closing)
         // First try to find END$$; (more common pattern)
         let endPattern = /END\s*\$\$\s*;/gi;
         endPattern.lastIndex = i;
         let match = endPattern.exec(sql);
-        
+
         let foundEnd = false;
         let endPos = -1;
-        
+
         if (match) {
           // Found END$$;
           endPos = match.index + match[0].length;
@@ -111,11 +111,11 @@ export class DatabaseInit implements OnModuleInit {
             if (dollarIndex === -1) {
               break; // No closing found
             }
-            
+
             // Check what comes after $$
             const afterDollar = sql.substring(dollarIndex + 2);
             const trimmed = afterDollar.trimStart();
-            
+
             // Check if it's followed by semicolon (and not END before it)
             const beforeDollar = sql.substring(Math.max(0, dollarIndex - 10), dollarIndex).trim();
             if (trimmed.startsWith(';') && !beforeDollar.endsWith('END')) {
@@ -125,12 +125,12 @@ export class DatabaseInit implements OnModuleInit {
               foundEnd = true;
               break;
             }
-            
+
             // Not the end, continue searching after this $$
             i = dollarIndex + 2;
           }
         }
-        
+
         if (foundEnd && endPos > start) {
           statements.push(sql.substring(start, endPos).trim());
           i = endPos;
@@ -150,12 +150,12 @@ export class DatabaseInit implements OnModuleInit {
           }
           break;
         }
-        
+
         statements.push(sql.substring(i, nextSemicolon + 1).trim());
         i = nextSemicolon + 1;
       }
     }
-    
+
     return statements.filter(stmt => stmt.length > 0);
   }
 
@@ -182,22 +182,22 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-      
+
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
-      
+
       for (const statement of statements) {
         if (statement.trim()) {
           await client.query(statement.trim());
         }
       }
-      
+
       console.log(`✅ Schema tables created successfully from: ${schemaPath}`);
-      
+
       // Ensure firebase_uid column exists in user_profiles (for existing databases)
       // This must be done before creating indexes that reference it
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -212,12 +212,12 @@ export class DatabaseInit implements OnModuleInit {
               ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_firebase_uid_key UNIQUE (firebase_uid);
             END IF;
           END IF;
-        END$$;
+        END $$ ;
       `);
-      
+
       // Recreate the firebase_uid index if it doesn't exist (it might have failed earlier)
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -225,9 +225,9 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
           END IF;
-        END$$;
+        END $$ ;
       `);
-      
+
       // Run challenges schema
       await this.runChallengesSchema(client);
     } catch (err) {
@@ -294,28 +294,28 @@ export class DatabaseInit implements OnModuleInit {
             updated_at TIMESTAMPTZ DEFAULT NOW()
           );
         `);
-        
+
         // Try to create indexes, skip if column doesn't exist
         try {
           await client.query(`CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);`);
         } catch (e) { console.log('⚠️ Skipping idx_items_owner_id'); }
-        
+
         try {
           await client.query(`CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);`);
         } catch (e) { console.log('⚠️ Skipping idx_items_category'); }
-        
+
         try {
           await client.query(`CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`);
         } catch (e) { console.log('⚠️ Skipping idx_items_status'); }
-        
+
         try {
           await client.query(`CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);`);
         } catch (e) { console.log('⚠️ Skipping idx_items_is_deleted'); }
-        
+
         try {
           await client.query(`CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);`);
         } catch (e) { console.log('⚠️ Skipping idx_items_created_at'); }
-        
+
         console.log('✅ Items table ensured with dedicated columns');
       } catch (error) {
         console.error('❌ Failed to create items table:', error);
@@ -340,10 +340,10 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      
+
       // Add firebase_uid column if it doesn't exist (for existing databases)
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -352,13 +352,13 @@ export class DatabaseInit implements OnModuleInit {
             ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
             CREATE UNIQUE INDEX IF NOT EXISTS user_profiles_firebase_uid_unique ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
           END IF;
-        END$$;
+        END $$ ;
       `);
-      
+
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));`);
       // Only create firebase_uid index if the column exists
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -366,7 +366,7 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
           END IF;
-        END$$;
+        END $$ ;
       `);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`);
@@ -427,7 +427,7 @@ export class DatabaseInit implements OnModuleInit {
       `);
       // Create indexes conditionally to avoid errors if columns ever differ
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -459,10 +459,10 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             CREATE INDEX IF NOT EXISTS idx_donations_created ON donations (created_at);
           END IF;
-        END$$;
+        END $$ ;
       `);
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -470,7 +470,7 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             ALTER TABLE donations ADD COLUMN is_recurring BOOLEAN DEFAULT false;
           END IF;
-        END$$;
+        END $$ ;
       `);
       // location is JSONB – safe
       await client.query(`CREATE INDEX IF NOT EXISTS idx_donations_location ON donations USING GIN (location);`);
@@ -519,7 +519,7 @@ export class DatabaseInit implements OnModuleInit {
         );
       `);
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -545,7 +545,7 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             CREATE INDEX IF NOT EXISTS idx_rides_created ON rides (created_at);
           END IF;
-        END$$;
+        END $$ ;
       `);
       await client.query('CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);');
       await client.query('CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);');
@@ -593,7 +593,7 @@ export class DatabaseInit implements OnModuleInit {
 
       // Add missing columns to existing chat_messages table if needed
       await client.query(`
-        DO $$
+        DO $$ 
         BEGIN
           IF NOT EXISTS (
             SELECT 1 FROM information_schema.columns 
@@ -619,7 +619,7 @@ export class DatabaseInit implements OnModuleInit {
           ) THEN
             ALTER TABLE chat_messages ADD COLUMN edited_at TIMESTAMPTZ;
           END IF;
-        END$$;
+        END $$ ;
       `);
 
       await client.query(`
@@ -707,7 +707,7 @@ export class DatabaseInit implements OnModuleInit {
       await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);`);
-      
+
       // Create trigger function if it doesn't exist
       await client.query(`
         CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -718,7 +718,7 @@ export class DatabaseInit implements OnModuleInit {
         END;
         $$ language 'plpgsql'
       `);
-      
+
       // Create trigger for community_members
       await client.query('DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members');
       await client.query(`
@@ -794,7 +794,7 @@ export class DatabaseInit implements OnModuleInit {
           ON CONFLICT (stat_type, city, date_period) DO NOTHING
           RETURNING stat_type, stat_value
         `, [stat.stat_type, stat.stat_value]);
-        
+
         // If result has rows, it means we created a new stat entry
         // If no rows, it means the stat already existed and was preserved
         if (result.rows.length > 0) {
@@ -846,16 +846,16 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
-      
+
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
-      
+
       for (const statement of statements) {
         if (statement.trim()) {
           await client.query(statement.trim());
         }
       }
-      
+
       console.log(`✅ Challenges schema tables created successfully from: ${schemaPath}`);
     } catch (err) {
       console.error('❌ Challenges schema creation failed:', err);
