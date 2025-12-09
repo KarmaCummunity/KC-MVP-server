@@ -81,44 +81,69 @@ export class DatabaseInit implements OnModuleInit {
       
       if (i >= sql.length) break;
       
+      const start = i;
+      
       // Check if we're starting a DO $$ block
       const remaining = sql.substring(i);
       const doMatch = remaining.match(/^DO\s+\$\$/i);
       
       if (doMatch) {
-        // Find the end of the DO block (END$$; or just $$;)
-        let blockStart = i + doMatch[0].length;
+        // Found DO $$ - now find the matching END$$; or $$;
+        i += doMatch[0].length; // Move past "DO $$"
+        
+        // Look for END$$; or $$; (the closing)
+        // First try to find END$$; (more common pattern)
+        let endPattern = /END\s*\$\$\s*;/gi;
+        endPattern.lastIndex = i;
+        let match = endPattern.exec(sql);
+        
         let foundEnd = false;
         let endPos = -1;
         
-        // Look for the closing $$ followed by semicolon (with optional whitespace and END)
-        // Pattern: END$$; or $$;
-        const endPattern = /(?:END\s*)?\$\$\s*;/g;
-        endPattern.lastIndex = blockStart;
-        
-        let match;
-        while ((match = endPattern.exec(sql)) !== null) {
-          // Found a potential end - verify it's not inside a string or comment
-          // For simplicity, we'll take the first match (DO blocks shouldn't nest)
+        if (match) {
+          // Found END$$;
           endPos = match.index + match[0].length;
           foundEnd = true;
-          break;
+        } else {
+          // Try to find just $$; (less common but possible)
+          while (i < sql.length) {
+            const dollarIndex = sql.indexOf('$$', i);
+            if (dollarIndex === -1) {
+              break; // No closing found
+            }
+            
+            // Check what comes after $$
+            const afterDollar = sql.substring(dollarIndex + 2);
+            const trimmed = afterDollar.trimStart();
+            
+            // Check if it's followed by semicolon (and not END before it)
+            const beforeDollar = sql.substring(Math.max(0, dollarIndex - 10), dollarIndex).trim();
+            if (trimmed.startsWith(';') && !beforeDollar.endsWith('END')) {
+              // Found the end! Calculate exact position
+              const semicolonOffset = afterDollar.indexOf(';');
+              endPos = dollarIndex + 2 + semicolonOffset + 1;
+              foundEnd = true;
+              break;
+            }
+            
+            // Not the end, continue searching after this $$
+            i = dollarIndex + 2;
+          }
         }
         
-        if (foundEnd && endPos > 0) {
-          // Found the end
-          statements.push(sql.substring(i, endPos).trim());
+        if (foundEnd && endPos > start) {
+          statements.push(sql.substring(start, endPos).trim());
           i = endPos;
         } else {
-          // No proper end found, just take the rest
-          statements.push(sql.substring(i).trim());
+          // No proper end found - take the rest (shouldn't happen with valid SQL)
+          statements.push(sql.substring(start).trim());
           break;
         }
       } else {
         // Regular statement - find next semicolon
         const nextSemicolon = sql.indexOf(';', i);
         if (nextSemicolon === -1) {
-          // No more semicolons, take the rest
+          // No more semicolons
           const rest = sql.substring(i).trim();
           if (rest) {
             statements.push(rest);
