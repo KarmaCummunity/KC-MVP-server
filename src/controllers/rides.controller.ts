@@ -16,7 +16,7 @@ export class RidesController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   @Post()
   async createRide(@Body() rideData: any) {
@@ -44,7 +44,7 @@ export class RidesController {
 
       // Check or create user profile for driver_id
       let driverUuid = rideData.driver_id;
-      
+
       // If driver_id is not a valid UUID, try to find or create user profile
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(rideData.driver_id)) {
@@ -69,7 +69,7 @@ export class RidesController {
             `User ${rideData.driver_id}`,
             JSON.stringify({ legacy_id: rideData.driver_id, source: 'legacy-app' })
           ]);
-          
+
           driverUuid = newUsers[0].id;
           console.log(`✨ Created new user profile for ${rideData.driver_id}: ${driverUuid}`);
         }
@@ -105,11 +105,11 @@ export class RidesController {
       `, [
         driverUuid,
         'ride_created',
-        JSON.stringify({ 
-          ride_id: ride.id, 
+        JSON.stringify({
+          ride_id: ride.id,
           from: rideData.from_location?.name,
           to: rideData.to_location?.name,
-          seats: rideData.available_seats 
+          seats: rideData.available_seats
         })
       ]);
 
@@ -149,10 +149,12 @@ export class RidesController {
     @Query('date') date?: string,
     @Query('status') status?: string,
     @Query('limit') limit?: string,
-    @Query('offset') offset?: string
+    @Query('offset') offset?: string,
+    @Query('include_past') include_past?: string
   ) {
-    const cacheKey = `rides_${fromCity || 'all'}_${toCity || 'all'}_${date || 'all'}_${status || 'active'}_${limit || '50'}_${offset || '0'}`;
-    
+    // Cache key includes include_past
+    const cacheKey = `rides_${fromCity || 'all'}_${toCity || 'all'}_${date || 'all'}_${status || 'active'}_${limit || '50'}_${offset || '0'}_${include_past || 'false'}`;
+
     const cached = await this.redisCache.get(cacheKey);
     if (cached) {
       return { success: true, data: cached };
@@ -193,8 +195,10 @@ export class RidesController {
       query += ` AND DATE(r.departure_time) = $${paramCount}`;
       params.push(date);
     } else {
-      // Only show future rides by default
-      query += ` AND r.departure_time > NOW()`;
+      // Only show future rides by default unless include_past is true
+      if (include_past !== 'true') {
+        query += ` AND r.departure_time > NOW()`;
+      }
     }
 
     if (status) {
@@ -235,7 +239,7 @@ export class RidesController {
   async getRideById(@Param('id') id: string) {
     const cacheKey = `ride_${id}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -340,7 +344,7 @@ export class RidesController {
       `, [
         passengerUuid,
         'ride_booking_created',
-        JSON.stringify({ 
+        JSON.stringify({
           ride_id: rideId,
           booking_id: booking.id,
           seats: requestedSeats
@@ -426,9 +430,29 @@ export class RidesController {
 
   @Get('user/:userId')
   async getUserRides(@Param('userId') userId: string, @Query('type') type?: string) {
-    const cacheKey = `user_rides_${userId}_${type || 'all'}`;
+    // Resolve potential legacy ID
+    let resolvedUserId = userId;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    if (!uuidRegex.test(userId)) {
+      const { rows: existingUsers } = await this.pool.query(`
+        SELECT id FROM user_profiles 
+        WHERE settings->>'legacy_id' = $1 OR id::text = $1
+        LIMIT 1
+      `, [userId]); // Try match against legacy_id
+
+      if (existingUsers.length > 0) {
+        resolvedUserId = existingUsers[0].id;
+      } else {
+        // If not found, and it's not a UUID, we can't query the UUID column. 
+        // Return empty or throw 404. Returning empty is safer for lists.
+        return { success: true, data: [] };
+      }
+    }
+
+    const cacheKey = `user_rides_${resolvedUserId}_${type || 'all'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -453,7 +477,7 @@ export class RidesController {
         WHERE r.driver_id = $1
         ORDER BY r.departure_time DESC
       `;
-      params = [userId];
+      params = [resolvedUserId];
     } else {
       // Rides where user is a passenger
       query = `
@@ -465,7 +489,7 @@ export class RidesController {
         WHERE rb.passenger_id = $1
         ORDER BY r.departure_time DESC
       `;
-      params = [userId];
+      params = [resolvedUserId];
     }
 
     const { rows } = await this.pool.query(query, params);
@@ -478,7 +502,7 @@ export class RidesController {
   async getRideStats() {
     const cacheKey = 'ride_stats_summary';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -573,7 +597,7 @@ export class RidesController {
       'ride_stats_*',
       'ride_*',
     ];
-    
+
     for (const pattern of patterns) {
       await this.redisCache.invalidatePattern(pattern);
     }

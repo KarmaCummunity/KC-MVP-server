@@ -44,6 +44,8 @@ export class ItemsService {
       // Organizations / NGO onboarding
       'organizations',
       'org_applications',
+      // Links (for groups and organizations)
+      'links',
       // App analytics (e.g., category open counters)
       'analytics',
       // Stats
@@ -176,6 +178,39 @@ export class ItemsService {
       [userId],
     );
     return rows.map((r) => r.data);
+  }
+
+  // List all items from all users (for public collections like links)
+  async listAll(collection: string, q?: string) {
+    const table = this.tableFor(collection);
+    console.log(`🔍 ItemsService - listAll for ${collection}, table: ${table}, q: ${q || 'none'}`);
+    
+    if (q) {
+      const { rows } = await this.pool.query(
+        `SELECT data FROM ${table}
+         WHERE (data::text ILIKE $1)
+         ORDER BY COALESCE((data->>'createdAt')::timestamptz, (data->>'timestamp')::timestamptz, NOW()) DESC`,
+        [`%${q}%`],
+      );
+      console.log(`📊 ItemsService - listAll with query found ${rows.length} items`);
+      return rows.map((r) => r.data);
+    }
+    const { rows } = await this.pool.query(
+      `SELECT data FROM ${table}
+       ORDER BY COALESCE((data->>'createdAt')::timestamptz, (data->>'timestamp')::timestamptz, NOW()) DESC`,
+    );
+    console.log(`📊 ItemsService - listAll found ${rows.length} items`);
+    if (rows.length > 0) {
+      console.log(`📊 ItemsService - First item sample:`, JSON.stringify(rows[0].data, null, 2));
+    } else {
+      console.log(`⚠️ ItemsService - listAll: No rows found for table ${table}`);
+      // Debug: Check if table exists and has data
+      const countResult = await this.pool.query(`SELECT COUNT(*) as count FROM ${table}`);
+      console.log(`📊 ItemsService - Table ${table} has ${countResult.rows[0]?.count || 0} total rows`);
+    }
+    const result = rows.map((r) => r.data);
+    console.log(`📤 ItemsService - listAll returning ${result.length} items`);
+    return result;
   }
 
   // Redis Helper Functions

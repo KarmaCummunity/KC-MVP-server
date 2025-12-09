@@ -110,6 +110,8 @@ async function run() {
       // Organizations / NGO onboarding
       'organizations',
       'org_applications',
+      // Links (for groups and organizations)
+      'links',
     ];
 
     for (const t of tables) {

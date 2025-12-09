@@ -277,3 +277,4 @@ BACKEND_BASE_URL=https://kc-mvp-server-production.up.railway.app
 **גרסה:** 1.0.0
 
 
+

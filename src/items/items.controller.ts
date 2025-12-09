@@ -25,6 +25,18 @@ export class ItemsController {
 
   @Get(':collection')
   async list(@Param('collection') collection: string, @Query() query: QueryByUserDto) {
+    console.log(`📥 ItemsController - list called for ${collection}, userId: ${query.userId || 'none'}, q: ${query.q || 'none'}`);
+    // If userId is 'all' or not provided, return all items (for public collections like links)
+    if (query.userId === 'all' || (!query.userId && collection === 'links')) {
+      console.log(`🔄 ItemsController - Using listAll for ${collection}`);
+      const result = await this.itemsService.listAll(collection, query.q);
+      console.log(`📤 ItemsController - listAll for ${collection}:`, result?.length || 0, 'items');
+      return result;
+    }
+    if (!query.userId) {
+      console.log(`⚠️ ItemsController - No userId provided for ${collection}, returning empty array`);
+      return [];
+    }
     return this.itemsService.list(collection, query.userId, query.q);
   }
 

@@ -23,3 +23,4 @@ ALTER COLUMN message_id TYPE uuid USING message_id::uuid;
 -- 4. המרת created_by בטבלת השיחות ל-UUID
 ALTER TABLE chat_conversations 
 ALTER COLUMN created_by TYPE uuid USING created_by::uuid;
+
