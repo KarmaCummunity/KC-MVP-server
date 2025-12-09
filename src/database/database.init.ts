@@ -102,6 +102,75 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
+  /**
+   * Split SQL statements intelligently, handling DO $$ blocks that shouldn't be split
+   * Finds DO $$ ... END$$; blocks and preserves them as single statements
+   */
+  private splitSqlStatements(sql: string): string[] {
+    const statements: string[] = [];
+    let i = 0;
+    
+    while (i < sql.length) {
+      // Skip whitespace
+      while (i < sql.length && /\s/.test(sql[i])) {
+        i++;
+      }
+      
+      if (i >= sql.length) break;
+      
+      // Check if we're starting a DO $$ block
+      const remaining = sql.substring(i);
+      const doMatch = remaining.match(/^DO\s+\$\$/i);
+      
+      if (doMatch) {
+        // Find the end of the DO block (END$$; or just $$;)
+        let blockStart = i + doMatch[0].length;
+        let foundEnd = false;
+        let endPos = -1;
+        
+        // Look for the closing $$ followed by semicolon (with optional whitespace and END)
+        // Pattern: END$$; or $$;
+        const endPattern = /(?:END\s*)?\$\$\s*;/g;
+        endPattern.lastIndex = blockStart;
+        
+        let match;
+        while ((match = endPattern.exec(sql)) !== null) {
+          // Found a potential end - verify it's not inside a string or comment
+          // For simplicity, we'll take the first match (DO blocks shouldn't nest)
+          endPos = match.index + match[0].length;
+          foundEnd = true;
+          break;
+        }
+        
+        if (foundEnd && endPos > 0) {
+          // Found the end
+          statements.push(sql.substring(i, endPos).trim());
+          i = endPos;
+        } else {
+          // No proper end found, just take the rest
+          statements.push(sql.substring(i).trim());
+          break;
+        }
+      } else {
+        // Regular statement - find next semicolon
+        const nextSemicolon = sql.indexOf(';', i);
+        if (nextSemicolon === -1) {
+          // No more semicolons, take the rest
+          const rest = sql.substring(i).trim();
+          if (rest) {
+            statements.push(rest);
+          }
+          break;
+        }
+        
+        statements.push(sql.substring(i, nextSemicolon + 1).trim());
+        i = nextSemicolon + 1;
+      }
+    }
+    
+    return statements.filter(stmt => stmt.length > 0);
+  }
+
   private async runSchema(client: any) {
     try {
       // Support both build (dist) and dev (src) paths
@@ -126,8 +195,8 @@ export class DatabaseInit implements OnModuleInit {
 
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       
-      // Split by semicolons and execute each statement
-      const statements = schemaSql.split(';').filter(stmt => stmt.trim());
+      // Split SQL statements intelligently, handling DO $$ blocks
+      const statements = this.splitSqlStatements(schemaSql);
       
       for (const statement of statements) {
         if (statement.trim()) {
@@ -671,8 +740,8 @@ export class DatabaseInit implements OnModuleInit {
 
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       
-      // Split by semicolons and execute each statement
-      const statements = schemaSql.split(';').filter(stmt => stmt.trim());
+      // Split SQL statements intelligently, handling DO $$ blocks
+      const statements = this.splitSqlStatements(schemaSql);
       
       for (const statement of statements) {
         if (statement.trim()) {
