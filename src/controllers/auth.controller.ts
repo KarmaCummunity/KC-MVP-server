@@ -46,6 +46,11 @@ class GoogleAuthDto {
   @IsOptional()
   @Length(50, 2000, { message: 'Access token length is invalid' })
   accessToken?: string;
+
+  @IsString()
+  @IsOptional()
+  @Length(20, 200, { message: 'Firebase UID length is invalid' })
+  firebaseUid?: string; // Firebase UID from Firebase Auth (different from Google ID)
 }
 
 // DTO for login with validation
@@ -235,7 +240,7 @@ export class AuthController {
       this.logger.log(`Email availability check for: ${safeEmail}`);
 
       const { rows } = await this.pool.query(
-        `SELECT 1 FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT 1 FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
 
@@ -292,7 +297,7 @@ export class AuthController {
 
       // Check if exists
       const existRes = await this.pool.query(
-        `SELECT data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT id FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
       if (existRes.rows.length > 0) {
@@ -303,49 +308,54 @@ export class AuthController {
 
       // SECURITY: Hash password with Argon2 (memory-hard algorithm, resistant to GPU attacks)
       const passwordHash = await argon2.hash(registerDto.password);
-      const userId = normalized; // Use email as stable user id for MVP
       const nowIso = new Date().toISOString();
+
+      // Insert into user_profiles with UUID
+      const { rows: newUser } = await this.pool.query(
+        `INSERT INTO user_profiles (
+          email, name, phone, avatar_url, bio, password_hash, 
+          karma_points, join_date, is_active, last_active, 
+          city, country, interests, roles, email_verified, settings
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+        [
+          normalized,
+          registerDto.name || normalized.split('@')[0],
+          '+9720000000',
+          'https://i.pravatar.cc/150?img=1',
+          'משתמש חדש בקארמה קומיוניטי',
+          passwordHash,
+          0, // karma_points
+          nowIso, // join_date
+          true, // is_active
+          nowIso, // last_active
+          'ישראל', // city
+          'Israel', // country
+          [], // interests (empty array)
+          ['user'], // roles
+          false, // email_verified
+          JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+        ],
+      );
+
+      const userId = newUser[0].id;
       const userData = {
         id: userId,
         email: normalized,
-        name: registerDto.name || normalized.split('@')[0],
-        phone: '+9720000000',
-        avatar: 'https://i.pravatar.cc/150?img=1',
-        bio: 'משתמש חדש בקארמה קומיוניטי',
-        // TODO: Remove hardcoded user data - use proper defaults or user input
-        // TODO: Generate proper avatar URL or use user uploaded image
-        // TODO: Localize default bio text based on user language preference
-        karmaPoints: 0,
-        joinDate: nowIso,
-        isActive: true,
-        lastActive: nowIso,
-        location: { city: 'ישראל', country: 'IL' },
-        interests: [],
-        roles: ['user'],
-        postsCount: 0,
-        followersCount: 0,
-        followingCount: 0,
-        notifications: [
-          { type: 'system', text: 'ברוך הבא!', date: nowIso },
-        ],
-        settings: { language: 'he', darkMode: false, notificationsEnabled: true },
-        passwordHash,
+        name: newUser[0].name,
+        avatar: newUser[0].avatar_url,
+        roles: newUser[0].roles,
+        settings: newUser[0].settings,
+        createdAt: newUser[0].created_at,
+        lastActive: newUser[0].last_active,
       };
-
-      await this.pool.query(
-        `INSERT INTO users (user_id, item_id, data, created_at, updated_at)
-         VALUES ($1, $2, $3::jsonb, NOW(), NOW())
-         ON CONFLICT (user_id, item_id)
-         DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-        [userId, userId, userData],
-      );
 
       // Clear statistics cache when new user is registered
       // This ensures totalUsers and other user-related stats are refreshed immediately
       await this.redisCache.clearStatsCaches();
 
       // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ User registered successfully (ID: ${userId.substring(0, 8)}...)`);
+      this.logger.log(`✅ User registered successfully (ID: ${userId})`);
       return { ok: true, user: this.toPublicUser(userData) };
 
     } catch (error: any) {
@@ -388,7 +398,8 @@ export class AuthController {
       this.logger.log(`Login attempt for user: ${safeEmail}`);
 
       const { rows } = await this.pool.query(
-        `SELECT user_id, item_id, data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT id, email, name, avatar_url, password_hash, roles, settings, created_at, last_active
+         FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
 
@@ -398,8 +409,7 @@ export class AuthController {
         return { error: 'Invalid email or password' };
       }
 
-      const data = rows[0].data || {};
-      const hash = data.passwordHash as string | undefined;
+      const hash = rows[0].password_hash as string | undefined;
 
       if (!hash) {
         // SECURITY: Generic error message
@@ -416,15 +426,26 @@ export class AuthController {
       }
 
       // Update lastActive
-      const updated = { ...data, lastActive: new Date().toISOString() };
       await this.pool.query(
-        `UPDATE users SET data = $1::jsonb, updated_at = NOW() WHERE user_id = $2 AND item_id = $3`,
-        [updated, rows[0].user_id, rows[0].item_id],
+        `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW() WHERE id = $1`,
+        [rows[0].id],
       );
 
+      // Build user data object
+      const userData = {
+        id: rows[0].id,
+        email: rows[0].email,
+        name: rows[0].name,
+        avatar: rows[0].avatar_url,
+        roles: rows[0].roles || ['user'],
+        settings: rows[0].settings || {},
+        createdAt: rows[0].created_at,
+        lastActive: new Date().toISOString(),
+      };
+
       // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ Successful login for user ID: ${rows[0].user_id.substring(0, 8)}...`);
-      return { ok: true, user: this.toPublicUser(updated) };
+      this.logger.log(`✅ Successful login for user ID: ${rows[0].id}`);
+      return { ok: true, user: this.toPublicUser(userData) };
     } catch (error: any) {
       // SECURITY: Generic error message
       this.logger.error('Login error', { error: error.message });
@@ -457,7 +478,7 @@ export class AuthController {
         throw new BadRequestException('Invalid token format');
       }
 
-      const { idToken, accessToken } = googleAuthDto;
+      const { idToken, accessToken, firebaseUid } = googleAuthDto;
 
       if (!idToken && !accessToken) {
         throw new BadRequestException('Missing Google token');
@@ -562,10 +583,17 @@ export class AuthController {
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
       this.logger.log(`Processing Google auth for user: ${safeEmail}`);
 
-      // Check if user exists
+      // Use Firebase UID if provided (from Firebase Auth), otherwise use Google ID
+      // Firebase UID is the actual UID from Firebase Auth, which is different from Google ID
+      const firebaseUidToUse = firebaseUid || googleUser.id;
+      
+      // Check if user exists by email or firebase_uid
       const { rows } = await this.pool.query(
-        `SELECT user_id, item_id, data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
-        [normalizedEmail],
+        `SELECT id, email, name, avatar_url, firebase_uid, roles, settings, created_at, last_active
+         FROM user_profiles 
+         WHERE LOWER(email) = $1 OR firebase_uid = $2
+         LIMIT 1`,
+        [normalizedEmail, firebaseUidToUse],
       );
 
       let userData: any;
@@ -573,74 +601,86 @@ export class AuthController {
 
       if (rows.length > 0) {
         // Update existing user
-        const existingData = rows[0].data || {};
-        userData = {
-          ...existingData,
-          name: googleUser.name,
-          avatar: googleUser.avatar,
-          lastActive: nowIso,
-          // Ensure isActive is set to true if not already set
-          isActive: existingData.isActive !== false,
-          // Ensure email is present
-          email: existingData.email || normalizedEmail,
-          // Don't overwrite existing roles, settings, etc.
-        };
-        userId = rows[0].user_id;
-
+        userId = rows[0].id;
         await this.pool.query(
-          `UPDATE users SET data = $1::jsonb, updated_at = NOW() WHERE user_id = $2 AND item_id = $3`,
-          [userData, userId, rows[0].item_id],
+          `UPDATE user_profiles 
+           SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
+           WHERE id = $5`,
+          [
+            googleUser.name,
+            googleUser.avatar || rows[0].avatar_url,
+            firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+            nowIso,
+            userId,
+          ],
         );
+
+        // Fetch updated user data
+        const { rows: updatedRows } = await this.pool.query(
+          `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active
+           FROM user_profiles WHERE id = $1`,
+          [userId],
+        );
+
+        userData = {
+          id: updatedRows[0].id,
+          email: updatedRows[0].email,
+          name: updatedRows[0].name,
+          avatar: updatedRows[0].avatar_url,
+          roles: updatedRows[0].roles || ['user'],
+          settings: updatedRows[0].settings || {},
+          createdAt: updatedRows[0].created_at,
+          lastActive: updatedRows[0].last_active,
+        };
 
         // Clear statistics cache when existing user is updated
-        // This ensures totalUsers and other user-related stats are refreshed
         await this.redisCache.clearStatsCaches();
       } else {
-        // Create new user
-        userId = normalizedEmail; // Use email as stable user ID
-        userData = {
-          id: userId,
-          email: normalizedEmail,
-          name: googleUser.name,
-          phone: '+9720000000',
-          avatar: googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
-          bio: 'משתמש חדש בקארמה קומיוניטי',
-          karmaPoints: 0,
-          joinDate: nowIso,
-          isActive: true,
-          lastActive: nowIso,
-          location: { city: 'ישראל', country: 'IL' },
-          interests: [],
-          roles: ['user'],
-          postsCount: 0,
-          followersCount: 0,
-          followingCount: 0,
-          notifications: [
-            { type: 'system', text: 'ברוך הבא!', date: nowIso },
+        // Create new user with UUID
+        const { rows: newUser } = await this.pool.query(
+          `INSERT INTO user_profiles (
+            firebase_uid, email, name, avatar_url, bio, 
+            karma_points, join_date, is_active, last_active, 
+            city, country, interests, roles, email_verified, settings
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+          RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+          [
+            firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
+            normalizedEmail,
+            googleUser.name,
+            googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
+            'משתמש חדש בקארמה קומיוניטי',
+            0, // karma_points
+            nowIso, // join_date
+            true, // is_active
+            nowIso, // last_active
+            'ישראל', // city
+            'Israel', // country
+            [], // interests (empty array)
+            ['user'], // roles
+            googleUser.emailVerified || false, // email_verified
+            JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
           ],
-          settings: { language: 'he', darkMode: false, notificationsEnabled: true },
-          googleId: googleUser.id,
-          emailVerified: googleUser.emailVerified,
-        };
-
-        await this.pool.query(
-          `INSERT INTO users (user_id, item_id, data, created_at, updated_at)
-           VALUES ($1, $2, $3::jsonb, NOW(), NOW())
-           ON CONFLICT (user_id, item_id)
-           DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-          [userId, userId, userData],
         );
 
+        userId = newUser[0].id;
+        userData = {
+          id: newUser[0].id,
+          email: newUser[0].email,
+          name: newUser[0].name,
+          avatar: newUser[0].avatar_url,
+          roles: newUser[0].roles || ['user'],
+          settings: newUser[0].settings || {},
+          createdAt: newUser[0].created_at,
+          lastActive: newUser[0].last_active,
+        };
+
         // Clear statistics cache when new user is created
-        // This ensures totalUsers and other user-related stats are refreshed immediately
         await this.redisCache.clearStatsCaches();
       }
 
-      // Users are now stored ONLY in the users table (not user_profiles)
-      // No need to sync to user_profiles anymore
-
       // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ Google authentication successful (user ID: ${userId.substring(0, 8)}...)`);
+      this.logger.log(`✅ Google authentication successful (user ID: ${userId})`);
 
       // Generate JWT tokens for the authenticated user
       const publicUser = this.toPublicUser(userData);

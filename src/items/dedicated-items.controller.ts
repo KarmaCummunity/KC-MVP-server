@@ -17,8 +17,6 @@ export class DedicatedItemsController {
    */
   @Post()
   async create(@Body() dto: CreateItemDto) {
-    console.log('🎯 DedicatedItemsController.create() called!');
-    console.log('📦 Received DTO:', JSON.stringify(dto, null, 2));
     try {
       const item = await this.service.createItem(dto);
       return {

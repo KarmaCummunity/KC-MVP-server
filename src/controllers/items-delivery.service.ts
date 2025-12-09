@@ -15,7 +15,7 @@ export class ItemsDeliveryService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   // ==================== Items CRUD ====================
 
@@ -46,7 +46,7 @@ export class ItemsDeliveryService {
 
       // Invalidate cache
       await this.invalidateItemCaches();
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Create item error:', error);
@@ -63,10 +63,18 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
+    // Use the same JOIN logic as getUserById which works correctly
     const { rows } = await this.pool.query(`
-      SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar, up.city as owner_city
+      SELECT i.*, 
+             COALESCE(up.name, NULL) as owner_name, 
+             COALESCE(up.avatar_url, NULL) as owner_avatar, 
+             COALESCE(up.city, NULL) as owner_city
       FROM items i
-      LEFT JOIN user_profiles up ON i.owner_id = up.id
+      LEFT JOIN user_profiles up ON (
+        up.id::text = i.owner_id 
+        OR LOWER(up.email) = LOWER(i.owner_id)
+        OR up.firebase_uid = i.owner_id
+      )
       WHERE i.id = $1
     `, [id]);
 
@@ -87,10 +95,18 @@ export class ItemsDeliveryService {
     }
 
     // Build query
+    // Note: owner_id can be either UUID (id) or Firebase UID (firebase_uid)
+    // Use the same JOIN logic as getUserById which works correctly
     let query = `
-      SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar
+      SELECT i.*, 
+             COALESCE(up.name, NULL) as owner_name, 
+             COALESCE(up.avatar_url, NULL) as owner_avatar
       FROM items i
-      LEFT JOIN user_profiles up ON i.owner_id = up.id
+      LEFT JOIN user_profiles up ON (
+        up.id::text = i.owner_id 
+        OR LOWER(up.email) = LOWER(i.owner_id)
+        OR up.firebase_uid = i.owner_id
+      )
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -170,6 +186,14 @@ export class ItemsDeliveryService {
     params.push(offset);
 
     const { rows } = await this.pool.query(query, params);
+
+    // Log items with owner names for debugging
+    if (rows.length > 0) {
+      console.log(`📦 listItems: Found ${rows.length} items`);
+      rows.slice(0, 3).forEach((row: any, idx: number) => {
+        console.log(`  Item ${idx + 1}: ID=${row.id}, Title=${row.title}, Owner=${row.owner_name || 'NULL'} (${row.owner_id})`);
+      });
+    }
 
     await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
     return { success: true, data: rows };
@@ -363,8 +387,8 @@ export class ItemsDeliveryService {
              up_owner.name as owner_name, up_owner.avatar_url as owner_avatar
       FROM item_requests ir
       JOIN items i ON ir.item_id = i.id
-      LEFT JOIN user_profiles up_requester ON ir.requester_id = up_requester.id
-      LEFT JOIN user_profiles up_owner ON i.owner_id = up_owner.id
+      LEFT JOIN user_profiles up_requester ON (ir.requester_id = up_requester.id::text OR ir.requester_id = up_requester.firebase_uid)
+      LEFT JOIN user_profiles up_owner ON (i.owner_id = up_owner.id::text OR i.owner_id = up_owner.firebase_uid)
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -530,6 +554,3 @@ export class ItemsDeliveryService {
     }
   }
 }
-
-
-

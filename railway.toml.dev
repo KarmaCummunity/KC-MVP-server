@@ -38,3 +38,4 @@ JWT_SECRET = "CHANGE_THIS_TO_A_DIFFERENT_SECRET_FOR_DEV_ENVIRONMENT"
 # ⚠️ CRITICAL: Connect to SEPARATE Postgres and Redis plugins for dev!
 # Do NOT use the same plugins as production!
 
+

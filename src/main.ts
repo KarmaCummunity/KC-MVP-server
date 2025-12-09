@@ -230,21 +230,27 @@ async function bootstrap(): Promise<void> {
     
     app.use((req: any, res: any, next: any) => {
       const origin = req.headers.origin;
+      
+      // Only set CORS headers if origin is in allowed list
       if (origin && allowedOrigins.includes(origin)) {
         res.header('Access-Control-Allow-Origin', origin);
         res.header('Vary', 'Origin');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
+        
+        // Handle preflight requests
+        if (req.method === 'OPTIONS') {
+          return res.sendStatus(204);
+        }
       } else if (origin && !isProduction) {
         // In development, log blocked origins for debugging
         logger.warn(`🚫 Blocked CORS request from origin: ${origin} (not in allowed list)`);
+      } else if (origin && isProduction) {
+        // In production, silently block unauthorized origins (security)
+        // Don't set any CORS headers, browser will block the request
       }
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
       
-      // Handle preflight requests
-      if (req.method === 'OPTIONS') {
-        return res.sendStatus(204);
-      }
       next();
     });
 

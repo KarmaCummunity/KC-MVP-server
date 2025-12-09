@@ -1,95 +1,144 @@
-// File overview:
-// - Purpose: Chat API for conversations and messages with Postgres persistence and Redis caching.
-// - Reached from: Routes under '/api/chat'.
-// - Provides: Create conversation, list user conversations (with unread counts), send message, and cache invalidation.
-// - Storage: Tables chat_conversations, chat_messages, message_read_receipts; caches keyed by user/patterns.
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, Request, Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { OptionalAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/chat')
+@UseGuards(OptionalAuthGuard)
 export class ChatController {
-  private readonly CACHE_TTL = 2 * 60; // 2 minutes for chat data
+  private readonly CACHE_TTL = 2 * 60; // 2 minutes
 
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
   ) { }
 
-  /**
-   * Resolve user ID from various formats (UUID, email, Google ID, legacy IDs)
-   * Uses caching to avoid expensive database lookups on every request
-   * Cache TTL: 10 minutes (userId mappings are relatively static)
-   * 
-   * @param userId - Can be UUID, email, Google ID, or legacy ID
-   * @returns Resolved user_id from database, or original userId if not found
-   */
+  // --- Utility: Resolve User ID ---
+  // Resolves email, firebase_uid, or UUID to user_profiles.id (UUID)
   private async resolveUserId(userId: string): Promise<string> {
-    // Check if it's already a valid UUID - no resolution needed
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(userId)) {
-      return userId;
+      // Already a UUID, verify it exists
+      const { rows } = await this.pool.query(
+        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
+        [userId]
+      );
+      if (rows.length > 0) {
+        return userId;
+      }
+      // UUID not found, try to resolve
     }
 
-    // Normalize email to lowercase for consistent lookup
-    // This matches the normalization used in auth.controller.ts
-    const normalizedUserId = userId.includes('@') 
-      ? String(userId).trim().toLowerCase() 
+    const normalizedUserId = userId.includes('@')
+      ? String(userId).trim().toLowerCase()
       : userId;
 
-    // Check cache first to avoid expensive database query
     const cacheKey = `user_id_resolve_${normalizedUserId}`;
     const cached = await this.redisCache.get<string>(cacheKey);
-    if (cached) {
+    if (cached && uuidRegex.test(cached)) {
       return cached;
     }
 
-    // Use ONLY the real users table (not user_profiles)
+    // Look up in user_profiles by email or firebase_uid
     const { rows: existingUsers } = await this.pool.query(`
-      SELECT user_id FROM users 
-      WHERE 
-        user_id = $1
-        OR LOWER(data->>'email') = LOWER($1)
-        OR data->>'googleId' = $1
-        OR data->>'id' = $1
-        OR data->'settings'->>'legacy_id' = $1
-        OR data->'settings'->>'firebase_id' = $1
-        OR data->'settings'->>'google_id' = $1
+      SELECT id FROM user_profiles 
+      WHERE LOWER(email) = LOWER($1)
+         OR firebase_uid = $1
+         OR id::text = $1
       LIMIT 1
     `, [normalizedUserId]);
 
     let resolvedUserId: string;
     if (existingUsers.length > 0) {
-      resolvedUserId = existingUsers[0].user_id;
+      resolvedUserId = existingUsers[0].id;
     } else {
-      // If user doesn't exist, return the normalized userId (don't create fake users)
-      // The caller should handle missing users appropriately
-      resolvedUserId = normalizedUserId;
+      // If not found and it's a valid UUID format, return it (might be new user)
+      if (uuidRegex.test(normalizedUserId)) {
+        resolvedUserId = normalizedUserId;
+      } else {
+        // Not a UUID and not found - this is an error case
+        throw new Error(`User not found: ${normalizedUserId}`);
+      }
     }
 
-    // Cache for 10 minutes - userId resolution is relatively static
     await this.redisCache.set(cacheKey, resolvedUserId, 10 * 60);
     return resolvedUserId;
   }
 
+  // --- Utility: Validate UUID ---
+  private isValidUUID(uuid: string): boolean {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(uuid);
+  }
+
+  // --- Utility: Clear Caches ---
+  private async clearChatCaches() {
+    const patterns = ['user_conversations_*', 'conversation_messages_*', 'search_messages_*', 'chat_stats_summary'];
+    for (const pattern of patterns) {
+      try {
+        await this.redisCache.invalidatePattern(pattern);
+      } catch (error) {
+        console.error(`Failed to invalidate cache pattern ${pattern}:`, error);
+      }
+    }
+  }
+
+  // --- Utility: Hash String ---
+  private hashStringToInt(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
+  }
+
+  // ==========================================
+  // ENDPOINTS
+  // ==========================================
+
   @Post('conversations')
-  async createConversation(@Body() conversationData: any) {
+  async createConversation(@Body() conversationData: any, @Request() req: any) {
+    if (!conversationData.participants || !Array.isArray(conversationData.participants)) {
+      return { success: false, error: 'Participants must be a non-empty array' };
+    }
+    if (conversationData.participants.length < 2) {
+      return { success: false, error: 'Conversation must have at least 2 participants' };
+    }
+    if (conversationData.participants.length > 50) {
+      return { success: false, error: 'Conversation cannot have more than 50 participants' };
+    }
+
+    const authenticatedUserId = req.user?.userId;
+    if (authenticatedUserId && !conversationData.created_by) {
+      conversationData.created_by = authenticatedUserId;
+    }
+
     const client = await this.pool.connect();
 
-    // Resolve user IDs before starting transaction
-    const resolvedCreatedBy = await this.resolveUserId(conversationData.created_by);
-    const resolvedParticipants = await Promise.all(
-      (conversationData.participants || []).map((p: string) => this.resolveUserId(p))
-    );
-
     try {
+      const resolvedCreatedBy = await this.resolveUserId(conversationData.created_by);
+      const resolvedParticipants = await Promise.all(
+        (conversationData.participants || []).map((p: string) => this.resolveUserId(p))
+      );
+
+      if (!this.isValidUUID(resolvedCreatedBy)) {
+        return { success: false, error: 'Invalid user ID: created_by must be a valid UUID' };
+      }
+
+      for (const participant of resolvedParticipants) {
+        if (!this.isValidUUID(participant)) {
+          return { success: false, error: `Invalid participant ID: ${participant} must be a valid UUID` };
+        }
+      }
+
       await client.query('BEGIN');
 
       const { rows } = await client.query(`
         INSERT INTO chat_conversations (title, type, participants, created_by, metadata)
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3::uuid[], $4::uuid, $5)
         RETURNING *
       `, [
         conversationData.title || null,
@@ -103,7 +152,7 @@ export class ChatController {
 
       await client.query(`
         INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
+        VALUES ($1::uuid, $2, $3)
       `, [
         resolvedCreatedBy,
         'conversation_created',
@@ -127,18 +176,24 @@ export class ChatController {
   }
 
   @Get('conversations/user/:userId')
-  async getUserConversations(@Param('userId') userId: string) {
+  async getUserConversations(@Param('userId') userId: string, @Request() req: any) {
+    console.log('--- Executing getUserConversations [FINAL TEXT CAST VERSION] ---');
     try {
-      // Resolve userId to actual user_id from users table (handles Google IDs, emails, etc.)
-      const resolvedUserId = await this.resolveUserId(userId);
+      const authenticatedUserId = req.user?.userId;
+      const resolvedParamUserId = await this.resolveUserId(userId);
+      let resolvedUserId: string;
 
-      // Check if resolveUserId found the user or returned the original userId
-      // If it returned the original userId and it's not a UUID, the user doesn't exist
-      const isResolvedUserId = resolvedUserId !== userId || this.isValidUUID(resolvedUserId);
-      
-      if (!isResolvedUserId) {
-        // User not found - return empty list
-        console.log(`User not found for userId: ${userId}, returning empty conversations list`);
+      if (authenticatedUserId) {
+        const resolvedAuthUserId = await this.resolveUserId(authenticatedUserId);
+        if (resolvedParamUserId !== resolvedAuthUserId) {
+          return { success: false, error: 'Access denied - can only view your own conversations' };
+        }
+        resolvedUserId = resolvedAuthUserId;
+      } else {
+        resolvedUserId = resolvedParamUserId;
+      }
+
+      if (!this.isValidUUID(resolvedUserId)) {
         return { success: true, data: [] };
       }
 
@@ -146,102 +201,99 @@ export class ChatController {
       let cached;
       try {
         cached = await this.redisCache.get(cacheKey);
-      } catch (cacheError) {
-        console.error('Redis cache error (non-fatal):', cacheError);
-        // Continue without cache
-      }
+      } catch (cacheError) { }
 
       if (cached) {
         return { success: true, data: cached };
       }
 
-      // Check if resolvedUserId is a UUID to determine the correct SQL comparison
-      const isUUID = this.isValidUUID(resolvedUserId);
-      
-      // Build the WHERE clause based on whether resolvedUserId is a UUID
-      // If it's a UUID, we can use direct comparison with UUID[]
-      // If it's not a UUID, we need to convert participants to text array
-      const whereClause = isUUID 
-        ? `$1::UUID = ANY(cc.participants)`
-        : `CAST($1 AS TEXT) = ANY(ARRAY(SELECT unnest(cc.participants)::text))`;
-
-      // Build the comparison clauses for unread count based on UUID type
-      // Note: cm2.sender_id and user_id are always UUID columns, so we need to convert them
-      // to text when comparing with non-UUID values, or use UUID comparison when both are UUIDs
-      const senderIdComparison = isUUID 
-        ? `cm2.sender_id != $1::UUID`
-        : `CAST(cm2.sender_id AS TEXT) != CAST($1 AS TEXT)`;
-      
-      const userIdComparison = isUUID 
-        ? `user_id = $1::UUID`
-        : `CAST(user_id AS TEXT) = CAST($1 AS TEXT)`;
-
+      // Query using UUID - all fields are now UUID type
+      // Cast both sides explicitly to UUID to avoid type mismatch
       const { rows } = await this.pool.query(`
         SELECT 
           cc.*,
           cm.content as last_message_content,
           cm.message_type as last_message_type,
           cm.created_at as last_message_time,
-          COALESCE(u.data->>'name', 'ללא שם') as last_sender_name,
+          CASE 
+            WHEN cm.sender_id IS NULL THEN 'ללא שם'
+            ELSE COALESCE(
+              (SELECT name FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+              'ללא שם'
+            )
+          END as last_sender_name,
           (
             SELECT COUNT(*)
             FROM chat_messages cm2
             WHERE cm2.conversation_id = cc.id 
-              AND ${senderIdComparison}
-              AND cm2.id NOT IN (
-                SELECT message_id 
-                FROM message_read_receipts 
-                WHERE ${userIdComparison}
+              AND cm2.sender_id != $1
+              AND cm2.is_deleted = false
+              AND NOT EXISTS (
+                SELECT 1 
+                FROM message_read_receipts mrr
+                WHERE mrr.message_id = cm2.id 
+                AND mrr.user_id = $1
               )
           ) as unread_count
         FROM chat_conversations cc
         LEFT JOIN chat_messages cm ON cc.last_message_id = cm.id
-        LEFT JOIN users u ON cm.sender_id = u.user_id
-        WHERE ${whereClause}
+        WHERE $1::uuid = ANY(cc.participants::uuid[])
         ORDER BY cc.last_message_at DESC
       `, [resolvedUserId]);
 
       try {
         await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
-      } catch (cacheError) {
-        console.error('Redis cache set error (non-fatal):', cacheError);
-        // Continue without caching
-      }
+      } catch (cacheError) { }
 
       return { success: true, data: rows };
     } catch (error) {
       console.error('Get user conversations error:', error);
-      console.error('Error details:', error instanceof Error ? error.message : String(error));
-      console.error('Stack trace:', error instanceof Error ? error.stack : 'No stack trace');
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: 'Failed to get user conversations',
         message: error instanceof Error ? error.message : 'Unknown error'
       };
     }
   }
 
-  private isValidUUID(uuid: string): boolean {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(uuid);
-  }
-
   @Get('conversations/:conversationId/messages')
   async getConversationMessages(
     @Param('conversationId') conversationId: string,
     @Query('limit') limit: string = '100',
-    @Query('offset') offset: string = '0'
+    @Query('offset') offset: string = '0',
+    @Request() req: any
   ) {
     try {
       const limitNum = parseInt(limit, 10) || 100;
       const offsetNum = parseInt(offset, 10) || 0;
 
-      // Validate conversation ID
       if (!this.isValidUUID(conversationId)) {
-        return { 
-          success: false, 
-          error: 'Invalid conversation ID' 
-        };
+        return { success: false, error: 'Invalid conversation ID' };
+      }
+
+      const authenticatedUserId = req.user?.userId;
+
+      if (authenticatedUserId) {
+        const resolvedUserId = await this.resolveUserId(authenticatedUserId);
+        if (!this.isValidUUID(resolvedUserId)) {
+          return { success: false, error: 'Invalid user ID' };
+        }
+
+        const { rows: convCheck } = await this.pool.query(`
+          SELECT id FROM chat_conversations 
+          WHERE id = $1::uuid AND $2::uuid = ANY(participants::uuid[])
+        `, [conversationId, resolvedUserId]);
+
+        if (convCheck.length === 0) {
+          return { success: false, error: 'Conversation not found or access denied' };
+        }
+      } else {
+        const { rows: convCheck } = await this.pool.query(`
+          SELECT id FROM chat_conversations WHERE id = $1::uuid
+        `, [conversationId]);
+        if (convCheck.length === 0) {
+          return { success: false, error: 'Conversation not found' };
+        }
       }
 
       const cacheKey = `conversation_messages_${conversationId}_${limitNum}_${offsetNum}`;
@@ -251,39 +303,37 @@ export class ChatController {
         if (cached) {
           return { success: true, data: cached };
         }
-      } catch (cacheError) {
-        console.error('Redis cache error (non-fatal):', cacheError);
-        // Continue without cache
-      }
+      } catch (cacheError) { }
 
       const { rows } = await this.pool.query(`
         SELECT 
           cm.*,
-          u.data->>'name' as sender_name,
-          u.data->>'avatar_url' as sender_avatar
+          COALESCE(
+            (SELECT name FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+            'ללא שם'
+          ) as sender_name,
+          COALESCE(
+            (SELECT avatar_url FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+            ''
+          ) as sender_avatar
         FROM chat_messages cm
-        LEFT JOIN users u ON cm.sender_id = u.user_id
-        WHERE cm.conversation_id = $1
+        WHERE cm.conversation_id = $1::uuid
           AND cm.is_deleted = false
         ORDER BY cm.created_at DESC
         LIMIT $2 OFFSET $3
       `, [conversationId, limitNum, offsetNum]);
 
-      // Reverse to get chronological order (oldest first)
       const messages = rows.reverse();
 
       try {
         await this.redisCache.set(cacheKey, messages, this.CACHE_TTL);
-      } catch (cacheError) {
-        console.error('Redis cache set error (non-fatal):', cacheError);
-        // Continue without caching
-      }
+      } catch (cacheError) { }
 
       return { success: true, data: messages };
     } catch (error) {
       console.error('Get conversation messages error:', error);
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: 'Failed to get conversation messages',
         message: error instanceof Error ? error.message : 'Unknown error'
       };
@@ -291,97 +341,134 @@ export class ChatController {
   }
 
   @Post('messages')
-  async sendMessage(@Body() messageData: any) {
+  async sendMessage(@Body() messageData: any, @Request() req: any) {
     const client = await this.pool.connect();
+    const authenticatedUserId = req.user?.userId;
+    let senderId: string;
 
-    // Resolve sender ID before starting transaction
-    const resolvedSenderId = await this.resolveUserId(messageData.sender_id);
+    if (authenticatedUserId) {
+      senderId = messageData.sender_id || authenticatedUserId;
+      if (senderId !== authenticatedUserId) {
+        client.release();
+        return { success: false, error: 'Cannot send message as another user' };
+      }
+    } else {
+      if (!messageData.sender_id) {
+        client.release();
+        return { success: false, error: 'sender_id is required when not authenticated' };
+      }
+      senderId = messageData.sender_id;
+    }
+
+    const resolvedSenderId = await this.resolveUserId(senderId);
+    if (!this.isValidUUID(resolvedSenderId)) {
+      client.release();
+      return { success: false, error: 'Invalid sender ID: must be a valid UUID' };
+    }
+
     let conversationId = messageData.conversation_id;
-
     let conversationCreated = false;
+    let transactionStarted = false;
 
     try {
-      // Check if conversation_id is a valid UUID
       if (!conversationId || !this.isValidUUID(conversationId)) {
-        // If invalid UUID and participants provided, try to find or create conversation
-        if (messageData.participants && Array.isArray(messageData.participants) && messageData.participants.length > 0) {
+        if (messageData.participants?.length > 0) {
           const resolvedParticipants = await Promise.all(
             messageData.participants.map((p: string) => this.resolveUserId(p))
           );
 
-          // Start transaction to check/create conversation
-          await client.query('BEGIN');
+          for (const p of resolvedParticipants) {
+            if (!this.isValidUUID(p)) {
+              client.release();
+              return { success: false, error: `Invalid participant ID: ${p}` };
+            }
+          }
 
-          // Try to find existing conversation between participants
+          await client.query('BEGIN');
+          transactionStarted = true;
+
+          const participantsHash = resolvedParticipants.sort().join(',');
+          const lockKey = `conversation_${Buffer.from(participantsHash).toString('base64').slice(0, 16)}`;
+          const lockId = this.hashStringToInt(lockKey);
+          await client.query('SELECT pg_advisory_xact_lock($1)', [lockId]);
+
           const { rows: existingConvs } = await client.query(`
-            SELECT id FROM chat_conversations
-            WHERE participants @> $1::UUID[]
-              AND participants <@ $1::UUID[]
-              AND array_length(participants, 1) = $2
-            LIMIT 1
-          `, [resolvedParticipants, resolvedParticipants.length]);
+              SELECT id FROM chat_conversations
+              WHERE participants @> $1::uuid[]
+                AND participants <@ $1::uuid[]
+                AND array_length(participants, 1) = $2
+              LIMIT 1
+            `, [resolvedParticipants.map(p => p), resolvedParticipants.length]);
 
           if (existingConvs.length > 0) {
             conversationId = existingConvs[0].id;
-            console.log('Found existing conversation:', conversationId);
           } else {
-            // Create new conversation
             const { rows: newConvRows } = await client.query(`
-              INSERT INTO chat_conversations (title, type, participants, created_by, metadata)
-              VALUES ($1, $2, $3, $4, $5)
-              RETURNING *
-            `, [
-              null,
-              'direct',
-              resolvedParticipants,
-              resolvedSenderId,
-              messageData.metadata ? JSON.stringify(messageData.metadata) : null
-            ]);
+                INSERT INTO chat_conversations (title, type, participants, created_by, metadata)
+                VALUES ($1, $2, $3::uuid[], $4::uuid, $5)
+                RETURNING *
+              `, [null, 'direct', resolvedParticipants, resolvedSenderId, messageData.metadata ? JSON.stringify(messageData.metadata) : null]);
             conversationId = newConvRows[0].id;
             conversationCreated = true;
-            console.log('Created new conversation:', conversationId);
           }
-          // Continue with the same transaction for message insertion
         } else {
-          return { 
-            success: false, 
-            error: 'Invalid conversation ID and no participants provided to create conversation' 
-          };
+          client.release();
+          return { success: false, error: 'Invalid conversation ID or missing participants' };
         }
       } else {
-        // Valid UUID - start transaction
         await client.query('BEGIN');
+        transactionStarted = true;
       }
 
-      // Verify conversation exists
-      const { rows: convCheck } = await client.query(`
-        SELECT id FROM chat_conversations WHERE id = $1
-      `, [conversationId]);
+      let convCheck;
+      if (authenticatedUserId) {
+        const { rows } = await client.query(`
+          SELECT id FROM chat_conversations 
+          WHERE id = $1::uuid AND $2::uuid = ANY(participants::uuid[])
+        `, [conversationId, resolvedSenderId]);
+        convCheck = rows;
+      } else {
+        const { rows } = await client.query(`SELECT id FROM chat_conversations WHERE id = $1::uuid`, [conversationId]);
+        convCheck = rows;
+      }
 
       if (convCheck.length === 0) {
-        await client.query('ROLLBACK');
-        return { 
-          success: false, 
-          error: 'Conversation not found' 
-        };
+        if (transactionStarted) await client.query('ROLLBACK');
+        client.release();
+        return { success: false, error: 'Conversation not found or access denied' };
+      }
+
+      if (!messageData.content && !messageData.file_url) {
+        if (transactionStarted) await client.query('ROLLBACK');
+        client.release();
+        return { success: false, error: 'Message must have content or file_url' };
+      }
+
+      if (messageData.content && messageData.content.length > 10000) {
+        if (transactionStarted) await client.query('ROLLBACK');
+        client.release();
+        return { success: false, error: 'Message content too long' };
+      }
+
+      if (messageData.file_url) {
+        try { new URL(messageData.file_url); } catch {
+          if (transactionStarted) await client.query('ROLLBACK');
+          client.release();
+          return { success: false, error: 'Invalid file_url format' };
+        }
       }
 
       const { rows } = await client.query(`
         INSERT INTO chat_messages (
           conversation_id, sender_id, content, message_type, 
           file_url, file_name, file_size, file_type, metadata, reply_to_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10::uuid)
         RETURNING *
       `, [
-        conversationId,
-        resolvedSenderId,
-        messageData.content,
-        messageData.message_type || 'text',
-        messageData.file_url || null,
-        messageData.file_name || null,
-        messageData.file_size || null,
-        messageData.file_type || null,
-        messageData.metadata ? JSON.stringify(messageData.metadata) : null,
+        conversationId, resolvedSenderId, messageData.content || null,
+        messageData.message_type || 'text', messageData.file_url || null,
+        messageData.file_name || null, messageData.file_size || null,
+        messageData.file_type || null, messageData.metadata ? JSON.stringify(messageData.metadata) : null,
         messageData.reply_to_id || null
       ]);
 
@@ -396,35 +483,133 @@ export class ChatController {
       await client.query('COMMIT');
       await this.clearChatCaches();
 
-      // Return conversation_id in response if it was created/changed
-      return { 
-        success: true, 
+      client.release();
+      return {
+        success: true,
         data: message,
         conversation_id: conversationCreated || conversationId !== messageData.conversation_id ? conversationId : undefined,
         conversation_created: conversationCreated || conversationId !== messageData.conversation_id
       };
+
     } catch (error) {
-      await client.query('ROLLBACK');
-      console.error('Send message error:', error);
-      return { success: false, error: 'Failed to send message' };
-    } finally {
+      if (transactionStarted) {
+        try { await client.query('ROLLBACK'); } catch { }
+      }
       client.release();
+      console.error('Send message error:', error);
+      return { success: false, error: 'Failed to send message', message: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 
-  private async clearChatCaches() {
-    const patterns = [
-      'user_conversations_*',
-      'conversation_messages_*',
-      'search_messages_*',
-      'chat_stats_summary'
-    ];
-
-    for (const pattern of patterns) {
-      const keys = await this.redisCache.getKeys(pattern);
-      for (const key of keys) {
-        await this.redisCache.delete(key);
+  @Post('conversations/:conversationId/read-all')
+  async markAllMessagesAsRead(@Param('conversationId') conversationId: string, @Body() body: any, @Request() req: any) {
+    const client = await this.pool.connect();
+    try {
+      const authenticatedUserId = req.user?.userId || body?.user_id;
+      if (!authenticatedUserId) {
+        client.release();
+        return { success: false, error: 'Authentication required' };
       }
+
+      const resolvedUserId = await this.resolveUserId(authenticatedUserId);
+      if (!this.isValidUUID(resolvedUserId) || !this.isValidUUID(conversationId)) {
+        client.release();
+        return { success: false, error: 'Invalid ID' };
+      }
+
+      const { rows: convCheck } = await this.pool.query(`
+        SELECT id FROM chat_conversations 
+        WHERE id = $1::uuid AND $2::uuid = ANY(participants)
+      `, [conversationId, resolvedUserId]);
+
+      if (convCheck.length === 0) {
+        client.release();
+        return { success: false, error: 'Conversation not found or access denied' };
+      }
+
+      await client.query('BEGIN');
+      const { rows: unreadMessages } = await client.query(`
+        SELECT id FROM chat_messages
+        WHERE conversation_id = $1::uuid
+          AND sender_id != $2
+          AND is_deleted = false
+          AND NOT EXISTS (
+            SELECT 1 FROM message_read_receipts 
+            WHERE message_id = chat_messages.id AND user_id = $2
+          )
+      `, [conversationId, resolvedUserId]);
+
+      if (unreadMessages.length > 0) {
+        const insertPromises = unreadMessages.map(msg => client.query(`
+            INSERT INTO message_read_receipts (message_id, user_id)
+            VALUES ($1::uuid, $2)
+            ON CONFLICT (message_id, user_id) DO NOTHING
+          `, [msg.id, resolvedUserId]));
+        await Promise.all(insertPromises);
+      }
+
+      await client.query('COMMIT');
+      await this.clearChatCaches();
+
+      client.release();
+      return { success: true, data: { marked_read: unreadMessages.length } };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      client.release();
+      return { success: false, error: 'Failed to mark messages read' };
+    }
+  }
+
+  @Post('messages/:messageId/read')
+  async markMessageAsRead(@Param('messageId') messageId: string, @Body() body: any, @Request() req: any) {
+    const client = await this.pool.connect();
+    try {
+      const authenticatedUserId = req.user?.userId || body?.user_id;
+      if (!authenticatedUserId) {
+        client.release();
+        return { success: false, error: 'Authentication required' };
+      }
+      const resolvedUserId = await this.resolveUserId(authenticatedUserId);
+
+      if (!this.isValidUUID(resolvedUserId) || !this.isValidUUID(messageId)) {
+        client.release();
+        return { success: false, error: 'Invalid ID' };
+      }
+
+      const { rows: messageCheck } = await this.pool.query(`
+            SELECT cm.id, cm.conversation_id, cm.sender_id
+            FROM chat_messages cm
+            JOIN chat_conversations cc ON cm.conversation_id = cc.id
+            WHERE cm.id = $1::uuid
+            AND $2::uuid = ANY(cc.participants::uuid[])
+            AND cm.is_deleted = false
+        `, [messageId, resolvedUserId]);
+
+      if (messageCheck.length === 0) {
+        client.release();
+        return { success: false, error: 'Message not found or access denied' };
+      }
+
+      if (messageCheck[0].sender_id === resolvedUserId) {
+        client.release();
+        return { success: true, data: { already_read: true } };
+      }
+
+      await client.query('BEGIN');
+      await client.query(`
+            INSERT INTO message_read_receipts (message_id, user_id)
+            VALUES ($1::uuid, $2)
+            ON CONFLICT (message_id, user_id) DO NOTHING
+        `, [messageId, resolvedUserId]);
+      await client.query('COMMIT');
+      await this.clearChatCaches();
+
+      client.release();
+      return { success: true, data: { marked_read: true } };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      client.release();
+      return { success: false, error: 'Failed to mark message as read' };
     }
   }
 }

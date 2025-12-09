@@ -30,8 +30,6 @@ export class ItemsController {
 
   @Post(':collection')
   async create(@Param('collection') collection: string, @Body() dto: UpsertItemDto) {
-    console.log('⚠️ ItemsController.create() called with collection:', collection);
-    console.log('📦 Received DTO:', JSON.stringify(dto, null, 2));
     return this.itemsService.create(collection, dto.userId, dto.id, dto.data);
   }
 

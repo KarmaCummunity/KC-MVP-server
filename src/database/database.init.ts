@@ -36,18 +36,8 @@ export class DatabaseInit implements OnModuleInit {
           return;
         }
 
-        // 1) Detect legacy first – decide path
-        const legacyDetected = await this.detectLegacySchema(client);
-
-        if (legacyDetected) {
-          console.warn('⏭️  Legacy JSONB schema detected. Initializing compatibility tables only.');
-          await this.ensureBackwardCompatibility(client);
-          await this.initializeDefaultData(client);
-          console.log('✅ DatabaseInit - Legacy compatibility ensured');
-          return;
-        }
-
-        // 2) For modern schema – optionally skip full schema in dev if requested
+        // Run full schema initialization
+        // NOTE: Legacy tables are no longer created - all code should use relational tables
         if (process.env.SKIP_FULL_SCHEMA === '1') {
           console.warn('⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)');
           await this.ensureBackwardCompatibility(client);
@@ -59,8 +49,8 @@ export class DatabaseInit implements OnModuleInit {
             console.log('✅ DatabaseInit - Complete schema initialized successfully');
           } catch (schemaError: unknown) {
             const reason = schemaError instanceof Error ? schemaError.message : String(schemaError);
-            console.warn('⚠️ Full schema initialization failed, attempting legacy compatibility only:', reason);
-            await this.ensureBackwardCompatibility(client);
+            console.error('❌ Full schema initialization failed:', reason);
+            throw schemaError;
           }
         }
       } finally {
@@ -72,35 +62,8 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
-  private async detectLegacySchema(client: any): Promise<boolean> {
-    try {
-      const checks = [
-        `SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'users' AND column_name = 'data'
-          ) AS exists;`,
-        `SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'donations' AND column_name = 'data'
-          ) AS exists;`,
-        `SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns 
-            WHERE table_name = 'chats' AND column_name = 'data'
-          ) AS exists;`
-      ];
-      for (const sql of checks) {
-        const res = await client.query(sql);
-        if (res?.rows?.[0]?.exists) {
-          return true;
-        }
-      }
-      return false;
-    } catch (err: unknown) {
-      const reason = err instanceof Error ? err.message : String(err);
-      console.warn('⚠️ Legacy schema detection failed, proceeding with full schema:', reason);
-      return false;
-    }
-  }
+  // NOTE: Legacy schema detection removed - we no longer support legacy JSONB tables
+  // All code should use the new relational schema (user_profiles, etc.)
 
   private async runSchema(client: any) {
     try {
@@ -150,52 +113,9 @@ export class DatabaseInit implements OnModuleInit {
       // Required extensions for UUIDs and text search
       await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
 
-      // Create old JSONB-based tables for backward compatibility
-      const baseTable = (name: string) => `
-        CREATE TABLE IF NOT EXISTS ${name} (
-          user_id TEXT NOT NULL,
-          item_id TEXT NOT NULL,
-          data JSONB NOT NULL DEFAULT '{}'::jsonb,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          PRIMARY KEY (user_id, item_id)
-        );
-        CREATE INDEX IF NOT EXISTS ${name}_user_idx ON ${name}(user_id);
-        CREATE INDEX IF NOT EXISTS ${name}_item_idx ON ${name}(item_id);
-        CREATE INDEX IF NOT EXISTS ${name}_data_gin ON ${name} USING GIN (data);
-      `;
-
-      // JSONB legacy tables for backward compatibility.
-      // IMPORTANT: Exclude tables that are owned by the relational schema in schema.sql to avoid FK conflicts
-      const relationalOwned = new Set([
-        // core relational schema tables
-        'user_profiles',
-        'organizations', 'organization_applications',
-        'donation_categories', 'donations',
-        'rides', 'ride_bookings',
-        'community_events', 'event_attendees',
-        'chat_conversations', 'chat_messages', 'message_read_receipts',
-        'user_activities', 'community_stats', 'user_follows', 'user_notifications',
-        'tasks', // tasks table is now in new relational schema format
-        'items', // items table is now in new relational schema format with separate columns
-      ]);
-
-      const potentialLegacy = [
-        'users', 'posts', 'followers', 'following', 'chats', 'messages', 'notifications', 'bookmarks',
-        'donations', 'settings', 'media', 'blocked_users', 'message_reactions', 'typing_status',
-        'read_receipts', 'voice_messages', 'conversation_metadata', 'rides', 'organizations', 'org_applications',
-        'analytics'
-      ]; // Note: 'items' removed - now a dedicated table with specific columns
-
-      const legacyTables = potentialLegacy.filter(t => !relationalOwned.has(t));
-
-      for (const t of legacyTables) {
-        await client.query(baseTable(t));
-      }
-
-      await client.query(
-        `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')));`
-      );
+      // NOTE: Legacy JSONB tables (users, posts, etc.) are no longer created
+      // All code should use the new relational tables (user_profiles, etc.)
+      // If you need legacy tables, they must be created manually or migrated from existing data
 
       // Ensure minimal relational tables required by new controllers exist
       // community_stats is used by StatsController; create it even in legacy mode
@@ -275,9 +195,11 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       // Minimal user_profiles to satisfy joins and stats
+      // NOTE: id is UUID (standard identifier), firebase_uid is TEXT (for Firebase authentication linking)
       await client.query(`
         CREATE TABLE IF NOT EXISTS user_profiles (
           id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          firebase_uid TEXT UNIQUE, -- Firebase UID for authentication linking (optional)
           email VARCHAR(255) UNIQUE NOT NULL,
           name VARCHAR(255) NOT NULL,
           phone VARCHAR(20),
@@ -290,7 +212,23 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
+      
+      // Add firebase_uid column if it doesn't exist (for existing databases)
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+          ) THEN
+            ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS user_profiles_firebase_uid_unique ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+          END IF;
+        END$$;
+      `);
+      
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`);
 
@@ -473,14 +411,15 @@ export class DatabaseInit implements OnModuleInit {
       await client.query('CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);');
       await client.query('CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);');
 
-      // Minimal chat schema required by ChatController (compat mode)
+      // Minimal chat schema required by ChatController
+      // NOTE: All user ID fields use UUID type to match user_profiles.id
       await client.query(`
         CREATE TABLE IF NOT EXISTS chat_conversations (
           id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
           title VARCHAR(255),
           type VARCHAR(20) DEFAULT 'direct',
-          participants UUID[] NOT NULL DEFAULT ARRAY[]::UUID[],
-          created_by UUID,
+          participants UUID[] NOT NULL, -- UUID[] to match user_profiles.id type
+          created_by UUID, -- UUID to match user_profiles.id type
           last_message_id UUID,
           last_message_at TIMESTAMPTZ DEFAULT NOW(),
           metadata JSONB,
@@ -493,8 +432,8 @@ export class DatabaseInit implements OnModuleInit {
       await client.query(`
         CREATE TABLE IF NOT EXISTS chat_messages (
           id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-          conversation_id UUID,
-          sender_id UUID,
+          conversation_id UUID NOT NULL,
+          sender_id UUID NOT NULL,
           content TEXT,
           message_type VARCHAR(20) DEFAULT 'text',
           file_url TEXT,
@@ -511,6 +450,7 @@ export class DatabaseInit implements OnModuleInit {
         );
       `);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`);
 
       // Add missing columns to existing chat_messages table if needed
       await client.query(`
@@ -546,12 +486,14 @@ export class DatabaseInit implements OnModuleInit {
       await client.query(`
         CREATE TABLE IF NOT EXISTS message_read_receipts (
           id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-          message_id UUID,
-          user_id UUID,
+          message_id UUID NOT NULL,
+          user_id UUID NOT NULL,
           read_at TIMESTAMPTZ DEFAULT NOW(),
           UNIQUE(message_id, user_id)
         );
       `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_message_read_receipts_message ON message_read_receipts (message_id);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_message_read_receipts_user ON message_read_receipts (user_id);`);
 
       // ride_bookings table
       await client.query(`
@@ -606,6 +548,45 @@ export class DatabaseInit implements OnModuleInit {
           registered_at TIMESTAMPTZ DEFAULT NOW(),
           UNIQUE(event_id, user_id)
         );
+      `);
+
+      // community_members table for admin management
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS community_members (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          name VARCHAR(255) NOT NULL,
+          role VARCHAR(255) NOT NULL,
+          description TEXT,
+          contact_info JSONB,
+          status VARCHAR(20) DEFAULT 'active',
+          created_by TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_name ON community_members (name);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);`);
+      
+      // Create trigger function if it doesn't exist
+      await client.query(`
+        CREATE OR REPLACE FUNCTION update_updated_at_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          NEW.updated_at = NOW();
+          RETURN NEW;
+        END;
+        $$ language 'plpgsql'
+      `);
+      
+      // Create trigger for community_members
+      await client.query('DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members');
+      await client.query(`
+        CREATE TRIGGER update_community_members_updated_at 
+        BEFORE UPDATE ON community_members 
+        FOR EACH ROW 
+        EXECUTE FUNCTION update_updated_at_column()
       `);
 
       console.log('✅ Backward compatibility tables ensured');
