@@ -100,6 +100,40 @@ export class DatabaseInit implements OnModuleInit {
       
       console.log(`✅ Schema tables created successfully from: ${schemaPath}`);
       
+      // Ensure firebase_uid column exists in user_profiles (for existing databases)
+      // This must be done before creating indexes that reference it
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+          ) THEN
+            ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
+            -- Add unique constraint if not exists
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint 
+              WHERE conname = 'user_profiles_firebase_uid_key'
+            ) THEN
+              ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_firebase_uid_key UNIQUE (firebase_uid);
+            END IF;
+          END IF;
+        END$$;
+      `);
+      
+      // Recreate the firebase_uid index if it doesn't exist (it might have failed earlier)
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+          END IF;
+        END$$;
+      `);
+      
       // Run challenges schema
       await this.runChallengesSchema(client);
     } catch (err) {
@@ -228,7 +262,18 @@ export class DatabaseInit implements OnModuleInit {
       `);
       
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;`);
+      // Only create firebase_uid index if the column exists
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+          END IF;
+        END$$;
+      `);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`);
 

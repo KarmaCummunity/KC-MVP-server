@@ -283,9 +283,36 @@ CREATE TABLE IF NOT EXISTS user_notifications (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure firebase_uid column exists (for backward compatibility with existing databases)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+  ) THEN
+    ALTER TABLE user_profiles ADD COLUMN firebase_uid TEXT;
+    -- Add unique constraint if not exists
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint 
+      WHERE conname = 'user_profiles_firebase_uid_key'
+    ) THEN
+      ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_firebase_uid_key UNIQUE (firebase_uid);
+    END IF;
+  END IF;
+END$$;
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));
-CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+-- Only create firebase_uid index if the column exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'user_profiles' AND column_name = 'firebase_uid'
+  ) THEN
+    CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+  END IF;
+END$$;
 CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_roles ON user_profiles USING GIN (roles);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);
