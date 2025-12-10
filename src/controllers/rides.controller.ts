@@ -17,7 +17,7 @@ export class RidesController {
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
   ) { }
-  //
+
   @Post()
   async createRide(@Body() rideData: any) {
     const client = await this.pool.connect();
@@ -51,7 +51,7 @@ export class RidesController {
         // Try to find existing user profile by legacy ID or email
         const { rows: existingUsers } = await client.query(`
           SELECT id FROM user_profiles 
-          WHERE firebase_uid = $1 OR metadata->>'legacy_id' = $1 OR email = $2 
+          WHERE settings->>'legacy_id' = $1 OR email = $2 
           LIMIT 1
         `, [rideData.driver_id, `${rideData.driver_id}@legacy.com`]);
 
@@ -61,14 +61,13 @@ export class RidesController {
         } else {
           // Create new user profile for legacy user
           const { rows: newUsers } = await client.query(`
-            INSERT INTO user_profiles (email, name, metadata, firebase_uid)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO user_profiles (email, name, settings)
+            VALUES ($1, $2, $3)
             RETURNING id
           `, [
             `${rideData.driver_id}@legacy.com`,
             `User ${rideData.driver_id}`,
-            JSON.stringify({ legacy_id: rideData.driver_id, source: 'legacy-app' }),
-            rideData.driver_id // Use driver_id as firebase_uid if it's not a UUID
+            JSON.stringify({ legacy_id: rideData.driver_id, source: 'legacy-app' })
           ]);
 
           driverUuid = newUsers[0].id;
@@ -307,7 +306,7 @@ export class RidesController {
       if (!uuidRegex.test(passengerUuid)) {
         const { rows: existingUsers } = await client.query(`
           SELECT id FROM user_profiles 
-          WHERE firebase_uid = $1 OR metadata->>'legacy_id' = $1 OR email = $2 
+          WHERE settings->>'legacy_id' = $1 OR email = $2 
           LIMIT 1
         `, [passengerUuid, `${passengerUuid}@legacy.com`]);
 
@@ -316,14 +315,13 @@ export class RidesController {
           console.log(`🔄 Found existing user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
         } else {
           const { rows: newUsers } = await client.query(`
-            INSERT INTO user_profiles (email, name, metadata, firebase_uid)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO user_profiles (email, name, settings)
+            VALUES ($1, $2, $3)
             RETURNING id
           `, [
             `${passengerUuid}@legacy.com`,
             `User ${passengerUuid}`,
-            JSON.stringify({ legacy_id: passengerUuid, source: 'legacy-app' }),
-            passengerUuid
+            JSON.stringify({ legacy_id: passengerUuid, source: 'legacy-app' })
           ]);
           passengerUuid = newUsers[0].id;
           console.log(`✨ Created new user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
@@ -439,7 +437,7 @@ export class RidesController {
     if (!uuidRegex.test(userId)) {
       const { rows: existingUsers } = await this.pool.query(`
         SELECT id FROM user_profiles 
-        WHERE firebase_uid = $1 OR metadata->>'legacy_id' = $1 OR id::text = $1
+        WHERE settings->>'legacy_id' = $1 OR id::text = $1
         LIMIT 1
       `, [userId]); // Try match against legacy_id
 
