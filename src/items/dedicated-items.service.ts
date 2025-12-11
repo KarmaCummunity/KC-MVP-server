@@ -25,10 +25,10 @@ export class DedicatedItemsService {
       let ownerExists = false;
       
       try {
-        // Check if user exists with this firebase_uid
+        // Check if user exists with this firebase_uid, google_id, email, or UUID
         const ownerResult = await client.query(
-          `SELECT id, name, email, firebase_uid FROM user_profiles 
-           WHERE firebase_uid = $1 OR id::text = $1 
+          `SELECT id, name, email, firebase_uid, google_id FROM user_profiles 
+           WHERE firebase_uid = $1 OR google_id = $1 OR LOWER(email) = LOWER($1) OR id::text = $1 
            LIMIT 1`,
           [dto.owner_id]
         );

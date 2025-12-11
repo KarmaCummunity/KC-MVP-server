@@ -18,6 +18,7 @@
     "lint": "eslint ./src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "init:db": "ts-node -r tsconfig-paths/register src/scripts/init-db.ts",
+    "add:google-id": "ts-node -r tsconfig-paths/register src/scripts/add-google-id-column.ts",
     "reset:db": "ts-node -r tsconfig-paths/register scripts/reset-db.ts",
     "reset:db:full": "./scripts/reset-db-full.sh",
     "docker:up": "docker compose up -d",

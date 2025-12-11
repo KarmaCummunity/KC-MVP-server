@@ -221,57 +221,127 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:222',message:'getUserById called',data:{userId:id,userIdType:typeof id,userIdLength:id?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    
     // Normalize email to lowercase for consistent lookup
     // This matches the normalization used in auth.controller.ts
     const normalizedId = id.includes('@') 
       ? String(id).trim().toLowerCase() 
       : id;
     
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:230',message:'Normalized userId',data:{originalId:id,normalizedId,isEmail:id.includes('@')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    
     const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
     
     if (cached) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:237',message:'Returning cached user',data:{userId:normalizedId,cachedUserId:(cached as any)?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       return { success: true, data: cached };
     }
 
-    // Use user_profiles table - support UUID, email, or firebase_uid lookups
-    const { rows } = await this.pool.query(`
-      SELECT 
-        id,
-        email,
-        COALESCE(name, 'ללא שם') as name,
-        phone,
-        COALESCE(avatar_url, '') as avatar_url,
-        COALESCE(bio, '') as bio,
-        COALESCE(karma_points, 0) as karma_points,
-        COALESCE(join_date, created_at) as join_date,
-        COALESCE(is_active, true) as is_active,
-        COALESCE(last_active, updated_at) as last_active,
-        COALESCE(city, '') as city,
-        COALESCE(country, 'Israel') as country,
-        COALESCE(interests, ARRAY[]::TEXT[]) as interests,
-        COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
-        COALESCE(posts_count, 0) as posts_count,
-        COALESCE(followers_count, 0) as followers_count,
-        COALESCE(following_count, 0) as following_count,
-        0 as total_donations_amount,
-        0 as total_volunteer_hours,
-        COALESCE(email_verified, false) as email_verified,
-        COALESCE(settings, '{}'::jsonb) as settings
-      FROM user_profiles 
-      WHERE id::text = $1 
-         OR LOWER(email) = LOWER($1)
-         OR firebase_uid = $1
-      LIMIT 1
-    `, [normalizedId]);
+    // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:242',message:'Querying database for user',data:{normalizedId,queryType:'id/email/firebase_uid/google_id'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
+    // Try query with google_id first, if it fails (column doesn't exist), try without it
+    let rows: any[];
+    try {
+      const result = await this.pool.query(`
+        SELECT 
+          id,
+          email,
+          COALESCE(name, 'ללא שם') as name,
+          phone,
+          COALESCE(avatar_url, '') as avatar_url,
+          COALESCE(bio, '') as bio,
+          COALESCE(karma_points, 0) as karma_points,
+          COALESCE(join_date, created_at) as join_date,
+          COALESCE(is_active, true) as is_active,
+          COALESCE(last_active, updated_at) as last_active,
+          COALESCE(city, '') as city,
+          COALESCE(country, 'Israel') as country,
+          COALESCE(interests, ARRAY[]::TEXT[]) as interests,
+          COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
+          COALESCE(posts_count, 0) as posts_count,
+          COALESCE(followers_count, 0) as followers_count,
+          COALESCE(following_count, 0) as following_count,
+          0 as total_donations_amount,
+          0 as total_volunteer_hours,
+          COALESCE(email_verified, false) as email_verified,
+          COALESCE(settings, '{}'::jsonb) as settings
+        FROM user_profiles 
+        WHERE id::text = $1 
+           OR LOWER(email) = LOWER($1)
+           OR firebase_uid = $1
+           OR google_id = $1
+        LIMIT 1
+      `, [normalizedId]);
+      rows = result.rows;
+    } catch (error: any) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:275',message:'Query failed, trying without google_id',data:{error:error.message,normalizedId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      // If google_id column doesn't exist, try without it
+      if (error.message && error.message.includes('google_id')) {
+        const result = await this.pool.query(`
+          SELECT 
+            id,
+            email,
+            COALESCE(name, 'ללא שם') as name,
+            phone,
+            COALESCE(avatar_url, '') as avatar_url,
+            COALESCE(bio, '') as bio,
+            COALESCE(karma_points, 0) as karma_points,
+            COALESCE(join_date, created_at) as join_date,
+            COALESCE(is_active, true) as is_active,
+            COALESCE(last_active, updated_at) as last_active,
+            COALESCE(city, '') as city,
+            COALESCE(country, 'Israel') as country,
+            COALESCE(interests, ARRAY[]::TEXT[]) as interests,
+            COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
+            COALESCE(posts_count, 0) as posts_count,
+            COALESCE(followers_count, 0) as followers_count,
+            COALESCE(following_count, 0) as following_count,
+            0 as total_donations_amount,
+            0 as total_volunteer_hours,
+            COALESCE(email_verified, false) as email_verified,
+            COALESCE(settings, '{}'::jsonb) as settings
+          FROM user_profiles 
+          WHERE id::text = $1 
+             OR LOWER(email) = LOWER($1)
+             OR firebase_uid = $1
+          LIMIT 1
+        `, [normalizedId]);
+        rows = result.rows;
+      } else {
+        throw error;
+      }
+    }
+
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:268',message:'Database query result',data:{normalizedId,rowsFound:rows.length,userId:rows[0]?.id,userEmail:rows[0]?.email,userFirebaseUid:rows[0]?.firebase_uid,userGoogleId:rows[0]?.google_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
 
     if (rows.length === 0) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:272',message:'User not found in database',data:{normalizedId,searchedBy:'id/email/firebase_uid/google_id'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       return { success: false, error: 'User not found' };
     }
 
     const user = rows[0];
     await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
 
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:280',message:'Returning user data',data:{userId:user.id,userEmail:user.email,userFirebaseUid:user.firebase_uid,userGoogleId:user.google_id,userName:user.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     return { success: true, data: user };
   }
 
@@ -286,7 +356,7 @@ export class UsersController {
         SELECT id, email, name, phone, avatar_url, bio, password_hash,
                city, country, interests, settings, roles, created_at
         FROM user_profiles 
-        WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR firebase_uid = $1
+        WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR firebase_uid = $1 OR google_id = $1
         LIMIT 1
       `, [id]);
 
@@ -740,5 +810,52 @@ export class UsersController {
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
 
     return { success: true, data: stats };
+  }
+
+  /**
+   * Resolve user ID from firebase_uid, google_id, or email to UUID
+   * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
+   */
+  @Post('resolve-id')
+  async resolveUserId(@Body() body: { firebase_uid?: string; google_id?: string; email?: string }) {
+    const { firebase_uid, google_id, email } = body;
+
+    if (!firebase_uid && !google_id && !email) {
+      return { success: false, error: 'Must provide firebase_uid, google_id, or email' };
+    }
+
+    try {
+      const query = `
+        SELECT id, email, name, avatar_url, roles, settings, created_at, last_active
+        FROM user_profiles 
+        WHERE ($1::text IS NULL OR firebase_uid = $1)
+          AND ($2::text IS NULL OR google_id = $2)
+          AND ($3::text IS NULL OR LOWER(email) = LOWER($3))
+        LIMIT 1
+      `;
+
+      const { rows } = await this.pool.query(query, [firebase_uid || null, google_id || null, email || null]);
+
+      if (rows.length === 0) {
+        return { success: false, error: 'User not found' };
+      }
+
+      const user = rows[0];
+      return {
+        success: true,
+        user: {
+          id: user.id, // UUID - this is the primary identifier
+          email: user.email,
+          name: user.name,
+          avatar: user.avatar_url,
+          roles: user.roles || ['user'],
+          settings: user.settings || {},
+          createdAt: user.created_at,
+          lastActive: user.last_active,
+        },
+      };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to resolve user ID' };
+    }
   }
 }

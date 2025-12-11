@@ -471,10 +471,16 @@ export class AuthController {
   @Post('google')
   @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 Google auth attempts per minute
   async googleAuth(@Body() googleAuthDto: GoogleAuthDto) {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:473',message:'Google auth started',data:{hasIdToken:!!googleAuthDto.idToken,hasAccessToken:!!googleAuthDto.accessToken,hasFirebaseUid:!!googleAuthDto.firebaseUid},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
     try {
       // Validate input
       const errors = await validate(googleAuthDto);
       if (errors.length > 0) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:477',message:'Validation failed',data:{errorsCount:errors.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
         throw new BadRequestException('Invalid token format');
       }
 
@@ -517,7 +523,8 @@ export class AuthController {
           }
 
           googleUser = {
-            id: payload.sub,
+            id: payload.sub, // Google ID (sub claim)
+            googleId: payload.sub, // Store Google ID separately
             email: payload.email,
             name: payload.name || payload.given_name || 'Google User',
             avatar: payload.picture,
@@ -553,7 +560,8 @@ export class AuthController {
 
         const profile = await response.json();
         googleUser = {
-          id: profile.sub,
+          id: profile.sub, // Google ID (sub claim)
+          googleId: profile.sub, // Store Google ID separately
           email: profile.email,
           name: profile.name || profile.given_name || 'Google User',
           avatar: profile.picture,
@@ -583,37 +591,91 @@ export class AuthController {
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
       this.logger.log(`Processing Google auth for user: ${safeEmail}`);
 
-      // Use Firebase UID if provided (from Firebase Auth), otherwise use Google ID
+      // Extract Google ID and Firebase UID separately
       // Firebase UID is the actual UID from Firebase Auth, which is different from Google ID
-      const firebaseUidToUse = firebaseUid || googleUser.id;
+      const googleIdToUse = googleUser.googleId || googleUser.id; // Google ID (sub claim)
+      const firebaseUidToUse = firebaseUid; // Only Firebase UID, not Google ID
 
-      // Check if user exists by email or firebase_uid
-      const { rows } = await this.pool.query(
-        `SELECT id, email, name, avatar_url, firebase_uid, roles, settings, created_at, last_active
-         FROM user_profiles 
-         WHERE LOWER(email) = $1 OR firebase_uid = $2
-         LIMIT 1`,
-        [normalizedEmail, firebaseUidToUse],
-      );
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:590',message:'Checking for existing user',data:{normalizedEmail,googleIdToUse,firebaseUidToUse},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+
+      // Check if user exists by email, firebase_uid, or google_id
+      let rows: any[];
+      try {
+        const result = await this.pool.query(
+          `SELECT id, email, name, avatar_url, firebase_uid, google_id, roles, settings, created_at, last_active
+           FROM user_profiles 
+           WHERE LOWER(email) = $1 OR firebase_uid = $2 OR google_id = $3
+           LIMIT 1`,
+          [normalizedEmail, firebaseUidToUse, googleIdToUse],
+        );
+        rows = result.rows;
+      } catch (error: any) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:598',message:'Query with google_id failed, trying without',data:{error:error.message,normalizedEmail},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        // If google_id column doesn't exist, try without it
+        if (error.message && error.message.includes('google_id')) {
+          const result = await this.pool.query(
+            `SELECT id, email, name, avatar_url, firebase_uid, roles, settings, created_at, last_active
+             FROM user_profiles 
+             WHERE LOWER(email) = $1 OR firebase_uid = $2
+             LIMIT 1`,
+            [normalizedEmail, firebaseUidToUse],
+          );
+          rows = result.rows;
+        } else {
+          throw error;
+        }
+      }
 
       let userData: any;
       let userId: string;
 
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:605',message:'User lookup result',data:{rowsFound:rows.length,userId:rows[0]?.id,userEmail:rows[0]?.email,hasAvatar:!!rows[0]?.avatar_url},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+
       if (rows.length > 0) {
         // Update existing user
         userId = rows[0].id;
-        await this.pool.query(
-          `UPDATE user_profiles 
-           SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
-           WHERE id = $5`,
-          [
-            googleUser.name,
-            googleUser.avatar || rows[0].avatar_url,
-            firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
-            nowIso,
-            userId,
-          ],
-        );
+        try {
+          await this.pool.query(
+            `UPDATE user_profiles 
+             SET name = $1, avatar_url = $2, firebase_uid = $3, google_id = $4, last_active = $5, updated_at = NOW()
+             WHERE id = $6`,
+            [
+              googleUser.name,
+              googleUser.avatar || rows[0].avatar_url,
+              firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+              googleIdToUse, // Store Google ID separately
+              nowIso,
+              userId,
+            ],
+          );
+        } catch (error: any) {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:620',message:'Update with google_id failed, trying without',data:{error:error.message,userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          // If google_id column doesn't exist, try without it
+          if (error.message && error.message.includes('google_id')) {
+            await this.pool.query(
+              `UPDATE user_profiles 
+               SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
+               WHERE id = $5`,
+              [
+                googleUser.name,
+                googleUser.avatar || rows[0].avatar_url,
+                firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                nowIso,
+                userId,
+              ],
+            );
+          } else {
+            throw error;
+          }
+        }
 
         // Fetch updated user data
         const { rows: updatedRows } = await this.pool.query(
@@ -637,43 +699,89 @@ export class AuthController {
         await this.redisCache.clearStatsCaches();
       } else {
         // Create new user with UUID
-        const { rows: newUser } = await this.pool.query(
-          `INSERT INTO user_profiles (
-            firebase_uid, email, name, avatar_url, bio, 
-            karma_points, join_date, is_active, last_active, 
-            city, country, interests, roles, email_verified, settings
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
-          RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
-          [
-            firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
-            normalizedEmail,
-            googleUser.name,
-            googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
-            'משתמש חדש בקארמה קומיוניטי',
-            0, // karma_points
-            nowIso, // join_date
-            true, // is_active
-            nowIso, // last_active
-            'ישראל', // city
-            'Israel', // country
-            [], // interests (empty array)
-            ['user'], // roles
-            googleUser.emailVerified || false, // email_verified
-            JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
-          ],
-        );
+        let newUser: any;
+        try {
+          const result = await this.pool.query(
+            `INSERT INTO user_profiles (
+              firebase_uid, google_id, email, name, avatar_url, bio, 
+              karma_points, join_date, is_active, last_active, 
+              city, country, interests, roles, email_verified, settings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text[], $14::text[], $15, $16::jsonb)
+            RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+            [
+              firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
+              googleIdToUse, // google_id (from Google, not Firebase UID)
+              normalizedEmail,
+              googleUser.name,
+              googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
+              'משתמש חדש בקארמה קומיוניטי',
+              0, // karma_points
+              nowIso, // join_date
+              true, // is_active
+              nowIso, // last_active
+              'ישראל', // city
+              'Israel', // country
+              [], // interests (empty array)
+              ['user'], // roles
+              googleUser.emailVerified || false, // email_verified
+              JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+            ],
+          );
+          newUser = result;
+        } catch (error: any) {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:650',message:'Insert with google_id failed, trying without',data:{error:error.message,normalizedEmail},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          // If google_id column doesn't exist, try without it
+          if (error.message && error.message.includes('google_id')) {
+            const result = await this.pool.query(
+              `INSERT INTO user_profiles (
+                firebase_uid, email, name, avatar_url, bio, 
+                karma_points, join_date, is_active, last_active, 
+                city, country, interests, roles, email_verified, settings
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+              RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+              [
+                firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
+                normalizedEmail,
+                googleUser.name,
+                googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
+                'משתמש חדש בקארמה קומיוניטי',
+                0, // karma_points
+                nowIso, // join_date
+                true, // is_active
+                nowIso, // last_active
+                'ישראל', // city
+                'Israel', // country
+                [], // interests (empty array)
+                ['user'], // roles
+                googleUser.emailVerified || false, // email_verified
+                JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+              ],
+            );
+            newUser = result;
+          } else {
+            throw error;
+          }
+        }
+        
+        const { rows: newUserRows } = newUser;
 
-        userId = newUser[0].id;
+        userId = newUserRows[0].id;
         userData = {
-          id: newUser[0].id,
-          email: newUser[0].email,
-          name: newUser[0].name,
-          avatar: newUser[0].avatar_url,
-          roles: newUser[0].roles || ['user'],
-          settings: newUser[0].settings || {},
-          createdAt: newUser[0].created_at,
-          lastActive: newUser[0].last_active,
+          id: newUserRows[0].id,
+          email: newUserRows[0].email,
+          name: newUserRows[0].name,
+          avatar: newUserRows[0].avatar_url,
+          roles: newUserRows[0].roles || ['user'],
+          settings: newUserRows[0].settings || {},
+          createdAt: newUserRows[0].created_at,
+          lastActive: newUserRows[0].last_active,
         };
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:680',message:'New user created',data:{userId:userData.id,userEmail:userData.email,userAvatar:userData.avatar},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
 
         // Clear statistics cache when new user is created
         await this.redisCache.clearStatsCaches();
@@ -684,6 +792,11 @@ export class AuthController {
 
       // Generate JWT tokens for the authenticated user
       const publicUser = this.toPublicUser(userData);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:794',message:'Returning public user',data:{userId:publicUser.id,userEmail:publicUser.email,userAvatar:publicUser.avatar,userDataAvatar:userData.avatar,hasAvatar:!!publicUser.avatar},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       const tokenPair = await this.jwtService.createTokenPair({
         id: publicUser.id,
         email: publicUser.email,
@@ -702,6 +815,10 @@ export class AuthController {
         user: publicUser,
       };
     } catch (error: any) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:704',message:'Google auth error caught',data:{errorMessage:error?.message,errorName:error?.name,errorStack:error?.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      
       // SECURITY: Generic error message, log details separately
       this.logger.error('Google authentication failed', {
         error: error?.message || String(error),

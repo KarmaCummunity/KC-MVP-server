@@ -216,9 +216,75 @@ export class DatabaseInit implements OnModuleInit {
         ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
       `);
 
+      // Ensure google_id column exists in user_profiles (for existing databases)
+      // This is now handled in schema.sql, but kept here for backward compatibility
+      try {
+        // Check if column exists first
+        const columnCheck = await client.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'user_profiles' AND column_name = 'google_id'
+        `);
+        
+        if (columnCheck.rows.length === 0) {
+          console.log('📝 google_id column does not exist, creating it...');
+          await client.query(`
+            ALTER TABLE user_profiles ADD COLUMN google_id TEXT;
+          `);
+          console.log('✅ google_id column created');
+        } else {
+          console.log('✅ google_id column already exists');
+        }
+        
+        // Add unique constraint separately if it doesn't exist
+        const constraintCheck = await client.query(`
+          SELECT conname 
+          FROM pg_constraint 
+          WHERE conname = 'user_profiles_google_id_key'
+        `);
+        
+        if (constraintCheck.rows.length === 0) {
+          console.log('📝 google_id unique constraint does not exist, creating it...');
+          await client.query(`
+            ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_google_id_key UNIQUE (google_id);
+          `);
+          console.log('✅ google_id unique constraint created');
+        } else {
+          console.log('✅ google_id unique constraint already exists');
+        }
+        
+        // Create index if it doesn't exist
+        const indexCheck = await client.query(`
+          SELECT indexname 
+          FROM pg_indexes 
+          WHERE tablename = 'user_profiles' AND indexname = 'idx_user_profiles_google_id'
+        `);
+        
+        if (indexCheck.rows.length === 0) {
+          console.log('📝 google_id index does not exist, creating it...');
+          await client.query(`
+            CREATE INDEX idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
+          `);
+          console.log('✅ google_id index created');
+        } else {
+          console.log('✅ google_id index already exists');
+        }
+        
+        console.log('✅ google_id column, constraint, and index ensured in user_profiles');
+      } catch (err: any) {
+        console.error('❌ Failed to add google_id column:', err.message);
+        console.error('❌ Error stack:', err.stack);
+        // Don't throw - continue with other operations
+      }
+
       // Create the firebase_uid index (also in schema.sql)
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+      `);
+
+      // Create the google_id index (also in schema.sql)
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
       `);
 
       // Run challenges schema

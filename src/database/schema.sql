@@ -11,6 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 CREATE TABLE IF NOT EXISTS user_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     firebase_uid TEXT UNIQUE, -- Firebase UID for authentication linking (optional, can be null)
+    google_id TEXT UNIQUE, -- Google ID (sub claim) for authentication linking (optional, can be null)
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
     phone VARCHAR(20),
@@ -285,11 +286,15 @@ CREATE TABLE IF NOT EXISTS user_notifications (
 
 -- Ensure firebase_uid column exists (for backward compatibility with existing databases)
 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
+-- Ensure google_id column exists (for backward compatibility with existing databases)
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE;
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));
 -- Create firebase_uid index
 CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+-- Create google_id index
+CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_roles ON user_profiles USING GIN (roles);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);

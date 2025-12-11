@@ -40,11 +40,12 @@ export class ChatController {
       return cached;
     }
 
-    // Look up in user_profiles by email or firebase_uid
+    // Look up in user_profiles by email, firebase_uid, google_id, or UUID
     const { rows: existingUsers } = await this.pool.query(`
       SELECT id FROM user_profiles 
       WHERE LOWER(email) = LOWER($1)
          OR firebase_uid = $1
+         OR google_id = $1
          OR id::text = $1
       LIMIT 1
     `, [normalizedUserId]);
