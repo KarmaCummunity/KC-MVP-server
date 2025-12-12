@@ -108,6 +108,7 @@ export class ItemsDeliveryService {
         OR up.firebase_uid = i.owner_id
       )
       WHERE 1=1
+      AND (i.is_deleted IS NULL OR i.is_deleted = FALSE)
     `;
     const params: any[] = [];
     let paramCount = 0;

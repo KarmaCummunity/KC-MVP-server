@@ -337,10 +337,13 @@ export class UsersController {
     }
 
     const user = rows[0];
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:339',message:'User data from database query',data:{userId:user.id,userEmail:user.email,userName:user.name,userBio:user.bio,userCity:user.city,userCountry:user.country,userBioType:typeof user.bio,userCityType:typeof user.city,userCountryType:typeof user.country,allUserKeys:Object.keys(user)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+    // #endregion
     await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
 
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:280',message:'Returning user data',data:{userId:user.id,userEmail:user.email,userFirebaseUid:user.firebase_uid,userGoogleId:user.google_id,userName:user.name},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:280',message:'Returning user data',data:{userId:user.id,userEmail:user.email,userFirebaseUid:user.firebase_uid,userGoogleId:user.google_id,userName:user.name,returnedBio:user.bio,returnedCity:user.city,returnedCountry:user.country},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
     // #endregion
     return { success: true, data: user };
   }
@@ -444,11 +447,15 @@ export class UsersController {
         FROM user_profiles WHERE id = $1
       `, [userId]);
 
-      // Clear cache
+      // Clear cache to ensure fresh data after update
       await this.redisCache.delete(`user_profile_${id}`);
       await this.redisCache.delete(`user_profile_${userId}`);
-
+      
       const updatedUser = updatedRows[0];
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:448',message:'Cache cleared after update',data:{id,userId,updatedBio:updatedUser.bio,updatedCity:updatedUser.city,updatedCountry:updatedUser.country},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+      // #endregion
       // Return user data in the expected format
       const user = {
         id: updatedUser.id,
