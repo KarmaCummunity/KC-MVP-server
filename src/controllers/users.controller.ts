@@ -35,7 +35,7 @@ export class UsersController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
 
   @Post('register')
@@ -49,7 +49,7 @@ export class UsersController {
       await client.query('BEGIN');
 
       const normalizedEmail = userData.email.toLowerCase().trim();
-      
+
       // Check if user already exists in user_profiles table
       const { rows: existingUsers } = await client.query(
         `SELECT id FROM user_profiles WHERE LOWER(email) = LOWER($1) LIMIT 1`,
@@ -157,7 +157,7 @@ export class UsersController {
   async loginUser(@Body() loginData: any) {
     try {
       const normalizedEmail = loginData.email.toLowerCase().trim();
-      
+
       // Use user_profiles table
       const { rows } = await this.pool.query(
         `SELECT id, email, name, phone, avatar_url, bio, password_hash, 
@@ -222,34 +222,34 @@ export class UsersController {
   @Get(':id')
   async getUserById(@Param('id') id: string) {
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:222',message:'getUserById called',data:{userId:id,userIdType:typeof id,userIdLength:id?.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:222', message: 'getUserById called', data: { userId: id, userIdType: typeof id, userIdLength: id?.length }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
     // #endregion
-    
+
     // Normalize email to lowercase for consistent lookup
     // This matches the normalization used in auth.controller.ts
-    const normalizedId = id.includes('@') 
-      ? String(id).trim().toLowerCase() 
+    const normalizedId = id.includes('@')
+      ? String(id).trim().toLowerCase()
       : id;
-    
+
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:230',message:'Normalized userId',data:{originalId:id,normalizedId,isEmail:id.includes('@')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:230', message: 'Normalized userId', data: { originalId: id, normalizedId, isEmail: id.includes('@') }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
     // #endregion
-    
+
     const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:237',message:'Returning cached user',data:{userId:normalizedId,cachedUserId:(cached as any)?.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:237', message: 'Returning cached user', data: { userId: normalizedId, cachedUserId: (cached as any)?.id }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
       // #endregion
       return { success: true, data: cached };
     }
 
     // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:242',message:'Querying database for user',data:{normalizedId,queryType:'id/email/firebase_uid/google_id'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:242', message: 'Querying database for user', data: { normalizedId, queryType: 'id/email/firebase_uid/google_id' }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
     // #endregion
-    
+
     // Try query with google_id first, if it fails (column doesn't exist), try without it
     let rows: any[];
     try {
@@ -286,7 +286,7 @@ export class UsersController {
       rows = result.rows;
     } catch (error: any) {
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:275',message:'Query failed, trying without google_id',data:{error:error.message,normalizedId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:275', message: 'Query failed, trying without google_id', data: { error: error.message, normalizedId }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
       // #endregion
       // If google_id column doesn't exist, try without it
       if (error.message && error.message.includes('google_id')) {
@@ -326,24 +326,24 @@ export class UsersController {
     }
 
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:268',message:'Database query result',data:{normalizedId,rowsFound:rows.length,userId:rows[0]?.id,userEmail:rows[0]?.email,userFirebaseUid:rows[0]?.firebase_uid,userGoogleId:rows[0]?.google_id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:268', message: 'Database query result', data: { normalizedId, rowsFound: rows.length, userId: rows[0]?.id, userEmail: rows[0]?.email, userFirebaseUid: rows[0]?.firebase_uid, userGoogleId: rows[0]?.google_id }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
     // #endregion
 
     if (rows.length === 0) {
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:272',message:'User not found in database',data:{normalizedId,searchedBy:'id/email/firebase_uid/google_id'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:272', message: 'User not found in database', data: { normalizedId, searchedBy: 'id/email/firebase_uid/google_id' }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
       // #endregion
       return { success: false, error: 'User not found' };
     }
 
     const user = rows[0];
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:339',message:'User data from database query',data:{userId:user.id,userEmail:user.email,userName:user.name,userBio:user.bio,userCity:user.city,userCountry:user.country,userBioType:typeof user.bio,userCityType:typeof user.city,userCountryType:typeof user.country,allUserKeys:Object.keys(user)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:339', message: 'User data from database query', data: { userId: user.id, userEmail: user.email, userName: user.name, userBio: user.bio, userCity: user.city, userCountry: user.country, userBioType: typeof user.bio, userCityType: typeof user.city, userCountryType: typeof user.country, allUserKeys: Object.keys(user) }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
     // #endregion
     await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
 
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:280',message:'Returning user data',data:{userId:user.id,userEmail:user.email,userFirebaseUid:user.firebase_uid,userGoogleId:user.google_id,userName:user.name,returnedBio:user.bio,returnedCity:user.city,returnedCountry:user.country},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:280', message: 'Returning user data', data: { userId: user.id, userEmail: user.email, userFirebaseUid: user.firebase_uid, userGoogleId: user.google_id, userName: user.name, returnedBio: user.bio, returnedCity: user.city, returnedCountry: user.country }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
     // #endregion
     return { success: true, data: user };
   }
@@ -450,11 +450,11 @@ export class UsersController {
       // Clear cache to ensure fresh data after update
       await this.redisCache.delete(`user_profile_${id}`);
       await this.redisCache.delete(`user_profile_${userId}`);
-      
+
       const updatedUser = updatedRows[0];
-      
+
       // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'users.controller.ts:448',message:'Cache cleared after update',data:{id,userId,updatedBio:updatedUser.bio,updatedCity:updatedUser.city,updatedCountry:updatedUser.country},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:448', message: 'Cache cleared after update', data: { id, userId, updatedBio: updatedUser.bio, updatedCity: updatedUser.city, updatedCountry: updatedUser.country }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'G' }) }).catch(() => { });
       // #endregion
       // Return user data in the expected format
       const user = {
@@ -503,7 +503,7 @@ export class UsersController {
     // TODO: Implement cache warming for frequently accessed data
     const cacheKey = `users_list_${city || 'all'}_${search || ''}_${limit || '50'}_${offset || '0'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -512,10 +512,10 @@ export class UsersController {
     // טבלה מאוחדת: כל המשתמשים מ-user_profiles ו-users (legacy)
     const params: any[] = [];
     let paramCount = 0;
-    
+
     // Build WHERE conditions for filtering
     let whereConditions = '';
-    
+
     if (city) {
       paramCount++;
       whereConditions += ` AND city ILIKE $${paramCount}`;
@@ -531,7 +531,7 @@ export class UsersController {
     // Build pagination
     let limitClause = '';
     let offsetClause = '';
-    
+
     if (limit) {
       paramCount++;
       limitClause = `LIMIT $${paramCount}`;
@@ -584,7 +584,7 @@ export class UsersController {
   async getUserActivities(@Param('id') userId: string, @Query('limit') limit?: string) {
     const cacheKey = `user_activities_${userId}_${limit || '50'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -611,7 +611,7 @@ export class UsersController {
   async getUserStats(@Param('id') userId: string) {
     const cacheKey = `user_stats_${userId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -620,7 +620,7 @@ export class UsersController {
     const donationStatsKey = `user_stats_donations_${userId}`;
     const rideStatsKey = `user_stats_rides_${userId}`;
     const bookingStatsKey = `user_stats_bookings_${userId}`;
-    
+
     const cachedStats = await this.redisCache.getMultiple([
       donationStatsKey,
       rideStatsKey,
@@ -795,7 +795,7 @@ export class UsersController {
   async getUsersSummary() {
     const cacheKey = 'users_summary_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -823,31 +823,135 @@ export class UsersController {
    * Resolve user ID from firebase_uid, google_id, or email to UUID
    * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
    */
+  /**
+   * Resolve user ID from firebase_uid, google_id, or email to UUID
+   * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
+   * It performs SMART LINKING: if a user exists by email but lacks the external ID, it updates the record.
+   */
   @Post('resolve-id')
   async resolveUserId(@Body() body: { firebase_uid?: string; google_id?: string; email?: string }) {
     const { firebase_uid, google_id, email } = body;
+
+    // Use a clearer logging for debugging
+    console.log('🔍 ResolveUserId called with:', { firebase_uid, google_id, email });
 
     if (!firebase_uid && !google_id && !email) {
       return { success: false, error: 'Must provide firebase_uid, google_id, or email' };
     }
 
+    const client = await this.pool.connect();
     try {
-      const query = `
-        SELECT id, email, name, avatar_url, roles, settings, created_at, last_active
-        FROM user_profiles 
-        WHERE ($1::text IS NULL OR firebase_uid = $1)
-          AND ($2::text IS NULL OR google_id = $2)
-          AND ($3::text IS NULL OR LOWER(email) = LOWER($3))
-        LIMIT 1
-      `;
+      await client.query('BEGIN');
 
-      const { rows } = await this.pool.query(query, [firebase_uid || null, google_id || null, email || null]);
+      // 1. Try to find user by ANY of the identifiers
+      // Priorities: Database UUID (not passed here), Firebase UID, Google ID, Email
+      let query = `
+        SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid, google_id
+        FROM user_profiles 
+        WHERE false 
+      `;
+      const params: any[] = [];
+      let paramCount = 1;
+
+      if (firebase_uid) {
+        query += ` OR firebase_uid = $${paramCount++}`;
+        params.push(firebase_uid);
+      }
+      if (google_id) {
+        // Only if google_id column exists (handled by try/catch in query execution if column missing, but we assume it exists from init)
+        query += ` OR google_id = $${paramCount++}`;
+        params.push(google_id);
+      }
+      if (email) {
+        query += ` OR LOWER(email) = LOWER($${paramCount++})`;
+        params.push(email);
+      }
+
+      query += ` LIMIT 1`;
+
+      let rows: any[] = [];
+      try {
+        const result = await client.query(query, params);
+        rows = result.rows;
+      } catch (err: any) {
+        // Fallback if google_id column doesn't exist yet
+        if (err.message?.includes('google_id')) {
+          console.warn('⚠️ Google ID column missing in resolve-id, retrying without it');
+          // Retry without google_id logic
+          let fallbackQuery = `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid FROM user_profiles WHERE false`;
+          const fallbackParams: any[] = [];
+          let fbCount = 1;
+          if (firebase_uid) { fallbackQuery += ` OR firebase_uid = $${fbCount++}`; fallbackParams.push(firebase_uid); }
+          if (email) { fallbackQuery += ` OR LOWER(email) = LOWER($${fbCount++})`; fallbackParams.push(email); }
+
+          const fallbackResult = await client.query(fallbackQuery, fallbackParams);
+          rows = fallbackResult.rows;
+        } else {
+          throw err;
+        }
+      }
 
       if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        console.log('❌ User not found for resolution');
         return { success: false, error: 'User not found' };
       }
 
       const user = rows[0];
+      let needsUpdate = false;
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+      let upCount = 1;
+
+      // 2. Alert on account linking (found by email, but missing external ID)
+      if (firebase_uid && user.firebase_uid !== firebase_uid) {
+        if (!user.firebase_uid) {
+          console.log(`🔗 Linking User ${user.email} to Firebase UID: ${firebase_uid}`);
+          updateFields.push(`firebase_uid = $${upCount++}`);
+          updateValues.push(firebase_uid);
+          needsUpdate = true;
+        } else {
+          console.warn(`⚠️ Conflict: User ${user.email} has different Firebase UID (${user.firebase_uid}) than provided (${firebase_uid})`);
+        }
+      }
+
+      if (google_id && user.google_id !== google_id) {
+        // Check if row has google_id property (it might not if column missing)
+        // We assume if we are here, we want to try updating it.
+        if (!user.google_id) {
+          console.log(`🔗 Linking User ${user.email} to Google ID: ${google_id}`);
+          updateFields.push(`google_id = $${upCount++}`);
+          updateValues.push(google_id);
+          needsUpdate = true;
+        }
+      }
+
+      if (needsUpdate) {
+        try {
+          // Append ID for WHERE clause
+          updateValues.push(user.id);
+          const updateQuery = `
+            UPDATE user_profiles 
+            SET ${updateFields.join(', ')}, updated_at = NOW()
+            WHERE id = $${upCount}
+          `;
+          await client.query(updateQuery, updateValues);
+          console.log('✅ User linked successfully');
+        } catch (updateErr) {
+          console.error('❌ Failed to link user account:', updateErr);
+          // Non-fatal? Maybe. But safer to rollback if linking fails.
+          // actually, if we fail to link, we should probably still return the user found by email, 
+          // but logging the error is important.
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // Clear cache for this user
+      await this.redisCache.delete(`user_profile_${user.id}`);
+      if (user.firebase_uid) await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
+      if (user.email) await this.redisCache.delete(`user_profile_${user.email}`);
+
       return {
         success: true,
         user: {
@@ -861,8 +965,13 @@ export class UsersController {
           lastActive: user.last_active,
         },
       };
+
     } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error in resolveUserId:', error);
       return { success: false, error: error.message || 'Failed to resolve user ID' };
+    } finally {
+      client.release();
     }
   }
 }
