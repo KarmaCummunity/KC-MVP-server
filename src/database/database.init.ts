@@ -933,9 +933,9 @@ export class DatabaseInit implements OnModuleInit {
 
       // Create a test user for API testing
       await client.query(`
-        INSERT INTO user_profiles (id, email, name, is_active)
-        VALUES ('550e8400-e29b-41d4-a716-446655440000', 'test@example.com', 'Test User', true)
-        ON CONFLICT (id) DO UPDATE SET
+        INSERT INTO user_profiles (firebase_uid, email, name, is_active)
+        VALUES ('test_user_firebase_uid_550e8400', 'test@example.com', 'Test User', true)
+        ON CONFLICT (firebase_uid) DO UPDATE SET
           email = EXCLUDED.email,
           name = EXCLUDED.name,
           is_active = EXCLUDED.is_active,

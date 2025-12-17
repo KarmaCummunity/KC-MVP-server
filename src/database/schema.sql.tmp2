@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(255),
     type VARCHAR(20) DEFAULT 'direct', -- direct, group
-    participants TEXT[] NOT NULL, -- Array of participant user IDs (UUIDs)
+    participants UUID[] NOT NULL, -- Array of participant user IDs (UUIDs)
     created_by TEXT, -- UUID to match user_profiles.id type
     last_message_id UUID, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
     last_message_at TIMESTAMPTZ DEFAULT NOW(),
@@ -371,7 +371,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority VARCHAR(10) NOT NULL DEFAULT 'medium', -- low, medium, high
     category VARCHAR(50), -- development, marketing, operations, etc.
     due_date TIMESTAMPTZ,
-    assignees TEXT[] DEFAULT ARRAY[]::TEXT[], -- UUID[] to match user_profiles.id type
+    assignees UUID[] DEFAULT ARRAY[]::UUID[], -- UUID[] to match user_profiles.id type
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
     created_by TEXT, -- TEXT (not UUID) to support Firebase UIDs and other string-based identifiers

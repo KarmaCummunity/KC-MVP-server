@@ -95,8 +95,8 @@ export class UsersController {
 
       // Fetch the created user to return full data
       const { rows: createdUser } = await client.query(
-        `SELECT firebase_uid, email, name, phone, avatar_url, bio, city, country, interests, roles, settings, created_at
-         FROM user_profiles WHERE firebase_uid = $1`,
+        `SELECT id, email, name, phone, avatar_url, bio, city, country, interests, roles, settings, created_at
+         FROM user_profiles WHERE id = $1`,
         [userId]
       );
 
@@ -337,7 +337,7 @@ export class UsersController {
 
       // Get existing user data from user_profiles
       const { rows: existingRows } = await client.query(`
-        SELECT firebase_uid, email, name, phone, avatar_url, bio, password_hash,
+        SELECT id, email, name, phone, avatar_url, bio, password_hash,
                city, country, interests, settings, roles, created_at
         FROM user_profiles 
         WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR firebase_uid = $1 OR google_id = $1
@@ -407,14 +407,14 @@ export class UsersController {
         await client.query(`
           UPDATE user_profiles 
           SET ${updateFields.join(', ')}
-          WHERE firebase_uid = $${paramCount}
+          WHERE id = $${paramCount}
         `, updateValues);
       } else {
         // Only update last_active
         await client.query(`
           UPDATE user_profiles 
           SET last_active = NOW(), updated_at = NOW()
-          WHERE firebase_uid = $1
+          WHERE id = $1
         `, [userId]);
       }
 
@@ -422,10 +422,10 @@ export class UsersController {
 
       // Fetch updated user
       const { rows: updatedRows } = await client.query(`
-        SELECT firebase_uid, email, name, phone, avatar_url, bio, karma_points, join_date,
+        SELECT id, email, name, phone, avatar_url, bio, karma_points, join_date,
                is_active, last_active, city, country, interests, roles, 
                posts_count, followers_count, following_count, email_verified, settings, created_at
-        FROM user_profiles WHERE firebase_uid = $1
+        FROM user_profiles WHERE id = $1
       `, [userId]);
 
       // Clear cache to ensure fresh data after update
@@ -530,7 +530,7 @@ export class UsersController {
     // Main query: Get users from user_profiles only (legacy users table no longer used)
     const query = `
       SELECT 
-        firebase_uid as id,
+        id::text as id,
         COALESCE(name, 'ללא שם') as name,
         COALESCE(avatar_url, '') as avatar_url,
         COALESCE(city, '') as city,
@@ -690,7 +690,7 @@ export class UsersController {
         SET followers_count = (
           SELECT COUNT(*) FROM user_follows WHERE following_id = user_profiles.id
         )
-        WHERE firebase_uid = $1
+        WHERE id = $1
       `, [userId]);
 
       await client.query(`
@@ -698,7 +698,7 @@ export class UsersController {
         SET following_count = (
           SELECT COUNT(*) FROM user_follows WHERE follower_id = user_profiles.id
         )
-        WHERE firebase_uid = $1
+        WHERE id = $1
       `, [followData.follower_id]);
 
       // Track activity
@@ -745,7 +745,7 @@ export class UsersController {
         SET followers_count = (
           SELECT COUNT(*) FROM user_follows WHERE following_id = user_profiles.id
         )
-        WHERE firebase_uid = $1
+        WHERE id = $1
       `, [userId]);
 
       await client.query(`
@@ -753,7 +753,7 @@ export class UsersController {
         SET following_count = (
           SELECT COUNT(*) FROM user_follows WHERE follower_id = user_profiles.id
         )
-        WHERE firebase_uid = $1
+        WHERE id = $1
       `, [unfollowData.follower_id]);
 
       await client.query('COMMIT');
@@ -827,7 +827,7 @@ export class UsersController {
       // 1. Try to find user by ANY of the identifiers
       // Priorities: Database UUID (not passed here), Firebase UID, Google ID, Email
       let query = `
-        SELECT firebase_uid, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid, google_id
+        SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid, google_id
         FROM user_profiles 
         WHERE false 
       `;
@@ -859,7 +859,7 @@ export class UsersController {
         if (err.message?.includes('google_id')) {
           console.warn('⚠️ Google ID column missing in resolve-id, retrying without it');
           // Retry without google_id logic
-          let fallbackQuery = `SELECT firebase_uid, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid FROM user_profiles WHERE false`;
+          let fallbackQuery = `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid FROM user_profiles WHERE false`;
           const fallbackParams: any[] = [];
           let fbCount = 1;
           if (firebase_uid) { fallbackQuery += ` OR firebase_uid = $${fbCount++}`; fallbackParams.push(firebase_uid); }
@@ -914,7 +914,7 @@ export class UsersController {
           const updateQuery = `
             UPDATE user_profiles 
             SET ${updateFields.join(', ')}, updated_at = NOW()
-            WHERE firebase_uid = $${upCount}
+            WHERE id = $${upCount}
           `;
           await client.query(updateQuery, updateValues);
           console.log('✅ User linked successfully');
@@ -929,7 +929,7 @@ export class UsersController {
       await client.query('COMMIT');
 
       // Clear cache for this user
-      await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
+      await this.redisCache.delete(`user_profile_${user.id}`);
       if (user.firebase_uid) await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
       if (user.email) await this.redisCache.delete(`user_profile_${user.email}`);
 
