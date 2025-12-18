@@ -31,13 +31,13 @@ export class StatsController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   @Get('community')
   // שינוי: הוספת תמיכה ב-forceRefresh parameter לטעינה מחדש של נתונים
   // Change: Added support for forceRefresh parameter to reload data
   async getCommunityStats(
-    @Query('city') city?: string, 
+    @Query('city') city?: string,
     @Query('period') period?: string,
     @Query('forceRefresh') forceRefresh?: string
   ) {
@@ -46,13 +46,13 @@ export class StatsController {
     // TODO: Add proper cache key generation utility to prevent key collisions
     // TODO: Add comprehensive error handling for cache operations
     const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
-    
+
     // Only use cache if forceRefresh is not true
     // שינוי: תמיכה ב-forceRefresh לדילוג על cache וטעינה מחדש מהמסד נתונים
     // Change: Support for forceRefresh to skip cache and reload from database
     if (forceRefresh !== 'true') {
       const cached = await this.redisCache.get(cacheKey);
-      
+
       if (cached) {
         return { success: true, data: cached };
       }
@@ -121,7 +121,7 @@ export class StatsController {
   // נקודת קצה קלת משקל לבדיקה אם הסטטיסטיקות השתנו
   async getCommunityStatsVersion(@Query('city') city?: string) {
     const cacheKey = `community_stats_version_${city || 'global'}`;
-    
+
     // Check cache first (1 minute TTL for version check)
     const cached = await this.redisCache.get(cacheKey);
     if (cached) {
@@ -134,17 +134,17 @@ export class StatsController {
       FROM community_stats
       ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
     `;
-    
+
     const params = city ? [city] : [];
     const { rows } = await this.pool.query(query, params);
-    
+
     // Create version hash from timestamp
     const lastUpdate = rows[0]?.last_update || new Date();
     const version = new Date(lastUpdate).getTime().toString();
-    
+
     // Cache for 1 minute
     await this.redisCache.set(cacheKey, version, 60);
-    
+
     return { success: true, version };
   }
 
@@ -152,7 +152,7 @@ export class StatsController {
   async getCommunityTrends(@Query('stat_type') statType: string, @Query('city') city?: string, @Query('days') days?: string) {
     const cacheKey = `community_trends_${statType}_${city || 'global'}_${days || '30'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -185,7 +185,7 @@ export class StatsController {
   async getStatsByCity(@Query('stat_type') statType?: string) {
     const cacheKey = `city_stats_${statType || 'all'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -290,7 +290,7 @@ export class StatsController {
   async getCategoryAnalytics() {
     const cacheKey = 'category_analytics';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -345,7 +345,7 @@ export class StatsController {
   async getUserAnalytics() {
     const cacheKey = 'user_analytics';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -403,7 +403,7 @@ export class StatsController {
   async getDashboardStats() {
     const cacheKey = 'dashboard_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -419,7 +419,7 @@ export class StatsController {
       FROM user_profiles
       WHERE email IS NOT NULL AND email <> ''
     `);
-    
+
     const metrics = await this.pool.query(`
       SELECT 
         -- Today's stats
@@ -442,14 +442,31 @@ export class StatsController {
       FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
-    
-    // Merge user stats with other metrics
+
+    // Merge user stats with other metrics and convert all to numbers
     const mergedMetrics = {
-      ...metrics.rows[0],
-      new_users_today: allUsersJoinDate.rows[0].new_users_today,
-      new_users_week: allUsersJoinDate.rows[0].new_users_week,
-      new_users_month: allUsersJoinDate.rows[0].new_users_month,
-      total_users: allUsersJoinDate.rows[0].total_users,
+      // Today's stats
+      donations_today: Number(metrics.rows[0].donations_today || 0),
+      rides_today: Number(metrics.rows[0].rides_today || 0),
+
+      // This week's stats
+      donations_week: Number(metrics.rows[0].donations_week || 0),
+      rides_week: Number(metrics.rows[0].rides_week || 0),
+
+      // This month's stats
+      donations_month: Number(metrics.rows[0].donations_month || 0),
+      rides_month: Number(metrics.rows[0].rides_month || 0),
+
+      // Total stats
+      total_donations: Number(metrics.rows[0].total_donations || 0),
+      total_rides: Number(metrics.rows[0].total_rides || 0),
+      total_money_donated: Number(metrics.rows[0].total_money_donated || 0),
+
+      // User stats
+      new_users_today: Number(allUsersJoinDate.rows[0].new_users_today || 0),
+      new_users_week: Number(allUsersJoinDate.rows[0].new_users_week || 0),
+      new_users_month: Number(allUsersJoinDate.rows[0].new_users_month || 0),
+      total_users: Number(allUsersJoinDate.rows[0].total_users || 0),
     };
 
     // Active users - from user_profiles only
@@ -462,6 +479,13 @@ export class StatsController {
       WHERE email IS NOT NULL AND email <> ''
         AND is_active = true
     `);
+
+    // Convert active users to numbers
+    const activeUsersData = {
+      daily_active: Number(activeUsers.rows[0].daily_active || 0),
+      weekly_active: Number(activeUsers.rows[0].weekly_active || 0),
+      monthly_active: Number(activeUsers.rows[0].monthly_active || 0),
+    };
 
     // Top categories
     const topCategories = await this.pool.query(`
@@ -477,10 +501,17 @@ export class StatsController {
       LIMIT 5
     `);
 
+    // Convert category counts to numbers
+    const topCategoriesData = topCategories.rows.map(cat => ({
+      name_he: cat.name_he,
+      icon: cat.icon,
+      donation_count: Number(cat.donation_count || 0),
+    }));
+
     const dashboard = {
       metrics: mergedMetrics,
-      active_users: activeUsers.rows[0],
-      top_categories: topCategories.rows
+      active_users: activeUsersData,
+      top_categories: topCategoriesData
     };
 
     await this.redisCache.set(cacheKey, dashboard, 5 * 60); // 5 minutes cache
@@ -492,7 +523,7 @@ export class StatsController {
     // This endpoint provides frequently updated stats with short cache
     const cacheKey = 'real_time_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -515,7 +546,7 @@ export class StatsController {
       FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
-    
+
     // Users online - from user_profiles only
     const usersOnline = await this.pool.query(`
       SELECT 
@@ -523,7 +554,7 @@ export class StatsController {
       FROM user_profiles
       WHERE email IS NOT NULL AND email <> ''
     `);
-    
+
     const currentActive = {
       ...donationsRides.rows[0],
       users_online: usersOnline.rows[0].users_online,
@@ -545,14 +576,14 @@ export class StatsController {
     // TODO: Add proper data anonymization for sensitive data
     const cacheKey = `stat_details_${statType}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
     let query = '';
     let params: any[] = [];
-    
+
     try {
       switch (statType) {
         case 'siteVisits':
@@ -660,10 +691,10 @@ export class StatsController {
       }
 
       const { rows } = await this.pool.query(query, params);
-      
+
       // Cache for 5 minutes
       await this.redisCache.set(cacheKey, rows, 5 * 60);
-      
+
       return { success: true, data: rows };
     } catch (error) {
       console.error('Get stat details error:', error);
@@ -919,24 +950,24 @@ export class StatsController {
     Object.assign(stats, computed);
 
     // Add derived metrics after base stats are set
-    stats.avg_donation_amount = { 
-      value: stats.money_donations?.value > 0 ? Math.round(stats.total_money_donated.value / stats.money_donations.value) : 0, 
-      days_tracked: 1 
+    stats.avg_donation_amount = {
+      value: stats.money_donations?.value > 0 ? Math.round(stats.total_money_donated.value / stats.money_donations.value) : 0,
+      days_tracked: 1
     };
-    stats.avg_seats_per_ride = { 
-      value: stats.total_rides?.value > 0 ? Math.round(stats.total_seats_offered.value / stats.total_rides.value) : 0, 
-      days_tracked: 1 
+    stats.avg_seats_per_ride = {
+      value: stats.total_rides?.value > 0 ? Math.round(stats.total_seats_offered.value / stats.total_rides.value) : 0,
+      days_tracked: 1
     };
-    stats.user_engagement_rate = { 
-      value: stats.total_users?.value > 0 ? Math.round((stats.weekly_active_users.value / stats.total_users.value) * 100) : 0, 
-      days_tracked: 1 
+    stats.user_engagement_rate = {
+      value: stats.total_users?.value > 0 ? Math.round((stats.weekly_active_users.value / stats.total_users.value) * 100) : 0,
+      days_tracked: 1
     };
 
     // Legacy compatibility
     if (!stats.total_contributions) {
-      stats.total_contributions = { 
-        value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0), 
-        days_tracked: 1 
+      stats.total_contributions = {
+        value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0),
+        days_tracked: 1
       };
     }
   }
@@ -946,10 +977,10 @@ export class StatsController {
     try {
       // Delete all community_stats records
       await this.pool.query(`DELETE FROM community_stats`);
-      
+
       // Clear all stats-related caches
       await this.clearStatsCaches();
-      
+
       return { success: true, message: 'Community statistics reset successfully' };
     } catch (error) {
       console.error('Reset community stats error:', error);
