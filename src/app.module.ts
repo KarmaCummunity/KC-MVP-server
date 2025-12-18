@@ -51,6 +51,7 @@ import { ChallengesController } from './controllers/challenges.controller';
 import { ItemsDeliveryController } from './controllers/items-delivery.controller';
 import { ItemsDeliveryService } from './controllers/items-delivery.service';
 import { CommunityMembersController } from './controllers/community-members.controller';
+import { SyncController } from './controllers/sync.controller';
 
 @Module({
   imports: [
@@ -98,6 +99,7 @@ import { CommunityMembersController } from './controllers/community-members.cont
     TasksController,       // Task management
     ChallengesController,  // Personal challenges/timers for admins
     CommunityMembersController, // Community members management
+    SyncController,        // Firebase users sync
     
     // Testing (TODO: Remove in production)
     RedisTestController,   // Redis connectivity testing

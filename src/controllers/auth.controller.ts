@@ -210,6 +210,33 @@ export class AuthController {
     return String(email || '').trim().toLowerCase();
   }
 
+  /**
+   * Get roles for a user based on their email
+   * Checks against admin emails list from environment variable
+   */
+  private getRolesForEmail(email: string): string[] {
+    const normalizedEmail = this.normalizeEmail(email);
+    
+    // Super admin email - hardcoded for main admin
+    const SUPER_ADMIN_EMAIL = 'navesarussi@gmail.com';
+    const isSuperAdmin = normalizedEmail === SUPER_ADMIN_EMAIL.toLowerCase();
+    
+    // Grant admin role by env config (comma-separated emails)
+    const adminEmailsEnv = (process.env.ADMIN_EMAILS || process.env.EXPO_PUBLIC_ADMIN_EMAILS || '').toLowerCase();
+    const adminEmails = adminEmailsEnv
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    const isAdmin = adminEmails.includes(normalizedEmail) || isSuperAdmin;
+    
+    if (isAdmin) {
+      // Super admin gets super_admin role, others get admin
+      return isSuperAdmin ? ['super_admin'] : ['admin'];
+    }
+    
+    return ['user'];
+  }
+
   private toPublicUser(rowData: any): PublicUser {
     const data = rowData || {};
     const { passwordHash, ...rest } = data;
@@ -310,6 +337,9 @@ export class AuthController {
       const passwordHash = await argon2.hash(registerDto.password);
       const nowIso = new Date().toISOString();
 
+      // Get roles based on email (admin check)
+      const roles = this.getRolesForEmail(normalized);
+
       // Insert into user_profiles with UUID
       const { rows: newUser } = await this.pool.query(
         `INSERT INTO user_profiles (
@@ -332,7 +362,7 @@ export class AuthController {
           'ישראל', // city
           'Israel', // country
           [], // interests (empty array)
-          ['user'], // roles
+          roles, // roles (determined by getRolesForEmail)
           false, // email_verified
           JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
         ],
@@ -425,11 +455,23 @@ export class AuthController {
         return { error: 'Invalid email or password' };
       }
 
-      // Update lastActive
-      await this.pool.query(
-        `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW() WHERE id = $1`,
-        [rows[0].id],
-      );
+      // Get roles based on email (admin check) and update if needed
+      const expectedRoles = this.getRolesForEmail(normalized);
+      const currentRoles = rows[0].roles || ['user'];
+      const rolesChanged = JSON.stringify(currentRoles.sort()) !== JSON.stringify(expectedRoles.sort());
+
+      // Update lastActive and roles if they changed
+      if (rolesChanged) {
+        await this.pool.query(
+          `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW(), roles = $1 WHERE id = $2`,
+          [expectedRoles, rows[0].id],
+        );
+      } else {
+        await this.pool.query(
+          `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW() WHERE id = $1`,
+          [rows[0].id],
+        );
+      }
 
       // Build user data object
       const userData = {
@@ -437,7 +479,7 @@ export class AuthController {
         email: rows[0].email,
         name: rows[0].name,
         avatar: rows[0].avatar_url,
-        roles: rows[0].roles || ['user'],
+        roles: rolesChanged ? expectedRoles : (rows[0].roles || ['user']),
         settings: rows[0].settings || {},
         createdAt: rows[0].created_at,
         lastActive: new Date().toISOString(),
@@ -471,16 +513,10 @@ export class AuthController {
   @Post('google')
   @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 Google auth attempts per minute
   async googleAuth(@Body() googleAuthDto: GoogleAuthDto) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:473',message:'Google auth started',data:{hasIdToken:!!googleAuthDto.idToken,hasAccessToken:!!googleAuthDto.accessToken,hasFirebaseUid:!!googleAuthDto.firebaseUid},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     try {
       // Validate input
       const errors = await validate(googleAuthDto);
       if (errors.length > 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:477',message:'Validation failed',data:{errorsCount:errors.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
         throw new BadRequestException('Invalid token format');
       }
 
@@ -596,9 +632,6 @@ export class AuthController {
       const googleIdToUse = googleUser.googleId || googleUser.id; // Google ID (sub claim)
       const firebaseUidToUse = firebaseUid; // Only Firebase UID, not Google ID
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:590',message:'Checking for existing user',data:{normalizedEmail,googleIdToUse,firebaseUidToUse},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
 
       // Check if user exists by email, firebase_uid, or google_id
       let rows: any[];
@@ -612,9 +645,6 @@ export class AuthController {
         );
         rows = result.rows;
       } catch (error: any) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:598',message:'Query with google_id failed, trying without',data:{error:error.message,normalizedEmail},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         // If google_id column doesn't exist, try without it
         if (error.message && error.message.includes('google_id')) {
           const result = await this.pool.query(
@@ -633,45 +663,78 @@ export class AuthController {
       let userData: any;
       let userId: string;
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:605',message:'User lookup result',data:{rowsFound:rows.length,userId:rows[0]?.id,userEmail:rows[0]?.email,hasAvatar:!!rows[0]?.avatar_url},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
 
       if (rows.length > 0) {
         // Update existing user
         userId = rows[0].id;
+        
+        // Get roles based on email (admin check) and update if needed
+        const expectedRoles = this.getRolesForEmail(normalizedEmail);
+        const currentRoles = rows[0].roles || ['user'];
+        const rolesChanged = JSON.stringify(currentRoles.sort()) !== JSON.stringify(expectedRoles.sort());
+        
         try {
-          await this.pool.query(
-            `UPDATE user_profiles 
-             SET name = $1, avatar_url = $2, firebase_uid = $3, google_id = $4, last_active = $5, updated_at = NOW()
-             WHERE id = $6`,
-            [
-              googleUser.name,
-              googleUser.avatar || rows[0].avatar_url,
-              firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
-              googleIdToUse, // Store Google ID separately
-              nowIso,
-              userId,
-            ],
-          );
-        } catch (error: any) {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:620',message:'Update with google_id failed, trying without',data:{error:error.message,userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
-          // If google_id column doesn't exist, try without it
-          if (error.message && error.message.includes('google_id')) {
+          if (rolesChanged) {
             await this.pool.query(
               `UPDATE user_profiles 
-               SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
-               WHERE id = $5`,
+               SET name = $1, avatar_url = $2, firebase_uid = $3, google_id = $4, last_active = $5, roles = $6, updated_at = NOW()
+               WHERE id = $7`,
               [
                 googleUser.name,
                 googleUser.avatar || rows[0].avatar_url,
                 firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                googleIdToUse, // Store Google ID separately
+                nowIso,
+                expectedRoles,
+                userId,
+              ],
+            );
+          } else {
+            await this.pool.query(
+              `UPDATE user_profiles 
+               SET name = $1, avatar_url = $2, firebase_uid = $3, google_id = $4, last_active = $5, updated_at = NOW()
+               WHERE id = $6`,
+              [
+                googleUser.name,
+                googleUser.avatar || rows[0].avatar_url,
+                firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                googleIdToUse, // Store Google ID separately
                 nowIso,
                 userId,
               ],
             );
+          }
+        } catch (error: any) {
+          // If google_id column doesn't exist, try without it
+          if (error.message && error.message.includes('google_id')) {
+            if (rolesChanged) {
+              await this.pool.query(
+                `UPDATE user_profiles 
+                 SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, roles = $5, updated_at = NOW()
+                 WHERE id = $6`,
+                [
+                  googleUser.name,
+                  googleUser.avatar || rows[0].avatar_url,
+                  firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                  nowIso,
+                  expectedRoles,
+                  userId,
+                ],
+              );
+            } else {
+              await this.pool.query(
+                `UPDATE user_profiles 
+                 SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
+                 WHERE id = $5`,
+                [
+                  googleUser.name,
+                  googleUser.avatar || rows[0].avatar_url,
+                  firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                  nowIso,
+                  userId,
+                ],
+              );
+            }
           } else {
             throw error;
           }
@@ -689,7 +752,7 @@ export class AuthController {
           email: updatedRows[0].email,
           name: updatedRows[0].name,
           avatar: updatedRows[0].avatar_url,
-          roles: updatedRows[0].roles || ['user'],
+          roles: rolesChanged ? expectedRoles : (updatedRows[0].roles || ['user']),
           settings: updatedRows[0].settings || {},
           createdAt: updatedRows[0].created_at,
           lastActive: updatedRows[0].last_active,
@@ -699,6 +762,9 @@ export class AuthController {
         await this.redisCache.clearStatsCaches();
       } else {
         // Create new user with UUID
+        // Get roles based on email (admin check)
+        const roles = this.getRolesForEmail(normalizedEmail);
+        
         let newUser: any;
         try {
           const result = await this.pool.query(
@@ -722,16 +788,13 @@ export class AuthController {
               'ישראל', // city
               'Israel', // country
               [], // interests (empty array)
-              ['user'], // roles
+              roles, // roles (determined by getRolesForEmail)
               googleUser.emailVerified || false, // email_verified
               JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
             ],
           );
           newUser = result;
         } catch (error: any) {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:650',message:'Insert with google_id failed, trying without',data:{error:error.message,normalizedEmail},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
           // If google_id column doesn't exist, try without it
           if (error.message && error.message.includes('google_id')) {
             const result = await this.pool.query(
@@ -754,7 +817,7 @@ export class AuthController {
                 'ישראל', // city
                 'Israel', // country
                 [], // interests (empty array)
-                ['user'], // roles
+                roles, // roles (determined by getRolesForEmail)
                 googleUser.emailVerified || false, // email_verified
                 JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
               ],
@@ -779,9 +842,6 @@ export class AuthController {
           lastActive: newUserRows[0].last_active,
         };
         
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:680',message:'New user created',data:{userId:userData.id,userEmail:userData.email,userAvatar:userData.avatar},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
 
         // Clear statistics cache when new user is created
         await this.redisCache.clearStatsCaches();
@@ -793,9 +853,6 @@ export class AuthController {
       // Generate JWT tokens for the authenticated user
       const publicUser = this.toPublicUser(userData);
       
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:794',message:'Returning public user',data:{userId:publicUser.id,userEmail:publicUser.email,userAvatar:publicUser.avatar,userDataAvatar:userData.avatar,hasAvatar:!!publicUser.avatar},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
       
       const tokenPair = await this.jwtService.createTokenPair({
         id: publicUser.id,
@@ -815,9 +872,6 @@ export class AuthController {
         user: publicUser,
       };
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'auth.controller.ts:704',message:'Google auth error caught',data:{errorMessage:error?.message,errorName:error?.name,errorStack:error?.stack?.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
       
       // SECURITY: Generic error message, log details separately
       this.logger.error('Google authentication failed', {

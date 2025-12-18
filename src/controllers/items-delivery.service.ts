@@ -17,11 +17,54 @@ export class ItemsDeliveryService {
     private readonly redisCache: RedisCacheService,
   ) { }
 
+  /**
+   * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
+   * This ensures all user IDs are converted to UUID format before use
+   */
+  private async resolveUserIdToUUID(userId: string): Promise<string> {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    // Check if it's already a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(userId)) {
+      // Verify it exists in user_profiles
+      const result = await this.pool.query(
+        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return userId;
+      }
+    }
+
+    // Try to find user by email, firebase_uid, or google_id
+    const result = await this.pool.query(
+      `SELECT id FROM user_profiles 
+       WHERE LOWER(email) = LOWER($1) 
+          OR firebase_uid = $1 
+          OR google_id = $1 
+          OR id::text = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (result.rows.length > 0) {
+      return result.rows[0].id;
+    }
+
+    throw new Error(`User not found: ${userId}`);
+  }
+
   // ==================== Items CRUD ====================
 
   async createItem(createItemDto: CreateItemDto) {
     const client = await this.pool.connect();
     try {
+      // Resolve owner_id to UUID
+      const ownerUuid = await this.resolveUserIdToUUID(createItemDto.owner_id);
+      
       const { rows } = await client.query(`
         INSERT INTO items (
           owner_id, title, description, category, condition, location,
@@ -29,7 +72,7 @@ export class ItemsDeliveryService {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `, [
-        createItemDto.owner_id,
+        ownerUuid,
         createItemDto.title,
         createItemDto.description || null,
         createItemDto.category,
@@ -63,18 +106,14 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
-    // Use the same JOIN logic as getUserById which works correctly
+    // owner_id is now UUID, so we can use a simple JOIN
     const { rows } = await this.pool.query(`
       SELECT i.*, 
              COALESCE(up.name, NULL) as owner_name, 
              COALESCE(up.avatar_url, NULL) as owner_avatar, 
              COALESCE(up.city, NULL) as owner_city
       FROM items i
-      LEFT JOIN user_profiles up ON (
-        up.id::text = i.owner_id 
-        OR LOWER(up.email) = LOWER(i.owner_id)
-        OR up.firebase_uid = i.owner_id
-      )
+      LEFT JOIN user_profiles up ON up.id = i.owner_id
       WHERE i.id = $1
     `, [id]);
 
@@ -95,18 +134,13 @@ export class ItemsDeliveryService {
     }
 
     // Build query
-    // Note: owner_id can be either UUID (id) or Firebase UID (firebase_uid)
-    // Use the same JOIN logic as getUserById which works correctly
+    // owner_id is now UUID, so we can use a simple JOIN
     let query = `
       SELECT i.*, 
              COALESCE(up.name, NULL) as owner_name, 
              COALESCE(up.avatar_url, NULL) as owner_avatar
       FROM items i
-      LEFT JOIN user_profiles up ON (
-        up.id::text = i.owner_id 
-        OR LOWER(up.email) = LOWER(i.owner_id)
-        OR up.firebase_uid = i.owner_id
-      )
+      LEFT JOIN user_profiles up ON up.id = i.owner_id
       WHERE 1=1
       AND (i.is_deleted IS NULL OR i.is_deleted = FALSE)
     `;
@@ -152,9 +186,16 @@ export class ItemsDeliveryService {
     }
 
     if (filters.owner_id) {
-      paramCount++;
-      query += ` AND i.owner_id = $${paramCount}`;
-      params.push(filters.owner_id);
+      // Resolve owner_id to UUID before filtering
+      try {
+        const ownerUuid = await this.resolveUserIdToUUID(filters.owner_id);
+        paramCount++;
+        query += ` AND i.owner_id = $${paramCount}::uuid`;
+        params.push(ownerUuid);
+      } catch (error) {
+        // If user not found, return empty results
+        return { success: true, data: [] };
+      }
     }
 
     // Full-text search

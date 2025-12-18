@@ -12,6 +12,46 @@ export class DedicatedItemsService {
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
   /**
+   * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
+   * This ensures all user IDs are converted to UUID format before use
+   */
+  private async resolveUserIdToUUID(userId: string): Promise<string> {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    // Check if it's already a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(userId)) {
+      // Verify it exists in user_profiles
+      const result = await this.pool.query(
+        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return userId;
+      }
+    }
+
+    // Try to find user by email, firebase_uid, or google_id
+    const result = await this.pool.query(
+      `SELECT id FROM user_profiles 
+       WHERE LOWER(email) = LOWER($1) 
+          OR firebase_uid = $1 
+          OR google_id = $1 
+          OR id::text = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (result.rows.length > 0) {
+      return result.rows[0].id;
+    }
+
+    throw new Error(`User not found: ${userId}`);
+  }
+
+  /**
    * Create a new item with all fields as separate columns
    */
   async createItem(dto: CreateItemDto) {
@@ -19,71 +59,17 @@ export class DedicatedItemsService {
     try {
       await client.query('BEGIN');
       
-      // CRITICAL: Ensure user exists in user_profiles with firebase_uid
-      // This is essential for the JOIN to work correctly when fetching items
-      let ownerName = 'לא זמין';
-      let ownerExists = false;
+      // Resolve owner_id to UUID - this ensures we always use UUID
+      const ownerUuid = await this.resolveUserIdToUUID(dto.owner_id);
       
-      try {
-        // Check if user exists with this firebase_uid, google_id, email, or UUID
-        const ownerResult = await client.query(
-          `SELECT id, name, email, firebase_uid, google_id FROM user_profiles 
-           WHERE firebase_uid = $1 OR google_id = $1 OR LOWER(email) = LOWER($1) OR id::text = $1 
-           LIMIT 1`,
-          [dto.owner_id]
-        );
-        
-        if (ownerResult.rows.length > 0) {
-          ownerExists = true;
-          const owner = ownerResult.rows[0];
-          ownerName = owner.name || 'ללא שם';
-          
-          // If user exists but firebase_uid is missing, update it
-          if (!owner.firebase_uid && dto.owner_id && dto.owner_id.length > 20) {
-            // This looks like a Firebase UID (long string), update the user
-            console.log(`🔄 Updating user ${owner.id} with firebase_uid: ${dto.owner_id}`);
-            await client.query(
-              `UPDATE user_profiles 
-               SET firebase_uid = $1, updated_at = NOW() 
-               WHERE id = $2`,
-              [dto.owner_id, owner.id]
-            );
-            console.log(`✅ Updated user ${owner.id} with firebase_uid`);
-          }
-        } else {
-          // User doesn't exist - this is a problem!
-          // Try to find by UUID if owner_id is a UUID
-          const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dto.owner_id);
-          
-          if (isUUID) {
-            const uuidResult = await client.query(
-              `SELECT id, name, email, firebase_uid FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
-              [dto.owner_id]
-            );
-            
-            if (uuidResult.rows.length > 0) {
-              ownerExists = true;
-              const owner = uuidResult.rows[0];
-              ownerName = owner.name || 'ללא שם';
-              console.log(`✅ Found user by UUID: ${owner.id}`);
-            }
-          }
-          
-          if (!ownerExists) {
-            // User doesn't exist at all - this is critical!
-            // We can't create a user without email/name, so we'll log a warning
-            // and continue, but the JOIN won't work
-            console.error(`❌ CRITICAL: User with firebase_uid ${dto.owner_id} does not exist in user_profiles!`);
-            console.error(`   This will cause owner_name to be NULL in item listings.`);
-            console.error(`   User must be registered/created before creating items.`);
-          }
-        }
-      } catch (ownerError) {
-        console.error('❌ Error checking/updating owner:', ownerError);
-        // Continue anyway - we'll create the item but the JOIN won't work
-      }
+      // Get owner name for logging
+      const ownerResult = await client.query(
+        `SELECT name FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
+        [ownerUuid]
+      );
+      const ownerName = ownerResult.rows[0]?.name || 'ללא שם';
       
-      console.log('📝 Creating item:', dto.id, dto.title, '- Owner:', ownerName, `(${dto.owner_id})`, ownerExists ? '✅' : '❌ NOT IN DB');
+      console.log('📝 Creating item:', dto.id, dto.title, '- Owner:', ownerName, `(${ownerUuid})`);
       
       const result = await client.query(
         `INSERT INTO items (
@@ -94,7 +80,7 @@ export class DedicatedItemsService {
         RETURNING *`,
         [
           dto.id,
-          dto.owner_id,
+          ownerUuid,
           dto.title,
           dto.description || '',
           dto.category,
@@ -114,7 +100,7 @@ export class DedicatedItemsService {
       
       await client.query('COMMIT');
       
-      console.log('✅ Item created successfully:', result.rows[0].id, '- Owner:', ownerName, `(${dto.owner_id})`, ownerExists ? '✅' : '❌ NOT IN DB');
+      console.log('✅ Item created successfully:', result.rows[0].id, '- Owner:', ownerName, `(${ownerUuid})`);
       return result.rows[0];
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {}); // Ignore rollback errors
@@ -131,16 +117,19 @@ export class DedicatedItemsService {
   async getItemsByOwner(ownerId: string) {
     const client = await this.pool.connect();
     try {
-      console.log('🔍 Fetching items for owner:', ownerId);
+      // Resolve owner_id to UUID
+      const ownerUuid = await this.resolveUserIdToUUID(ownerId);
+      
+      console.log('🔍 Fetching items for owner:', ownerUuid);
       
       const result = await client.query(
         `SELECT * FROM items 
-         WHERE owner_id = $1 AND is_deleted = FALSE 
+         WHERE owner_id = $1::uuid AND is_deleted = FALSE 
          ORDER BY created_at DESC`,
-        [ownerId]
+        [ownerUuid]
       );
       
-      console.log(`✅ Found ${result.rows.length} items for owner:`, ownerId);
+      console.log(`✅ Found ${result.rows.length} items for owner:`, ownerUuid);
       return result.rows;
     } catch (error) {
       console.error('❌ Error fetching items by owner:', error);

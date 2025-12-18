@@ -300,31 +300,37 @@ export class RidesController {
         return { success: false, error: 'Not enough available seats' };
       }
 
-      // Resolve passenger ID (supports legacy/Firebase UID -> UUID mapping)
+      // Resolve passenger ID to UUID (supports email, firebase_uid, google_id, or UUID)
       let passengerUuid = bookingData.passenger_id;
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(passengerUuid)) {
+        // Try to find user by email, firebase_uid, or google_id
         const { rows: existingUsers } = await client.query(`
           SELECT id FROM user_profiles 
-          WHERE settings->>'legacy_id' = $1 OR email = $2 
+          WHERE LOWER(email) = LOWER($1) 
+             OR firebase_uid = $1 
+             OR google_id = $1 
+             OR id::text = $1
           LIMIT 1
-        `, [passengerUuid, `${passengerUuid}@legacy.com`]);
+        `, [passengerUuid]);
 
         if (existingUsers.length > 0) {
           passengerUuid = existingUsers[0].id;
           console.log(`🔄 Found existing user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
         } else {
-          const { rows: newUsers } = await client.query(`
-            INSERT INTO user_profiles (email, name, settings)
-            VALUES ($1, $2, $3)
-            RETURNING id
-          `, [
-            `${passengerUuid}@legacy.com`,
-            `User ${passengerUuid}`,
-            JSON.stringify({ legacy_id: passengerUuid, source: 'legacy-app' })
-          ]);
-          passengerUuid = newUsers[0].id;
-          console.log(`✨ Created new user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
+          // User not found - this is an error, passenger must exist
+          await client.query('ROLLBACK');
+          return { success: false, error: `User not found: ${bookingData.passenger_id}. User must be registered before booking a ride.` };
+        }
+      } else {
+        // Verify UUID exists
+        const { rows: verifyUsers } = await client.query(`
+          SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1
+        `, [passengerUuid]);
+        
+        if (verifyUsers.length === 0) {
+          await client.query('ROLLBACK');
+          return { success: false, error: `User not found: ${passengerUuid}. User must be registered before booking a ride.` };
         }
       }
 

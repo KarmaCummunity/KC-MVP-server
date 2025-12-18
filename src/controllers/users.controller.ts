@@ -221,9 +221,6 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:222', message: 'getUserById called', data: { userId: id, userIdType: typeof id, userIdLength: id?.length }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-    // #endregion
 
     // Normalize email to lowercase for consistent lookup
     // This matches the normalization used in auth.controller.ts
@@ -231,24 +228,15 @@ export class UsersController {
       ? String(id).trim().toLowerCase()
       : id;
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:230', message: 'Normalized userId', data: { originalId: id, normalizedId, isEmail: id.includes('@') }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-    // #endregion
 
     const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
 
     if (cached) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:237', message: 'Returning cached user', data: { userId: normalizedId, cachedUserId: (cached as any)?.id }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-      // #endregion
       return { success: true, data: cached };
     }
 
     // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:242', message: 'Querying database for user', data: { normalizedId, queryType: 'id/email/firebase_uid/google_id' }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
 
     // Try query with google_id first, if it fails (column doesn't exist), try without it
     let rows: any[];
@@ -285,9 +273,6 @@ export class UsersController {
       `, [normalizedId]);
       rows = result.rows;
     } catch (error: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:275', message: 'Query failed, trying without google_id', data: { error: error.message, normalizedId }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-      // #endregion
       // If google_id column doesn't exist, try without it
       if (error.message && error.message.includes('google_id')) {
         const result = await this.pool.query(`
@@ -325,26 +310,14 @@ export class UsersController {
       }
     }
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:268', message: 'Database query result', data: { normalizedId, rowsFound: rows.length, userId: rows[0]?.id, userEmail: rows[0]?.email, userFirebaseUid: rows[0]?.firebase_uid, userGoogleId: rows[0]?.google_id }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
-    // #endregion
 
     if (rows.length === 0) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:272', message: 'User not found in database', data: { normalizedId, searchedBy: 'id/email/firebase_uid/google_id' }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-      // #endregion
       return { success: false, error: 'User not found' };
     }
 
     const user = rows[0];
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:339', message: 'User data from database query', data: { userId: user.id, userEmail: user.email, userName: user.name, userBio: user.bio, userCity: user.city, userCountry: user.country, userBioType: typeof user.bio, userCityType: typeof user.city, userCountryType: typeof user.country, allUserKeys: Object.keys(user) }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-    // #endregion
     await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:280', message: 'Returning user data', data: { userId: user.id, userEmail: user.email, userFirebaseUid: user.firebase_uid, userGoogleId: user.google_id, userName: user.name, returnedBio: user.bio, returnedCity: user.city, returnedCountry: user.country }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
-    // #endregion
     return { success: true, data: user };
   }
 
@@ -453,9 +426,6 @@ export class UsersController {
 
       const updatedUser = updatedRows[0];
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'users.controller.ts:448', message: 'Cache cleared after update', data: { id, userId, updatedBio: updatedUser.bio, updatedCity: updatedUser.city, updatedCountry: updatedUser.country }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'G' }) }).catch(() => { });
-      // #endregion
       // Return user data in the expected format
       const user = {
         id: updatedUser.id,
@@ -892,6 +862,145 @@ export class UsersController {
       }
 
       if (rows.length === 0) {
+        // User not found - if we have firebase_uid, try to create user from Firebase
+        if (firebase_uid) {
+          try {
+            // Try to get user info from Firebase Admin SDK
+            // Note: This requires Firebase Admin SDK to be initialized
+            // If not available, we'll just return error
+            const admin = require('firebase-admin');
+            if (admin.apps.length > 0) {
+              try {
+                const firebaseUser = await admin.auth().getUser(firebase_uid);
+                if (firebaseUser.email) {
+                  // Create user in user_profiles
+                  const normalizedEmail = firebaseUser.email.toLowerCase().trim();
+                  const googleProvider = firebaseUser.providerData?.find(
+                    (p: any) => p.providerId === 'google.com'
+                  );
+                  const googleId = googleProvider?.uid || null;
+                  
+                  const nowIso = new Date().toISOString();
+                  const creationTime = firebaseUser.metadata.creationTime 
+                    ? new Date(firebaseUser.metadata.creationTime) 
+                    : new Date();
+                  const lastSignInTime = firebaseUser.metadata.lastSignInTime
+                    ? new Date(firebaseUser.metadata.lastSignInTime)
+                    : creationTime;
+                  
+                  try {
+                    const { rows: newUser } = await client.query(
+                      `INSERT INTO user_profiles (
+                        firebase_uid, google_id, email, name, avatar_url, bio,
+                        karma_points, join_date, is_active, last_active,
+                        city, country, interests, roles, email_verified, settings
+                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text[], $14::text[], $15, $16::jsonb)
+                      RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+                      [
+                        firebaseUser.uid,
+                        googleId,
+                        normalizedEmail,
+                        firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                        firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                        'משתמש חדש בקארמה קומיוניטי',
+                        0,
+                        creationTime,
+                        true,
+                        lastSignInTime,
+                        'ישראל',
+                        'Israel',
+                        [],
+                        ['user'],
+                        firebaseUser.emailVerified || false,
+                        JSON.stringify({ 
+                          language: 'he', 
+                          dark_mode: false, 
+                          notifications_enabled: true,
+                          privacy: 'public'
+                        })
+                      ]
+                    );
+                    await client.query('COMMIT');
+                    console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
+                    
+                    return {
+                      success: true,
+                      user: {
+                        id: newUser[0].id,
+                        email: newUser[0].email,
+                        name: newUser[0].name,
+                        avatar: newUser[0].avatar_url,
+                        roles: newUser[0].roles || ['user'],
+                        settings: newUser[0].settings || {},
+                        createdAt: newUser[0].created_at,
+                        lastActive: newUser[0].last_active,
+                      },
+                    };
+                  } catch (insertError: any) {
+                    // If google_id column doesn't exist, try without it
+                    if (insertError.message && insertError.message.includes('google_id')) {
+                      const { rows: newUser } = await client.query(
+                        `INSERT INTO user_profiles (
+                          firebase_uid, email, name, avatar_url, bio,
+                          karma_points, join_date, is_active, last_active,
+                          city, country, interests, roles, email_verified, settings
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+                        RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+                        [
+                          firebaseUser.uid,
+                          normalizedEmail,
+                          firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                          firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                          'משתמש חדש בקארמה קומיוניטי',
+                          0,
+                          creationTime,
+                          true,
+                          lastSignInTime,
+                          'ישראל',
+                          'Israel',
+                          [],
+                          ['user'],
+                          firebaseUser.emailVerified || false,
+                          JSON.stringify({ 
+                            language: 'he', 
+                            dark_mode: false, 
+                            notifications_enabled: true,
+                            privacy: 'public'
+                          })
+                        ]
+                      );
+                      await client.query('COMMIT');
+                      console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
+                      
+                      return {
+                        success: true,
+                        user: {
+                          id: newUser[0].id,
+                          email: newUser[0].email,
+                          name: newUser[0].name,
+                          avatar: newUser[0].avatar_url,
+                          roles: newUser[0].roles || ['user'],
+                          settings: newUser[0].settings || {},
+                          createdAt: newUser[0].created_at,
+                          lastActive: newUser[0].last_active,
+                        },
+                      };
+                    } else {
+                      throw insertError;
+                    }
+                  }
+                }
+              } catch (firebaseError) {
+                console.warn('⚠️ Could not fetch user from Firebase Admin SDK:', firebaseError);
+                // Continue to return error
+              }
+            }
+          } catch (adminError) {
+            // Firebase Admin SDK not available - that's okay, continue
+            console.warn('⚠️ Firebase Admin SDK not available for auto-creation');
+          }
+        }
+        
         await client.query('ROLLBACK');
         console.log('❌ User not found for resolution');
         return { success: false, error: 'User not found' };

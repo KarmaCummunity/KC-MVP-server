@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 );
 
 -- NOTE: Legacy 'users' table is no longer used - all user data is in user_profiles
--- The user_id_mapping view has been removed as it's no longer needed
+-- NOTE: user_id_mapping table has been removed - all user IDs are now unified as UUIDs in user_profiles
+-- NOTE: links table has been removed - it contained duplicate user/item data
 
 -- Organizations table
 CREATE TABLE IF NOT EXISTS organizations (
@@ -375,7 +376,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignees UUID[] DEFAULT ARRAY[]::UUID[], -- UUID[] to match user_profiles.id type
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
-    created_by TEXT, -- TEXT (not UUID) to support Firebase UIDs and other string-based identifiers
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -391,10 +392,11 @@ DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Items table for item donations/deliveries
--- NOTE: id and owner_id are TEXT (not UUID) to support Firebase UIDs and other string-based identifiers
+-- NOTE: id is TEXT to support various identifier formats
+-- NOTE: owner_id is UUID (references user_profiles.id) - all users must be in user_profiles
 CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
-    owner_id TEXT NOT NULL,
+    owner_id UUID NOT NULL, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     title VARCHAR(255) NOT NULL,
     description TEXT,
     category VARCHAR(50) NOT NULL, -- furniture, clothes, electronics, general, etc.
@@ -430,8 +432,8 @@ CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
 
 -- Item requests/bookings for delivery workflow
--- NOTE: item_id is TEXT to match items.id type (supports Firebase UIDs)
--- NOTE: requester_id is UUID (references user_profiles.id) - consider standardizing to TEXT if using Firebase
+-- NOTE: item_id is TEXT to match items.id type
+-- NOTE: requester_id is UUID (references user_profiles.id) - all users must be in user_profiles
 CREATE TABLE IF NOT EXISTS item_requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     item_id TEXT, -- Changed from UUID to TEXT to match items.id type
@@ -481,7 +483,7 @@ CREATE TABLE IF NOT EXISTS community_members (
     description TEXT, -- תיאור נוסף על התרומה
     contact_info JSONB, -- {email, phone, etc.}
     status VARCHAR(20) DEFAULT 'active', -- active, inactive
-    created_by TEXT, -- TEXT (not UUID) to support Firebase UIDs and other string-based identifiers
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -496,16 +498,6 @@ CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members
 DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members;
 CREATE TRIGGER update_community_members_updated_at BEFORE UPDATE ON community_members FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Links collection (JSONB) for generic link storage
-CREATE TABLE IF NOT EXISTS links (
-    user_id TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    data JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (user_id, item_id)
-);
-CREATE INDEX IF NOT EXISTS links_user_idx ON links(user_id);
-CREATE INDEX IF NOT EXISTS links_item_idx ON links(item_id);
-CREATE INDEX IF NOT EXISTS links_data_gin ON links USING GIN (data);
+-- NOTE: links table has been removed - it contained duplicate user/item data
+-- All user data is now unified in user_profiles table with UUID identifiers
 

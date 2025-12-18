@@ -332,7 +332,7 @@ export class DatabaseInit implements OnModuleInit {
         await client.query(`
           CREATE TABLE IF NOT EXISTS items (
             id TEXT PRIMARY KEY,
-            owner_id TEXT NOT NULL,
+            owner_id UUID NOT NULL, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
             title VARCHAR(255) NOT NULL,
             description TEXT,
             category VARCHAR(50) NOT NULL,
@@ -788,7 +788,7 @@ export class DatabaseInit implements OnModuleInit {
           description TEXT,
           contact_info JSONB,
           status VARCHAR(20) DEFAULT 'active',
-          created_by TEXT,
+          created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
           created_at TIMESTAMPTZ DEFAULT NOW(),
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
@@ -818,21 +818,8 @@ export class DatabaseInit implements OnModuleInit {
         EXECUTE FUNCTION update_updated_at_column()
       `);
 
-      // Ensure links collection table (JSONB) exists
-      console.log('🔗 Ensuring links table...');
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS links (
-          user_id TEXT NOT NULL,
-          item_id TEXT NOT NULL,
-          data JSONB NOT NULL DEFAULT '{}'::jsonb,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          PRIMARY KEY (user_id, item_id)
-        );
-      `);
-      await client.query(`CREATE INDEX IF NOT EXISTS links_user_idx ON links(user_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS links_item_idx ON links(item_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS links_data_gin ON links USING GIN (data);`);
+      // NOTE: links table has been removed - it contained duplicate user/item data
+      // All user data is now unified in user_profiles table with UUID identifiers
 
       // Ensure item_requests table exists
       console.log('📦 Ensuring item_requests table...');
