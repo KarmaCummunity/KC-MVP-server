@@ -259,6 +259,246 @@ export class SyncController {
   }
 
   /**
+   * Sync ALL users from Firebase to user_profiles
+   * This endpoint runs the full sync process - use with caution in production
+   * 
+   * @param headers - API key in X-API-Key header (optional if SYNC_API_KEY is not set)
+   * @returns Sync summary with created/updated counts
+   */
+  @Post('all')
+  async syncAllUsers(
+    @Headers('x-api-key') apiKey?: string
+  ) {
+    // Check API key (optional - can be disabled for internal use)
+    if (this.SYNC_API_KEY !== 'change-me-in-production') {
+      this.checkApiKey(apiKey);
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      console.log('🔄 Starting full Firebase users sync...');
+      
+      // Get all users from Firebase Authentication
+      let allUsers: admin.auth.UserRecord[] = [];
+      let nextPageToken: string | undefined;
+      
+      do {
+        const listUsersResult = await admin.auth().listUsers(1000, nextPageToken);
+        allUsers = allUsers.concat(listUsersResult.users);
+        nextPageToken = listUsersResult.pageToken;
+        console.log(`📥 Fetched ${allUsers.length} users from Firebase...`);
+      } while (nextPageToken);
+      
+      console.log(`✅ Total users in Firebase: ${allUsers.length}`);
+      
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+      let errors = 0;
+      
+      for (const firebaseUser of allUsers) {
+        try {
+          // Skip users without email
+          if (!firebaseUser.email) {
+            console.log(`⚠️ Skipping user ${firebaseUser.uid} - no email`);
+            skipped++;
+            continue;
+          }
+          
+          const normalizedEmail = firebaseUser.email.toLowerCase().trim();
+          
+          // Extract Google ID from provider data if available
+          let googleId: string | null = null;
+          const googleProvider = firebaseUser.providerData?.find(
+            (p: any) => p.providerId === 'google.com'
+          );
+          if (googleProvider?.uid) {
+            googleId = googleProvider.uid;
+          }
+          
+          const creationTime = firebaseUser.metadata.creationTime 
+            ? new Date(firebaseUser.metadata.creationTime).toISOString()
+            : new Date().toISOString();
+          const lastSignInTime = firebaseUser.metadata.lastSignInTime 
+            ? new Date(firebaseUser.metadata.lastSignInTime).toISOString()
+            : creationTime;
+          
+          // Check if user already exists
+          const { rows: existingUsers } = await client.query(
+            `SELECT id, firebase_uid, email, google_id FROM user_profiles 
+             WHERE email = $1 OR firebase_uid = $2 OR (google_id IS NOT NULL AND google_id = $3)
+             LIMIT 1`,
+            [normalizedEmail, firebaseUser.uid, googleId]
+          );
+          
+          if (existingUsers.length > 0) {
+            // Update existing user
+            const existingUser = existingUsers[0];
+            try {
+              await client.query(
+                `UPDATE user_profiles SET
+                  firebase_uid = COALESCE($1, firebase_uid),
+                  name = COALESCE($2, name),
+                  avatar_url = COALESCE($3, avatar_url),
+                  email_verified = COALESCE($4, email_verified),
+                  last_active = GREATEST(COALESCE($5, last_active), last_active),
+                  google_id = COALESCE($6, google_id),
+                  updated_at = NOW()
+                WHERE id = $7`,
+                [
+                  firebaseUser.uid,
+                  firebaseUser.displayName || existingUser.name || normalizedEmail.split('@')[0] || 'User',
+                  firebaseUser.photoURL || existingUser.avatar_url || 'https://i.pravatar.cc/150?img=1',
+                  firebaseUser.emailVerified || false,
+                  lastSignInTime,
+                  googleId,
+                  existingUser.id
+                ]
+              );
+              updated++;
+              console.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+            } catch (updateError: any) {
+              // If google_id column doesn't exist, try without it
+              if (updateError.message && updateError.message.includes('google_id')) {
+                await client.query(
+                  `UPDATE user_profiles SET
+                    firebase_uid = COALESCE($1, firebase_uid),
+                    name = COALESCE($2, name),
+                    avatar_url = COALESCE($3, avatar_url),
+                    email_verified = COALESCE($4, email_verified),
+                    last_active = GREATEST(COALESCE($5, last_active), last_active),
+                    updated_at = NOW()
+                  WHERE id = $6`,
+                  [
+                    firebaseUser.uid,
+                    firebaseUser.displayName || existingUser.name || normalizedEmail.split('@')[0] || 'User',
+                    firebaseUser.photoURL || existingUser.avatar_url || 'https://i.pravatar.cc/150?img=1',
+                    firebaseUser.emailVerified || false,
+                    lastSignInTime,
+                    existingUser.id
+                  ]
+                );
+                updated++;
+                console.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+              } else {
+                throw updateError;
+              }
+            }
+          } else {
+            // Create new user
+            try {
+              const { rows: newUser } = await client.query(
+                `INSERT INTO user_profiles (
+                  firebase_uid, email, name, avatar_url, bio,
+                  karma_points, join_date, is_active, last_active,
+                  city, country, interests, roles, email_verified, settings, google_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb, $16)
+                RETURNING id`,
+                [
+                  firebaseUser.uid,
+                  normalizedEmail,
+                  firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                  firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                  'משתמש חדש בקארמה קומיוניטי',
+                  0,
+                  creationTime,
+                  true,
+                  lastSignInTime,
+                  'ישראל',
+                  'Israel',
+                  [],
+                  ['user'],
+                  firebaseUser.emailVerified || false,
+                  JSON.stringify({ 
+                    language: 'he', 
+                    dark_mode: false, 
+                    notifications_enabled: true,
+                    privacy: 'public'
+                  }),
+                  googleId
+                ]
+              );
+              created++;
+              console.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+            } catch (insertError: any) {
+              // If google_id column doesn't exist, try without it
+              if (insertError.message && insertError.message.includes('google_id')) {
+                const { rows: newUser } = await client.query(
+                  `INSERT INTO user_profiles (
+                    firebase_uid, email, name, avatar_url, bio,
+                    karma_points, join_date, is_active, last_active,
+                    city, country, interests, roles, email_verified, settings
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+                  RETURNING id`,
+                  [
+                    firebaseUser.uid,
+                    normalizedEmail,
+                    firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                    firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                    'משתמש חדש בקארמה קומיוניטי',
+                    0,
+                    creationTime,
+                    true,
+                    lastSignInTime,
+                    'ישראל',
+                    'Israel',
+                    [],
+                    ['user'],
+                    firebaseUser.emailVerified || false,
+                    JSON.stringify({ 
+                      language: 'he', 
+                      dark_mode: false, 
+                      notifications_enabled: true,
+                      privacy: 'public'
+                    })
+                  ]
+                );
+                created++;
+                console.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+              } else {
+                throw insertError;
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error(`❌ Error processing user ${firebaseUser.uid}:`, error);
+          errors++;
+        }
+      }
+      
+      await client.query('COMMIT');
+      
+      const summary = {
+        success: true,
+        firebase_users: allUsers.length,
+        created,
+        updated,
+        skipped,
+        errors,
+        total_processed: created + updated + skipped
+      };
+      
+      console.log('\n📊 Sync Summary:');
+      console.log(`   ✅ Created: ${created}`);
+      console.log(`   🔄 Updated: ${updated}`);
+      console.log(`   ⏭️  Skipped: ${skipped}`);
+      console.log(`   ❌ Errors: ${errors}`);
+      console.log(`   📈 Total processed: ${created + updated + skipped}`);
+      console.log('\n✅ Firebase users sync completed!');
+      
+      return summary;
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ Full sync error:', error);
+      return { success: false, error: error.message || 'Failed to sync all users' };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Get sync status - check how many users are in Firebase vs user_profiles
    * Useful for monitoring sync health
    */
