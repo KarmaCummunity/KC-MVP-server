@@ -27,18 +27,13 @@ NODE_ENV = "development"
 # Google OAuth (can use same client IDs or separate ones)
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com"
 
-# CORS - Development domains only
-CORS_ORIGIN = "https://dev.karma-community-kc.com,http://localhost:19006,http://localhost:3000"
+# CORS - Development domains (localhost + dev domain)
+CORS_ORIGIN = "http://localhost:19006,http://localhost:3000,http://localhost:8081,https://dev.karma-community-kc.com"
 
-# Security - Use a DIFFERENT JWT_SECRET for development!
-# Generate a new one: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-JWT_SECRET = "CHANGE_THIS_TO_A_DIFFERENT_SECRET_FOR_DEV_ENVIRONMENT"
+# Security - DEVELOPMENT JWT Secret (different from production!)
+JWT_SECRET = "d8ed28a5b1e295edc952feeb890b51d894b9661da5753a2970632d94f14ca4a2"
 
 # Database and Redis will be automatically set by Railway plugins
-# ⚠️ CRITICAL: Connect to SEPARATE Postgres and Redis plugins for dev!
-# Do NOT use the same plugins as production!
-
-
 
 
 
