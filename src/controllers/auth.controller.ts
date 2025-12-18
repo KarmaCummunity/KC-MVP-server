@@ -12,8 +12,8 @@
 // ✅ Proper error handling with appropriate HTTP status codes
 // ✅ Email normalization and validation
 //
-// ✅ JWT token-based authentication implemented
-// ✅ Refresh token mechanism implemented
+// TODO: Implement JWT token-based authentication instead of returning user objects
+// TODO: Add refresh token mechanism for better security
 // TODO: Add password strength requirements
 // TODO: Add email verification flow
 // TODO: Add 2FA (Two-Factor Authentication) support
@@ -22,7 +22,7 @@
 // TODO: Implement proper session management
 // TODO: Add rate limiting per user (not just global)
 // TODO: Split into separate services (AuthService, UserService, GoogleAuthService)
-import { Body, Controller, Get, Post, Query, Logger, BadRequestException, InternalServerErrorException, UseGuards, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Logger, BadRequestException, InternalServerErrorException, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import * as argon2 from 'argon2';
@@ -32,43 +32,25 @@ import { IsString, IsEmail, IsOptional, Length, validate } from 'class-validator
 import { Transform } from 'class-transformer';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtService } from '../auth/jwt.service';
+import { RedisCacheService } from '../redis/redis-cache.service';
 
 // DTO for Google Auth with proper validation
 // Ensures tokens are within expected length ranges to prevent malformed data
 class GoogleAuthDto {
   @IsString()
   @IsOptional()
-  @Length(100, 5000, { message: 'ID token length is invalid' })
+  @Length(10, 5000, { message: 'ID token length is invalid' })
   idToken?: string;
 
   @IsString()
-  @IsOptional() 
-  @Length(50, 2000, { message: 'Access token length is invalid' })
-  accessToken?: string;
-}
-
-// DTO for refresh token request
-class RefreshTokenDto {
-  @IsString()
-  @Length(100, 5000, { message: 'Refresh token length is invalid' })
-  refreshToken!: string;
-}
-
-// DTO for logout request
-class LogoutDto {
-  @IsString()
   @IsOptional()
-  @Length(100, 5000, { message: 'Access token length is invalid' })
+  @Length(10, 2000, { message: 'Access token length is invalid' })
   accessToken?: string;
 
   @IsString()
   @IsOptional()
-  @Length(100, 5000, { message: 'Refresh token length is invalid' })
-  refreshToken?: string;
-
-  @IsString()
-  @IsOptional()
-  sessionId?: string;
+  @Length(1, 200, { message: 'Firebase UID length is invalid' })
+  firebaseUid?: string; // Firebase UID from Firebase Auth (different from Google ID)
 }
 
 // DTO for login with validation
@@ -128,14 +110,15 @@ export class AuthController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly jwtService: JwtService,
+    private readonly redisCache: RedisCacheService,
   ) {
     const clientId = process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-    
+
     if (!clientId) {
       this.logger.error('❌ Google Client ID not found in environment variables');
       throw new Error('Google authentication is not properly configured');
     }
-    
+
     this.googleClient = new OAuth2Client(clientId);
     this.logger.log('✅ Google OAuth client initialized successfully');
   }
@@ -233,6 +216,7 @@ export class AuthController {
     return rest as PublicUser;
   }
 
+
   /**
    * Check if an email is already registered in the system
    * 
@@ -254,12 +238,12 @@ export class AuthController {
       const emailParts = normalized.split('@');
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
       this.logger.log(`Email availability check for: ${safeEmail}`);
-      
+
       const { rows } = await this.pool.query(
-        `SELECT 1 FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT 1 FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
-      
+
       return { exists: rows.length > 0 };
     } catch (error: any) {
       // SECURITY: Don't leak email in error logs
@@ -270,7 +254,7 @@ export class AuthController {
       throw new InternalServerErrorException('Failed to check email availability');
     }
   }
-  
+
   /**
    * Validate email format according to RFC 5321
    * 
@@ -305,7 +289,7 @@ export class AuthController {
       }
 
       const normalized = this.normalizeEmail(registerDto.email);
-      
+
       // SECURITY: Log only partial email for privacy
       const emailParts = normalized.split('@');
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
@@ -313,7 +297,7 @@ export class AuthController {
 
       // Check if exists
       const existRes = await this.pool.query(
-        `SELECT data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT id FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
       if (existRes.rows.length > 0) {
@@ -324,47 +308,56 @@ export class AuthController {
 
       // SECURITY: Hash password with Argon2 (memory-hard algorithm, resistant to GPU attacks)
       const passwordHash = await argon2.hash(registerDto.password);
-      const userId = normalized; // Use email as stable user id for MVP
       const nowIso = new Date().toISOString();
+
+      // Insert into user_profiles with UUID
+      const { rows: newUser } = await this.pool.query(
+        `INSERT INTO user_profiles (
+          email, name, phone, avatar_url, bio, password_hash, 
+          karma_points, join_date, is_active, last_active, 
+          city, country, interests, roles, email_verified, settings
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+        [
+          normalized,
+          registerDto.name || normalized.split('@')[0],
+          '+9720000000',
+          'https://i.pravatar.cc/150?img=1',
+          'משתמש חדש בקארמה קומיוניטי',
+          passwordHash,
+          0, // karma_points
+          nowIso, // join_date
+          true, // is_active
+          nowIso, // last_active
+          'ישראל', // city
+          'Israel', // country
+          [], // interests (empty array)
+          ['user'], // roles
+          false, // email_verified
+          JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+        ],
+      );
+
+      const userId = newUser[0].id;
       const userData = {
         id: userId,
         email: normalized,
-        name: registerDto.name || normalized.split('@')[0],
-      phone: '+9720000000',
-      avatar: 'https://i.pravatar.cc/150?img=1',
-      bio: 'משתמש חדש בקארמה קומיוניטי',
-      // TODO: Remove hardcoded user data - use proper defaults or user input
-      // TODO: Generate proper avatar URL or use user uploaded image
-      // TODO: Localize default bio text based on user language preference
-      karmaPoints: 0,
-      joinDate: nowIso,
-      isActive: true,
-      lastActive: nowIso,
-      location: { city: 'ישראל', country: 'IL' },
-      interests: [],
-      roles: ['user'],
-      postsCount: 0,
-      followersCount: 0,
-      followingCount: 0,
-      notifications: [
-        { type: 'system', text: 'ברוך הבא!', date: nowIso },
-      ],
-      settings: { language: 'he', darkMode: false, notificationsEnabled: true },
-      passwordHash,
+        name: newUser[0].name,
+        avatar: newUser[0].avatar_url,
+        roles: newUser[0].roles,
+        settings: newUser[0].settings,
+        createdAt: newUser[0].created_at,
+        lastActive: newUser[0].last_active,
       };
 
-      await this.pool.query(
-        `INSERT INTO users (user_id, item_id, data, created_at, updated_at)
-         VALUES ($1, $2, $3::jsonb, NOW(), NOW())
-         ON CONFLICT (user_id, item_id)
-         DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-        [userId, userId, userData],
-      );
-      
+      // Clear statistics cache when new user is registered
+      // This ensures totalUsers and other user-related stats are refreshed immediately
+      await this.redisCache.clearStatsCaches();
+
       // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ User registered successfully (ID: ${userId.substring(0, 8)}...)`);
+      this.logger.log(`✅ User registered successfully (ID: ${userId})`);
       return { ok: true, user: this.toPublicUser(userData) };
-      
+
     } catch (error: any) {
       // SECURITY: Generic error message, log details separately
       this.logger.error('Registration failed', { error: error.message });
@@ -398,32 +391,32 @@ export class AuthController {
       }
 
       const normalized = this.normalizeEmail(loginDto.email);
-      
+
       // SECURITY: Log only partial email
       const emailParts = normalized.split('@');
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
       this.logger.log(`Login attempt for user: ${safeEmail}`);
 
       const { rows } = await this.pool.query(
-        `SELECT user_id, item_id, data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
+        `SELECT id, email, name, avatar_url, password_hash, roles, settings, created_at, last_active
+         FROM user_profiles WHERE LOWER(email) = $1 LIMIT 1`,
         [normalized],
       );
-      
+
       if (rows.length === 0) {
         // SECURITY: Generic error - don't reveal if email exists
         this.logger.warn(`Login failed - invalid credentials`);
         return { error: 'Invalid email or password' };
       }
-      
-      const data = rows[0].data || {};
-      const hash = data.passwordHash as string | undefined;
-      
+
+      const hash = rows[0].password_hash as string | undefined;
+
       if (!hash) {
         // SECURITY: Generic error message
         this.logger.warn(`Login failed - no password hash for user`);
         return { error: 'User cannot login with password' };
       }
-      
+
       // SECURITY: Verify password with Argon2 (constant-time comparison)
       const valid = await argon2.verify(hash, loginDto.password);
       if (!valid) {
@@ -433,15 +426,26 @@ export class AuthController {
       }
 
       // Update lastActive
-      const updated = { ...data, lastActive: new Date().toISOString() };
       await this.pool.query(
-        `UPDATE users SET data = $1::jsonb, updated_at = NOW() WHERE user_id = $2 AND item_id = $3`,
-        [updated, rows[0].user_id, rows[0].item_id],
+        `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW() WHERE id = $1`,
+        [rows[0].id],
       );
 
+      // Build user data object
+      const userData = {
+        id: rows[0].id,
+        email: rows[0].email,
+        name: rows[0].name,
+        avatar: rows[0].avatar_url,
+        roles: rows[0].roles || ['user'],
+        settings: rows[0].settings || {},
+        createdAt: rows[0].created_at,
+        lastActive: new Date().toISOString(),
+      };
+
       // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ Successful login for user ID: ${rows[0].user_id.substring(0, 8)}...`);
-      return { ok: true, user: this.toPublicUser(updated) };
+      this.logger.log(`✅ Successful login for user ID: ${rows[0].id}`);
+      return { ok: true, user: this.toPublicUser(userData) };
     } catch (error: any) {
       // SECURITY: Generic error message
       this.logger.error('Login error', { error: error.message });
@@ -474,73 +478,91 @@ export class AuthController {
         throw new BadRequestException('Invalid token format');
       }
 
-      const { idToken, accessToken } = googleAuthDto;
-      
+      const { idToken, accessToken, firebaseUid } = googleAuthDto;
+
       if (!idToken && !accessToken) {
         throw new BadRequestException('Missing Google token');
       }
 
       // SECURITY: Log auth attempt without exposing tokens
-      this.logger.log('Google authentication attempt', { 
-        hasIdToken: !!idToken, 
+      this.logger.log('Google authentication attempt', {
+        hasIdToken: !!idToken,
         hasAccessToken: !!accessToken,
         timestamp: new Date().toISOString()
       });
-      
+
       let googleUser: any = null;
 
       // Verify ID token if provided
       if (idToken) {
-        // SECURITY: Verify token with Google's servers (prevents forgery)
-        const ticket = await this.googleClient.verifyIdToken({
-          idToken,
-          audience: process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-        });
-        const payload = ticket.getPayload();
-        
-        if (!payload || !payload.email) {
-          this.logger.warn('Invalid Google ID token payload');
-          throw new BadRequestException('Invalid Google token');
-        }
+        try {
+          // SECURITY: Verify token with Google's servers (prevents forgery)
+          const ticket = await this.googleClient.verifyIdToken({
+            idToken,
+            audience: process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+          });
+          const payload = ticket.getPayload();
 
-        // SECURITY: Email must be verified by Google
-        if (!payload.email_verified) {
+          if (!payload || !payload.email) {
+            this.logger.warn('Invalid Google ID token payload');
+            throw new BadRequestException('Invalid Google token');
+          }
+
+          // SECURITY: Email must be verified by Google
+          if (!payload.email_verified) {
+            // SECURITY: Log only domain, not full email
+            const emailDomain = payload.email.split('@')[1];
+            this.logger.warn(`Google account email not verified (domain: ${emailDomain})`);
+            throw new BadRequestException('Google account email must be verified');
+          }
+
+          googleUser = {
+            id: payload.sub, // Google ID (sub claim)
+            googleId: payload.sub, // Store Google ID separately
+            email: payload.email,
+            name: payload.name || payload.given_name || 'Google User',
+            avatar: payload.picture,
+            emailVerified: payload.email_verified,
+          };
+
           // SECURITY: Log only domain, not full email
           const emailDomain = payload.email.split('@')[1];
-          this.logger.warn(`Google account email not verified (domain: ${emailDomain})`);
-          throw new BadRequestException('Google account email must be verified');
+          this.logger.log(`✅ Google ID token verified successfully (domain: ${emailDomain})`);
+        } catch (error) {
+          this.logger.warn(`Google ID token verification failed: ${error instanceof Error ? error.message : String(error)}`);
+          // If we have an access token, we can try to use that instead
+          if (!accessToken) {
+            throw error;
+          }
+          this.logger.log('Falling back to access token verification...');
         }
-
-        googleUser = {
-          id: payload.sub,
-          email: payload.email,
-          name: payload.name || payload.given_name || 'Google User',
-          avatar: payload.picture,
-          emailVerified: payload.email_verified,
-        };
-        
-        // SECURITY: Log only domain, not full email
-        const emailDomain = payload.email.split('@')[1];
-        this.logger.log(`✅ Google ID token verified successfully (domain: ${emailDomain})`);
       }
-      // Alternatively, use access token to get user info
-      else if (accessToken) {
+
+      // If no googleUser yet (either no idToken or verification failed), try access token
+      if (!googleUser && accessToken) {
         const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        
+
         if (!response.ok) {
+          // If we already tried idToken and it failed, and now accessToken also failed
+          if (idToken) {
+            throw new BadRequestException('Both ID token and Access token verification failed');
+          }
           return { error: 'Invalid Google access token' };
         }
 
         const profile = await response.json();
         googleUser = {
-          id: profile.sub,
+          id: profile.sub, // Google ID (sub claim)
+          googleId: profile.sub, // Store Google ID separately
           email: profile.email,
           name: profile.name || profile.given_name || 'Google User',
           avatar: profile.picture,
           emailVerified: true, // Assume verified since it came from Google
         };
+
+        this.logger.log('✅ Google Access token verified successfully');
       }
 
       if (!googleUser || !googleUser.email) {
@@ -555,90 +577,205 @@ export class AuthController {
         this.logger.error(`Invalid email from Google (domain: ${emailDomain})`);
         throw new BadRequestException('Invalid email from Google');
       }
-      
+
       const nowIso = new Date().toISOString();
-      
+
       // SECURITY: Log only partial email
       const emailParts = normalizedEmail.split('@');
       const safeEmail = emailParts[0].substring(0, 3) + '***@' + emailParts[1];
       this.logger.log(`Processing Google auth for user: ${safeEmail}`);
 
-      // Check if user exists
-      const { rows } = await this.pool.query(
-        `SELECT user_id, item_id, data FROM users WHERE lower(data->>'email') = $1 LIMIT 1`,
-        [normalizedEmail],
-      );
+      // Extract Google ID and Firebase UID separately
+      // Firebase UID is the actual UID from Firebase Auth, which is different from Google ID
+      const googleIdToUse = googleUser.googleId || googleUser.id; // Google ID (sub claim)
+      const firebaseUidToUse = firebaseUid; // Only Firebase UID, not Google ID
+
+
+      // Check if user exists by email, firebase_uid, or google_id
+      let rows: any[];
+      try {
+        const result = await this.pool.query(
+          `SELECT id, email, name, avatar_url, firebase_uid, google_id, roles, settings, created_at, last_active
+           FROM user_profiles 
+           WHERE LOWER(email) = $1 OR firebase_uid = $2 OR google_id = $3
+           LIMIT 1`,
+          [normalizedEmail, firebaseUidToUse, googleIdToUse],
+        );
+        rows = result.rows;
+      } catch (error: any) {
+        // If google_id column doesn't exist, try without it
+        if (error.message && error.message.includes('google_id')) {
+          const result = await this.pool.query(
+            `SELECT id, email, name, avatar_url, firebase_uid, roles, settings, created_at, last_active
+             FROM user_profiles 
+             WHERE LOWER(email) = $1 OR firebase_uid = $2
+             LIMIT 1`,
+            [normalizedEmail, firebaseUidToUse],
+          );
+          rows = result.rows;
+        } else {
+          throw error;
+        }
+      }
 
       let userData: any;
       let userId: string;
 
+
       if (rows.length > 0) {
         // Update existing user
-        const existingData = rows[0].data || {};
-        userData = {
-          ...existingData,
-          name: googleUser.name,
-          avatar: googleUser.avatar,
-          lastActive: nowIso,
-          // Don't overwrite existing roles, settings, etc.
-        };
-        userId = rows[0].user_id;
+        userId = rows[0].id;
+        try {
+          await this.pool.query(
+            `UPDATE user_profiles 
+             SET name = $1, avatar_url = $2, firebase_uid = $3, google_id = $4, last_active = $5, updated_at = NOW()
+             WHERE id = $6`,
+            [
+              googleUser.name,
+              googleUser.avatar || rows[0].avatar_url,
+              firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+              googleIdToUse, // Store Google ID separately
+              nowIso,
+              userId,
+            ],
+          );
+        } catch (error: any) {
+          // If google_id column doesn't exist, try without it
+          if (error.message && error.message.includes('google_id')) {
+            await this.pool.query(
+              `UPDATE user_profiles 
+               SET name = $1, avatar_url = $2, firebase_uid = $3, last_active = $4, updated_at = NOW()
+               WHERE id = $5`,
+              [
+                googleUser.name,
+                googleUser.avatar || rows[0].avatar_url,
+                firebaseUidToUse, // Store Firebase UID (from Firebase Auth, not Google ID)
+                nowIso,
+                userId,
+              ],
+            );
+          } else {
+            throw error;
+          }
+        }
 
-        await this.pool.query(
-          `UPDATE users SET data = $1::jsonb, updated_at = NOW() WHERE user_id = $2 AND item_id = $3`,
-          [userData, userId, rows[0].item_id],
+        // Fetch updated user data
+        const { rows: updatedRows } = await this.pool.query(
+          `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active
+           FROM user_profiles WHERE id = $1`,
+          [userId],
         );
+
+        userData = {
+          id: updatedRows[0].id,
+          email: updatedRows[0].email,
+          name: updatedRows[0].name,
+          avatar: updatedRows[0].avatar_url,
+          roles: updatedRows[0].roles || ['user'],
+          settings: updatedRows[0].settings || {},
+          createdAt: updatedRows[0].created_at,
+          lastActive: updatedRows[0].last_active,
+        };
+
+        // Clear statistics cache when existing user is updated
+        await this.redisCache.clearStatsCaches();
       } else {
-        // Create new user
-        userId = normalizedEmail; // Use email as stable user ID
-        userData = {
-          id: userId,
-          email: normalizedEmail,
-          name: googleUser.name,
-          phone: '+9720000000',
-          avatar: googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
-          bio: 'משתמש חדש בקארמה קומיוניטי',
-          karmaPoints: 0,
-          joinDate: nowIso,
-          isActive: true,
-          lastActive: nowIso,
-          location: { city: 'ישראל', country: 'IL' },
-          interests: [],
-          roles: ['user'],
-          postsCount: 0,
-          followersCount: 0,
-          followingCount: 0,
-          notifications: [
-            { type: 'system', text: 'ברוך הבא!', date: nowIso },
-          ],
-          settings: { language: 'he', darkMode: false, notificationsEnabled: true },
-          googleId: googleUser.id,
-          emailVerified: googleUser.emailVerified,
-        };
+        // Create new user with UUID
+        let newUser: any;
+        try {
+          const result = await this.pool.query(
+            `INSERT INTO user_profiles (
+              firebase_uid, google_id, email, name, avatar_url, bio, 
+              karma_points, join_date, is_active, last_active, 
+              city, country, interests, roles, email_verified, settings
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text[], $14::text[], $15, $16::jsonb)
+            RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+            [
+              firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
+              googleIdToUse, // google_id (from Google, not Firebase UID)
+              normalizedEmail,
+              googleUser.name,
+              googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
+              'משתמש חדש בקארמה קומיוניטי',
+              0, // karma_points
+              nowIso, // join_date
+              true, // is_active
+              nowIso, // last_active
+              'ישראל', // city
+              'Israel', // country
+              [], // interests (empty array)
+              ['user'], // roles
+              googleUser.emailVerified || false, // email_verified
+              JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+            ],
+          );
+          newUser = result;
+        } catch (error: any) {
+          // If google_id column doesn't exist, try without it
+          if (error.message && error.message.includes('google_id')) {
+            const result = await this.pool.query(
+              `INSERT INTO user_profiles (
+                firebase_uid, email, name, avatar_url, bio, 
+                karma_points, join_date, is_active, last_active, 
+                city, country, interests, roles, email_verified, settings
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+              RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+              [
+                firebaseUidToUse, // firebase_uid (from Firebase Auth, not Google ID)
+                normalizedEmail,
+                googleUser.name,
+                googleUser.avatar || 'https://i.pravatar.cc/150?img=1',
+                'משתמש חדש בקארמה קומיוניטי',
+                0, // karma_points
+                nowIso, // join_date
+                true, // is_active
+                nowIso, // last_active
+                'ישראל', // city
+                'Israel', // country
+                [], // interests (empty array)
+                ['user'], // roles
+                googleUser.emailVerified || false, // email_verified
+                JSON.stringify({ language: 'he', darkMode: false, notificationsEnabled: true }) // settings
+              ],
+            );
+            newUser = result;
+          } else {
+            throw error;
+          }
+        }
+        
+        const { rows: newUserRows } = newUser;
 
-        await this.pool.query(
-          `INSERT INTO users (user_id, item_id, data, created_at, updated_at)
-           VALUES ($1, $2, $3::jsonb, NOW(), NOW())
-           ON CONFLICT (user_id, item_id)
-           DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-          [userId, userId, userData],
-        );
+        userId = newUserRows[0].id;
+        userData = {
+          id: newUserRows[0].id,
+          email: newUserRows[0].email,
+          name: newUserRows[0].name,
+          avatar: newUserRows[0].avatar_url,
+          roles: newUserRows[0].roles || ['user'],
+          settings: newUserRows[0].settings || {},
+          createdAt: newUserRows[0].created_at,
+          lastActive: newUserRows[0].last_active,
+        };
+        
+
+        // Clear statistics cache when new user is created
+        await this.redisCache.clearStatsCaches();
       }
 
-      // Best-effort relational upsert (if user_profiles exists)
-      await this.upsertUserProfileFromLegacy(userData);
+      // SECURITY: Log success without exposing sensitive data
+      this.logger.log(`✅ Google authentication successful (user ID: ${userId})`);
 
       // Generate JWT tokens for the authenticated user
       const publicUser = this.toPublicUser(userData);
+      
+      
       const tokenPair = await this.jwtService.createTokenPair({
         id: publicUser.id,
         email: publicUser.email,
         roles: publicUser.roles || ['user'],
       });
 
-      // SECURITY: Log success without exposing sensitive data
-      this.logger.log(`✅ Google authentication successful (user ID: ${userId.substring(0, 8)}...)`);
-      
       // Return tokens and user data in the format expected by the client
       return {
         success: true,
@@ -651,212 +788,19 @@ export class AuthController {
         user: publicUser,
       };
     } catch (error: any) {
-      // SECURITY: Generic error message, log details separately
-      const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
-      const isDevelopment = environment === 'development';
       
-      this.logger.error('Google authentication failed', { 
+      // SECURITY: Generic error message, log details separately
+      this.logger.error('Google authentication failed', {
         error: error?.message || String(error),
         // Only include stack trace in development
-        stack: isDevelopment ? error?.stack : undefined
+        stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
       });
-      
+
       if (error instanceof BadRequestException) {
         throw error;
       }
-      
+
       throw new InternalServerErrorException('Google authentication failed');
-    }
-  }
-
-  /**
-   * Refresh access token using refresh token
-   * 
-   * Security:
-   * - Rate limited to prevent abuse
-   * - Validates refresh token signature and expiration
-   * - Checks token is not revoked (exists in Redis)
-   * - Returns new access token with same session
-   * 
-   * @param refreshTokenDto - Refresh token
-   * @returns New access token and expiration
-   */
-  @Post('refresh')
-  @Throttle({ default: { limit: 20, ttl: 60000 } }) // 20 refresh attempts per minute
-  async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
-    try {
-      // Validate input
-      const errors = await validate(refreshTokenDto);
-      if (errors.length > 0) {
-        throw new BadRequestException('Invalid refresh token format');
-      }
-
-      // SECURITY: Log refresh attempt without exposing token
-      this.logger.log('Token refresh attempt', { 
-        hasToken: !!refreshTokenDto.refreshToken,
-        timestamp: new Date().toISOString()
-      });
-
-      // Use JWT service to refresh the access token
-      const result = await this.jwtService.refreshAccessToken(refreshTokenDto.refreshToken);
-
-      this.logger.log('✅ Access token refreshed successfully');
-      
-      return {
-        success: true,
-        accessToken: result.accessToken,
-        expiresIn: result.expiresIn,
-      };
-
-    } catch (error: any) {
-      // SECURITY: Generic error message, log details separately
-      this.logger.error('Token refresh failed', { 
-        error: error?.message || String(error),
-      });
-      
-      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
-        throw error;
-      }
-      
-      throw new InternalServerErrorException('Token refresh failed');
-    }
-  }
-
-  /**
-   * Logout user and revoke tokens
-   * 
-   * Security:
-   * - Rate limited to prevent abuse
-   * - Revokes access and refresh tokens
-   * - Blacklists tokens to prevent reuse
-   * - Cleans up session data
-   * 
-   * @param logoutDto - Tokens and session ID to revoke
-   * @returns Success status
-   */
-  @Post('logout')
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 logout attempts per minute
-  async logout(@Body() logoutDto: LogoutDto) {
-    try {
-      // Validate input
-      const errors = await validate(logoutDto);
-      if (errors.length > 0) {
-        throw new BadRequestException('Invalid logout request');
-      }
-
-      // SECURITY: Log logout attempt without exposing tokens
-      this.logger.log('Logout attempt', { 
-        hasAccessToken: !!logoutDto.accessToken,
-        hasRefreshToken: !!logoutDto.refreshToken,
-        hasSessionId: !!logoutDto.sessionId,
-        timestamp: new Date().toISOString()
-      });
-
-      // Revoke access token if provided
-      if (logoutDto.accessToken) {
-        try {
-          await this.jwtService.revokeToken(logoutDto.accessToken);
-        } catch (error) {
-          // Log but don't fail if token is already invalid
-          this.logger.warn('Failed to revoke access token during logout', {
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-
-      // Revoke refresh token if provided
-      if (logoutDto.refreshToken) {
-        try {
-          await this.jwtService.revokeToken(logoutDto.refreshToken);
-        } catch (error) {
-          this.logger.warn('Failed to revoke refresh token during logout', {
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-
-      // Revoke session if session ID provided
-      if (logoutDto.sessionId) {
-        try {
-          await this.jwtService.revokeUserSession(logoutDto.sessionId);
-        } catch (error) {
-          this.logger.warn('Failed to revoke session during logout', {
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-
-      this.logger.log('✅ Logout completed successfully');
-      
-      return {
-        success: true,
-        message: 'Logged out successfully',
-      };
-
-    } catch (error: any) {
-      // SECURITY: Generic error message, log details separately
-      this.logger.error('Logout failed', { 
-        error: error?.message || String(error),
-      });
-      
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      
-      // Even if logout fails, return success to client (client-side cleanup is most important)
-      return {
-        success: true,
-        message: 'Logout completed',
-      };
-    }
-  }
-
-  /**
-   * Validate session - check if access token is valid
-   * 
-   * Security:
-   * - Rate limited
-   * - Validates token signature and expiration
-   * - Checks token is not blacklisted
-   * 
-   * @returns Success status and user info from token
-   */
-  @Get('sessions')
-  @Throttle({ default: { limit: 60, ttl: 60000 } }) // 60 validation attempts per minute
-  async validateSession(@Query('token') token?: string, @Query('authorization') authHeader?: string) {
-    try {
-      // Extract token from query param or Authorization header
-      const accessToken = token || authHeader?.replace('Bearer ', '');
-      
-      if (!accessToken) {
-        throw new BadRequestException('Access token required');
-      }
-
-      // Verify token using JWT service
-      const payload = await this.jwtService.verifyToken(accessToken);
-
-      // Return user info from token payload
-      return {
-        success: true,
-        valid: true,
-        user: {
-          id: payload.userId,
-          email: payload.email,
-          roles: payload.roles,
-        },
-        sessionId: payload.sessionId,
-      };
-
-    } catch (error: any) {
-      this.logger.warn('Session validation failed', { 
-        error: error?.message || String(error),
-      });
-      
-      return {
-        success: false,
-        valid: false,
-        error: error instanceof Error ? error.message : 'Invalid session',
-      };
     }
   }
 }

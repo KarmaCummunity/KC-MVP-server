@@ -33,6 +33,7 @@ import { RedisCacheModule } from './redis/redis-cache.module';
 // Authentication module
 import { AuthModule } from './auth/auth.module';
 import { ItemsModule } from './items/items.module';
+import { ServicesModule } from './services/services.module';
 
 // Controllers
 import { HealthController } from './controllers/health.controller';
@@ -51,12 +52,13 @@ import { ChallengesController } from './controllers/challenges.controller';
 import { ItemsDeliveryController } from './controllers/items-delivery.controller';
 import { ItemsDeliveryService } from './controllers/items-delivery.service';
 import { CommunityMembersController } from './controllers/community-members.controller';
+import { SyncController } from './controllers/sync.controller';
 
 @Module({
   imports: [
     // Global configuration module - makes env variables available everywhere
     ConfigModule.forRoot({ isGlobal: true }),
-    
+
     // Rate limiting module - prevents abuse by limiting requests per IP
     // Default: 60 requests per minute per IP address
     // Can be overridden per controller/route with @Throttle() decorator
@@ -64,41 +66,43 @@ import { CommunityMembersController } from './controllers/community-members.cont
       ttl: 60000, // Time window in milliseconds (1 minute)
       limit: 60,  // Maximum number of requests in the time window
     }]),
-    
+
     // Database and caching
     DatabaseModule,
     RedisModule,
     RedisCacheModule,
-    
+
     // Feature modules
     AuthModule,
     ItemsModule,
+    ServicesModule, // User resolution and other shared services
   ],
   controllers: [
     // Core functionality
     HealthController,      // Health check endpoints
     PlacesController,      // Google Places API integration
-    
+
     // Authentication and session management
     AuthController,        // User registration, login, Google OAuth
     SessionController,     // Session management
-    
+
     // Communication
     ChatController,        // Chat and messaging
-    
+
     // Main features
     DonationsController,   // Donation CRUD operations
     RidesController,       // Ride sharing functionality
     ItemsDeliveryController, // Items delivery and search
     UsersController,       // User profile management
-    
+
     // Analytics and monitoring
     StatsController,       // Statistics and analytics
     RateLimitController,   // Rate limit status endpoint
     TasksController,       // Task management
     ChallengesController,  // Personal challenges/timers for admins
     CommunityMembersController, // Community members management
-    
+    SyncController,        // Firebase users sync
+
     // Testing (TODO: Remove in production)
     RedisTestController,   // Redis connectivity testing
   ],
@@ -109,6 +113,6 @@ import { CommunityMembersController } from './controllers/community-members.cont
     ItemsDeliveryService,
   ],
 })
-export class AppModule {}
+export class AppModule { }
 
 

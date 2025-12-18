@@ -45,6 +45,46 @@ export class CommunityMembersController {
   ) {}
 
   /**
+   * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
+   * This ensures all user IDs are converted to UUID format before use
+   */
+  private async resolveUserIdToUUID(userId: string): Promise<string | null> {
+    if (!userId) {
+      return null;
+    }
+
+    // Check if it's already a valid UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(userId)) {
+      // Verify it exists in user_profiles
+      const result = await this.pool.query(
+        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return userId;
+      }
+    }
+
+    // Try to find user by email, firebase_uid, or google_id
+    const result = await this.pool.query(
+      `SELECT id FROM user_profiles 
+       WHERE LOWER(email) = LOWER($1) 
+          OR firebase_uid = $1 
+          OR google_id = $1 
+          OR id::text = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (result.rows.length > 0) {
+      return result.rows[0].id;
+    }
+
+    return null;
+  }
+
+  /**
    * Ensure community_members table exists, create it if missing
    */
   private async ensureTable() {
@@ -78,7 +118,7 @@ export class CommunityMembersController {
             description TEXT,
             contact_info JSONB,
             status VARCHAR(20) DEFAULT 'active',
-            created_by TEXT,
+            created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
           )
@@ -239,9 +279,18 @@ export class CommunityMembersController {
         };
       }
 
+      // Resolve created_by to UUID if provided
+      let createdByUuid: string | null = null;
+      if (dto.created_by) {
+        createdByUuid = await this.resolveUserIdToUUID(dto.created_by);
+        if (!createdByUuid) {
+          console.warn(`⚠️ Could not resolve created_by user: ${dto.created_by}`);
+        }
+      }
+
       const { rows } = await this.pool.query(
         `INSERT INTO community_members (name, role, description, contact_info, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
+         VALUES ($1, $2, $3, $4, $5, $6::UUID)
          RETURNING 
            id,
            name,
@@ -258,7 +307,7 @@ export class CommunityMembersController {
           dto.description || null,
           dto.contact_info ? JSON.stringify(dto.contact_info) : null,
           dto.status || 'active',
-          dto.created_by || null,
+          createdByUuid,
         ]
       );
 

@@ -16,8 +16,9 @@ export class UpsertItemDto {
 }
 
 export class QueryByUserDto {
+  @IsOptional()
   @IsString()
-  userId!: string;
+  userId?: string;
 
   @IsOptional()
   @IsString()

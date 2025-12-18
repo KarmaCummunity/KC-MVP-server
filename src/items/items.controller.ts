@@ -8,7 +8,8 @@ import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/
 import { ItemsService } from './items.service';
 import { QueryByUserDto, UpsertItemDto } from './dto/item.dto';
 
-@Controller('api')
+// Using 'api/collections' to avoid catching dedicated routes like /api/dedicated-items
+@Controller('api/collections')
 export class ItemsController {
   constructor(private readonly itemsService: ItemsService) {}
 
@@ -24,6 +25,18 @@ export class ItemsController {
 
   @Get(':collection')
   async list(@Param('collection') collection: string, @Query() query: QueryByUserDto) {
+    console.log(`📥 ItemsController - list called for ${collection}, userId: ${query.userId || 'none'}, q: ${query.q || 'none'}`);
+    // If userId is 'all' or not provided, return all items (for public collections like links)
+    if (query.userId === 'all' || (!query.userId && collection === 'links')) {
+      console.log(`🔄 ItemsController - Using listAll for ${collection}`);
+      const result = await this.itemsService.listAll(collection, query.q);
+      console.log(`📤 ItemsController - listAll for ${collection}:`, result?.length || 0, 'items');
+      return result;
+    }
+    if (!query.userId) {
+      console.log(`⚠️ ItemsController - No userId provided for ${collection}, returning empty array`);
+      return [];
+    }
     return this.itemsService.list(collection, query.userId, query.q);
   }
 

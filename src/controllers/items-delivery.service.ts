@@ -15,7 +15,7 @@ export class ItemsDeliveryService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   // ==================== Items CRUD ====================
 
@@ -46,7 +46,7 @@ export class ItemsDeliveryService {
 
       // Invalidate cache
       await this.invalidateItemCaches();
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Create item error:', error);
@@ -66,7 +66,7 @@ export class ItemsDeliveryService {
     const { rows } = await this.pool.query(`
       SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar, up.city as owner_city
       FROM items i
-      LEFT JOIN user_profiles up ON i.owner_id = up.id
+      LEFT JOIN user_profiles up ON (i.owner_id::text = up.id::text OR i.owner_id::text = up.firebase_uid)
       WHERE i.id = $1
     `, [id]);
 
@@ -87,10 +87,11 @@ export class ItemsDeliveryService {
     }
 
     // Build query
+    // Note: owner_id can be either UUID (id) or Firebase UID (firebase_uid)
     let query = `
       SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar
       FROM items i
-      LEFT JOIN user_profiles up ON i.owner_id = up.id
+      LEFT JOIN user_profiles up ON (i.owner_id::text = up.id::text OR i.owner_id::text = up.firebase_uid)
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -136,7 +137,7 @@ export class ItemsDeliveryService {
 
     if (filters.owner_id) {
       paramCount++;
-      query += ` AND i.owner_id = $${paramCount}`;
+      query += ` AND i.owner_id::text = $${paramCount}`;
       params.push(filters.owner_id);
     }
 
@@ -363,8 +364,8 @@ export class ItemsDeliveryService {
              up_owner.name as owner_name, up_owner.avatar_url as owner_avatar
       FROM item_requests ir
       JOIN items i ON ir.item_id = i.id
-      LEFT JOIN user_profiles up_requester ON ir.requester_id = up_requester.id
-      LEFT JOIN user_profiles up_owner ON i.owner_id = up_owner.id
+      LEFT JOIN user_profiles up_requester ON (ir.requester_id::text = up_requester.id::text OR ir.requester_id::text = up_requester.firebase_uid)
+      LEFT JOIN user_profiles up_owner ON (i.owner_id::text = up_owner.id::text OR i.owner_id::text = up_owner.firebase_uid)
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -530,6 +531,7 @@ export class ItemsDeliveryService {
     }
   }
 }
+
 
 
 

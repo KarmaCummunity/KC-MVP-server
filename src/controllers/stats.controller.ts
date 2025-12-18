@@ -31,13 +31,13 @@ export class StatsController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   @Get('community')
   // שינוי: הוספת תמיכה ב-forceRefresh parameter לטעינה מחדש של נתונים
   // Change: Added support for forceRefresh parameter to reload data
   async getCommunityStats(
-    @Query('city') city?: string, 
+    @Query('city') city?: string,
     @Query('period') period?: string,
     @Query('forceRefresh') forceRefresh?: string
   ) {
@@ -46,13 +46,13 @@ export class StatsController {
     // TODO: Add proper cache key generation utility to prevent key collisions
     // TODO: Add comprehensive error handling for cache operations
     const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
-    
+
     // Only use cache if forceRefresh is not true
     // שינוי: תמיכה ב-forceRefresh לדילוג על cache וטעינה מחדש מהמסד נתונים
     // Change: Support for forceRefresh to skip cache and reload from database
     if (forceRefresh !== 'true') {
       const cached = await this.redisCache.get(cacheKey);
-      
+
       if (cached) {
         return { success: true, data: cached };
       }
@@ -121,7 +121,7 @@ export class StatsController {
   // נקודת קצה קלת משקל לבדיקה אם הסטטיסטיקות השתנו
   async getCommunityStatsVersion(@Query('city') city?: string) {
     const cacheKey = `community_stats_version_${city || 'global'}`;
-    
+
     // Check cache first (1 minute TTL for version check)
     const cached = await this.redisCache.get(cacheKey);
     if (cached) {
@@ -134,17 +134,17 @@ export class StatsController {
       FROM community_stats
       ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
     `;
-    
+
     const params = city ? [city] : [];
     const { rows } = await this.pool.query(query, params);
-    
+
     // Create version hash from timestamp
     const lastUpdate = rows[0]?.last_update || new Date();
     const version = new Date(lastUpdate).getTime().toString();
-    
+
     // Cache for 1 minute
     await this.redisCache.set(cacheKey, version, 60);
-    
+
     return { success: true, version };
   }
 
@@ -152,7 +152,7 @@ export class StatsController {
   async getCommunityTrends(@Query('stat_type') statType: string, @Query('city') city?: string, @Query('days') days?: string) {
     const cacheKey = `community_trends_${statType}_${city || 'global'}_${days || '30'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -185,7 +185,7 @@ export class StatsController {
   async getStatsByCity(@Query('stat_type') statType?: string) {
     const cacheKey = `city_stats_${statType || 'all'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -290,7 +290,7 @@ export class StatsController {
   async getCategoryAnalytics() {
     const cacheKey = 'category_analytics';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -336,7 +336,8 @@ export class StatsController {
       engagement_score: (category.donation_count * 10) + (analytics[category.slug]?.clicks || 0)
     }));
 
-    await this.redisCache.set(cacheKey, categoryStats, this.CACHE_TTL);
+    // Cache for 20 minutes - analytics are relatively static
+    await this.redisCache.set(cacheKey, categoryStats, 20 * 60);
     return { success: true, data: categoryStats };
   }
 
@@ -344,34 +345,19 @@ export class StatsController {
   async getUserAnalytics() {
     const cacheKey = 'user_analytics';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    // User growth - from both user_profiles and users (legacy)
+    // User growth - from user_profiles only (legacy users table no longer used)
     const userGrowth = await this.pool.query(`
-      WITH all_users AS (
-        SELECT join_date
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-          AND join_date >= CURRENT_DATE - INTERVAL '30 days'
-        
-        UNION ALL
-        
-        SELECT COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-          AND COALESCE((data->>'joinDate')::timestamptz, created_at) >= CURRENT_DATE - INTERVAL '30 days'
-      )
       SELECT 
         DATE(join_date) as date,
         COUNT(*) as new_users
-      FROM all_users
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
+        AND join_date >= CURRENT_DATE - INTERVAL '30 days'
       GROUP BY DATE(join_date)
       ORDER BY date ASC
     `);
@@ -388,31 +374,15 @@ export class StatsController {
       ORDER BY count DESC
     `);
 
-    // User distribution by city - from both user_profiles and users (legacy)
+    // User distribution by city - from user_profiles only
     const usersByCity = await this.pool.query(`
-      WITH all_users AS (
-        SELECT city
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-          AND city IS NOT NULL AND is_active = true
-        
-        UNION ALL
-        
-        SELECT (data->'location'->>'city')::varchar as city
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND (data->'location'->>'city') IS NOT NULL
-          AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-      )
       SELECT 
         city,
         COUNT(*) as user_count
-      FROM all_users
-      WHERE city IS NOT NULL
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
+        AND city IS NOT NULL 
+        AND is_active = true
       GROUP BY city
       ORDER BY user_count DESC
       LIMIT 10
@@ -424,7 +394,8 @@ export class StatsController {
       users_by_city: usersByCity.rows
     };
 
-    await this.redisCache.set(cacheKey, analytics, this.CACHE_TTL);
+    // Cache for 20 minutes - analytics are relatively static
+    await this.redisCache.set(cacheKey, analytics, 20 * 60);
     return { success: true, data: analytics };
   }
 
@@ -432,37 +403,23 @@ export class StatsController {
   async getDashboardStats() {
     const cacheKey = 'dashboard_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
     // Key metrics for the last 24 hours, 7 days, and 30 days
-    // Count users from both user_profiles and users (legacy) tables
+    // Count users from user_profiles only (legacy users table no longer used)
     const allUsersJoinDate = await this.pool.query(`
-      WITH all_users AS (
-        SELECT join_date
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-        
-        UNION ALL
-        
-        SELECT COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-      )
       SELECT 
         COUNT(CASE WHEN join_date >= CURRENT_DATE THEN 1 END) as new_users_today,
         COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_week,
         COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_month,
         COUNT(*) as total_users
-      FROM all_users
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
     `);
-    
+
     const metrics = await this.pool.query(`
       SELECT 
         -- Today's stats
@@ -485,41 +442,50 @@ export class StatsController {
       FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
-    
-    // Merge user stats with other metrics
+
+    // Merge user stats with other metrics and convert all to numbers
     const mergedMetrics = {
-      ...metrics.rows[0],
-      new_users_today: allUsersJoinDate.rows[0].new_users_today,
-      new_users_week: allUsersJoinDate.rows[0].new_users_week,
-      new_users_month: allUsersJoinDate.rows[0].new_users_month,
-      total_users: allUsersJoinDate.rows[0].total_users,
+      // Today's stats
+      donations_today: Number(metrics.rows[0].donations_today || 0),
+      rides_today: Number(metrics.rows[0].rides_today || 0),
+
+      // This week's stats
+      donations_week: Number(metrics.rows[0].donations_week || 0),
+      rides_week: Number(metrics.rows[0].rides_week || 0),
+
+      // This month's stats
+      donations_month: Number(metrics.rows[0].donations_month || 0),
+      rides_month: Number(metrics.rows[0].rides_month || 0),
+
+      // Total stats
+      total_donations: Number(metrics.rows[0].total_donations || 0),
+      total_rides: Number(metrics.rows[0].total_rides || 0),
+      total_money_donated: Number(metrics.rows[0].total_money_donated || 0),
+
+      // User stats
+      new_users_today: Number(allUsersJoinDate.rows[0].new_users_today || 0),
+      new_users_week: Number(allUsersJoinDate.rows[0].new_users_week || 0),
+      new_users_month: Number(allUsersJoinDate.rows[0].new_users_month || 0),
+      total_users: Number(allUsersJoinDate.rows[0].total_users || 0),
     };
 
-    // Active users - from both user_profiles and users (legacy)
+    // Active users - from user_profiles only
     const activeUsers = await this.pool.query(`
-      WITH all_users AS (
-        SELECT last_active
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-          AND is_active = true
-        
-        UNION ALL
-        
-        SELECT COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-      )
       SELECT 
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active
-      FROM all_users
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
+        AND is_active = true
     `);
+
+    // Convert active users to numbers
+    const activeUsersData = {
+      daily_active: Number(activeUsers.rows[0].daily_active || 0),
+      weekly_active: Number(activeUsers.rows[0].weekly_active || 0),
+      monthly_active: Number(activeUsers.rows[0].monthly_active || 0),
+    };
 
     // Top categories
     const topCategories = await this.pool.query(`
@@ -535,10 +501,17 @@ export class StatsController {
       LIMIT 5
     `);
 
+    // Convert category counts to numbers
+    const topCategoriesData = topCategories.rows.map(cat => ({
+      name_he: cat.name_he,
+      icon: cat.icon,
+      donation_count: Number(cat.donation_count || 0),
+    }));
+
     const dashboard = {
       metrics: mergedMetrics,
-      active_users: activeUsers.rows[0],
-      top_categories: topCategories.rows
+      active_users: activeUsersData,
+      top_categories: topCategoriesData
     };
 
     await this.redisCache.set(cacheKey, dashboard, 5 * 60); // 5 minutes cache
@@ -550,7 +523,7 @@ export class StatsController {
     // This endpoint provides frequently updated stats with short cache
     const cacheKey = 'real_time_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -573,29 +546,15 @@ export class StatsController {
       FROM donations d
       FULL OUTER JOIN rides r ON 1=1
     `);
-    
-    // Users online - from both user_profiles and users (legacy)
+
+    // Users online - from user_profiles only
     const usersOnline = await this.pool.query(`
-      WITH all_users AS (
-        SELECT last_active
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-        
-        UNION ALL
-        
-        SELECT COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-      )
       SELECT 
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '5 minutes' THEN 1 END) as users_online
-      FROM all_users
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
     `);
-    
+
     const currentActive = {
       ...donationsRides.rows[0],
       users_online: usersOnline.rows[0].users_online,
@@ -617,14 +576,14 @@ export class StatsController {
     // TODO: Add proper data anonymization for sensitive data
     const cacheKey = `stat_details_${statType}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
     let query = '';
     let params: any[] = [];
-    
+
     try {
       switch (statType) {
         case 'siteVisits':
@@ -643,31 +602,14 @@ export class StatsController {
         case 'totalUsers':
           // Get all registered users from both user_profiles and users (legacy) tables
           query = `
-            (
-              SELECT 
-                name,
-                email,
-                city,
-                join_date as join_date,
-                created_at
-              FROM user_profiles 
-              WHERE email IS NOT NULL AND email <> ''
-            )
-            UNION
-            (
-              SELECT 
-                COALESCE(data->>'name', 'ללא שם') as name,
-                data->>'email' as email,
-                COALESCE(data->'location'->>'city', '') as city,
-                COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
-                created_at
-              FROM users
-              WHERE data->>'email' IS NOT NULL
-                AND LOWER(data->>'email') <> ''
-                AND LOWER(data->>'email') NOT IN (
-                  SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-                )
-            )
+            SELECT 
+              name,
+              email,
+              city,
+              join_date,
+              created_at
+            FROM user_profiles 
+            WHERE email IS NOT NULL AND email <> ''
             ORDER BY created_at DESC
             LIMIT 500
           `;
@@ -749,10 +691,10 @@ export class StatsController {
       }
 
       const { rows } = await this.pool.query(query, params);
-      
+
       // Cache for 5 minutes
       await this.redisCache.set(cacheKey, rows, 5 * 60);
-      
+
       return { success: true, data: rows };
     } catch (error) {
       console.error('Get stat details error:', error);
@@ -760,6 +702,17 @@ export class StatsController {
     }
   }
 
+  /**
+   * Add computed statistics to the stats object
+   * Uses individual caching for each query type to optimize performance
+   * Each metric type has its own cache key and TTL based on data volatility:
+   * - User metrics: 20 minutes (relatively static)
+   * - Donation/Ride metrics: 15 minutes (moderate changes)
+   * - Activity/Chat metrics: 5 minutes (frequent changes)
+   * 
+   * @param stats - Stats object to populate
+   * @param city - Optional city filter for location-based stats
+   */
   private async addComputedStats(stats: any, city?: string) {
     const params = city ? [city] : [];
     const userCityCondition = city ? 'AND city = $1' : '';
@@ -767,56 +720,68 @@ export class StatsController {
     const rideCityCondition = city ? 'AND (from_location->>\'city\' = $1)' : '';
     const eventCityCondition = city ? 'AND (location->>\'city\' = $1)' : '';
 
-    // Basic counts and metrics
+    // Generate cache keys for individual queries based on city filter
+    const cityKey = city || 'global';
+    const cacheKeys = {
+      userMetrics: `computed_stats_users_${cityKey}`,
+      donationMetrics: `computed_stats_donations_${cityKey}`,
+      rideMetrics: `computed_stats_rides_${cityKey}`,
+      eventMetrics: `computed_stats_events_${cityKey}`,
+      activityMetrics: `computed_stats_activities_${cityKey}`,
+      chatMetrics: `computed_stats_chat_${cityKey}`,
+      siteVisitsMetrics: `computed_stats_site_visits_${cityKey}`,
+    };
+
+    // Try to get all cached metrics at once
+    const cachedMetrics = await this.redisCache.getMultiple([
+      cacheKeys.userMetrics,
+      cacheKeys.donationMetrics,
+      cacheKeys.rideMetrics,
+      cacheKeys.eventMetrics,
+      cacheKeys.activityMetrics,
+      cacheKeys.chatMetrics,
+      cacheKeys.siteVisitsMetrics,
+    ]);
+
+    // Helper function to get cached or execute query
+    const getCachedOrQuery = async (cacheKey: string, queryFn: () => Promise<any>, ttl: number = 10 * 60) => {
+      const cached = cachedMetrics.get(cacheKey);
+      if (cached) {
+        // Return in the same format as pool.query would
+        return { rows: [cached] };
+      }
+      const result = await queryFn();
+      // Cache only the first row (query results are arrays with one object)
+      if (result && result.rows && result.rows.length > 0) {
+        await this.redisCache.set(cacheKey, result.rows[0], ttl);
+      }
+      return result;
+    };
+
+    // Basic counts and metrics - with individual caching
     const queries = await Promise.all([
-      // User metrics - count from both user_profiles and users (legacy) tables
-      // Count unique users: from user_profiles + users that don't exist in user_profiles
-      this.pool.query(`
-        WITH all_users AS (
-          -- Users from user_profiles
-          SELECT 
-            LOWER(email) as email_key,
-            is_active,
-            last_active,
-            join_date,
-            city,
-            roles
-          FROM user_profiles
-          WHERE email IS NOT NULL AND email <> ''
-            ${userCityCondition}
-          
-          UNION
-          
-          -- Users from legacy users table that don't exist in user_profiles
-          SELECT 
-            LOWER(data->>'email') as email_key,
-            COALESCE((data->>'isActive')::boolean, true) as is_active,
-            COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
-            COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
-            (data->'location'->>'city')::varchar as city,
-            COALESCE((data->'roles')::text[], ARRAY['user']) as roles
-          FROM users
-          WHERE data->>'email' IS NOT NULL
-            AND LOWER(data->>'email') <> ''
-            AND LOWER(data->>'email') NOT IN (
-              SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-            )
-            ${userCityCondition ? `AND (data->'location'->>'city')::varchar = $1` : ''}
-        )
+      // User metrics - from user_profiles only (legacy users table no longer used)
+      getCachedOrQuery(
+        cacheKeys.userMetrics,
+        () => this.pool.query(`
         SELECT 
-          COUNT(DISTINCT email_key) as total_users,
-          COUNT(CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as active_members,
-          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active_users,
-          COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
-          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_this_week,
-          COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
-          COUNT(CASE WHEN 'org_admin' = ANY(roles) THEN 1 END) as total_organizations,
+          COUNT(DISTINCT LOWER(email)) as total_users,
+          COUNT(DISTINCT CASE WHEN is_active = true AND last_active >= NOW() - INTERVAL '30 days' THEN LOWER(email) END) as active_members,
+          COUNT(DISTINCT CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN LOWER(email) END) as daily_active_users,
+          COUNT(DISTINCT CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN LOWER(email) END) as weekly_active_users,
+          COUNT(DISTINCT CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN LOWER(email) END) as new_users_this_week,
+          COUNT(DISTINCT CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN LOWER(email) END) as new_users_this_month,
+          COUNT(DISTINCT CASE WHEN 'org_admin' = ANY(roles) THEN LOWER(email) END) as total_organizations,
           COUNT(DISTINCT city) as cities_with_users
-        FROM all_users
-      `, params),
+        FROM user_profiles
+        WHERE email IS NOT NULL AND email <> ''
+          ${userCityCondition}
+      `, params), 20 * 60), // Cache for 20 minutes - user metrics are relatively static
 
       // Donation metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.donationMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_donations,
           COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_this_week,
@@ -833,10 +798,12 @@ export class StatsController {
         FROM donations d
         LEFT JOIN user_profiles up ON up.id = d.donor_id
         WHERE 1=1 ${donationCityCondition}
-      `, params),
+      `, params), 15 * 60), // Cache for 15 minutes
 
       // Ride metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.rideMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_rides,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as rides_this_week,
@@ -847,10 +814,12 @@ export class StatsController {
           COUNT(DISTINCT driver_id) as unique_drivers
         FROM rides 
         WHERE 1=1 ${rideCityCondition}
-      `, params),
+      `, params), 15 * 60), // Cache for 15 minutes
 
       // Event metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.eventMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_events,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as events_this_week,
@@ -861,10 +830,12 @@ export class StatsController {
           COUNT(CASE WHEN is_virtual = true THEN 1 END) as virtual_events
         FROM community_events 
         WHERE 1=1 ${eventCityCondition}
-      `, params),
+      `, params), 10 * 60), // Cache for 10 minutes
 
       // Activity and engagement metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.activityMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(*) as total_activities,
           COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '1 day' THEN 1 END) as activities_today,
@@ -875,10 +846,12 @@ export class StatsController {
           COUNT(DISTINCT user_id) as active_users_tracked
         FROM user_activities 
         WHERE created_at >= CURRENT_DATE - INTERVAL '90 days'
-      `, []),
+      `, []), 5 * 60), // Cache for 5 minutes - activities change frequently
 
       // Chat and social metrics
-      this.pool.query(`
+      getCachedOrQuery(
+        cacheKeys.chatMetrics,
+        () => this.pool.query(`
         SELECT 
           COUNT(DISTINCT cm.id) as total_messages,
           COUNT(DISTINCT cc.id) as total_conversations,
@@ -888,15 +861,21 @@ export class StatsController {
         FROM chat_conversations cc
         LEFT JOIN chat_messages cm ON cc.id = cm.conversation_id
         WHERE cm.is_deleted = false
-      `, []),
+      `, []), 5 * 60), // Cache for 5 minutes - chat metrics change frequently
 
-      // Site visits - total from community_stats
-      this.pool.query(`
+      // Site visits - sum of stat_value (each record can represent multiple visits on the same day)
+      // ביקורים באתר - סכום של stat_value (כל רשומה יכולה לייצג מספר ביקורים באותו יום)
+      // Note: If there are 4 records with stat_value=1 each, sum will be 4. If 1 record with stat_value=4, sum will also be 4.
+      // Apply city filter if provided (site_visits are global, so city is NULL)
+      getCachedOrQuery(
+        cacheKeys.siteVisitsMetrics,
+        () => this.pool.query(`
         SELECT 
           COALESCE(SUM(stat_value), 0) as site_visits
         FROM community_stats 
         WHERE stat_type = 'site_visits'
-      `, [])
+        ${city ? 'AND city IS NULL' : ''}
+      `, params), 5 * 60) // Cache for 5 minutes
     ]);
 
     const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics] = queries;
@@ -961,8 +940,9 @@ export class StatsController {
       group_conversations: { value: parseInt(chatMetrics.rows[0].group_conversations || '0'), days_tracked: 1 },
       direct_conversations: { value: parseInt(chatMetrics.rows[0].direct_conversations || '0'), days_tracked: 1 },
 
-      // Site visits
-      site_visits: { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
+      // Site visits - use existing value from getCommunityStats if available, otherwise compute
+      // ביקורים באתר - השתמש בערך הקיים מ-getCommunityStats אם קיים, אחרת חשב
+      site_visits: stats.site_visits || { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
 
     };
 
@@ -970,24 +950,24 @@ export class StatsController {
     Object.assign(stats, computed);
 
     // Add derived metrics after base stats are set
-    stats.avg_donation_amount = { 
-      value: stats.money_donations?.value > 0 ? Math.round(stats.total_money_donated.value / stats.money_donations.value) : 0, 
-      days_tracked: 1 
+    stats.avg_donation_amount = {
+      value: stats.money_donations?.value > 0 ? Math.round(stats.total_money_donated.value / stats.money_donations.value) : 0,
+      days_tracked: 1
     };
-    stats.avg_seats_per_ride = { 
-      value: stats.total_rides?.value > 0 ? Math.round(stats.total_seats_offered.value / stats.total_rides.value) : 0, 
-      days_tracked: 1 
+    stats.avg_seats_per_ride = {
+      value: stats.total_rides?.value > 0 ? Math.round(stats.total_seats_offered.value / stats.total_rides.value) : 0,
+      days_tracked: 1
     };
-    stats.user_engagement_rate = { 
-      value: stats.total_users?.value > 0 ? Math.round((stats.weekly_active_users.value / stats.total_users.value) * 100) : 0, 
-      days_tracked: 1 
+    stats.user_engagement_rate = {
+      value: stats.total_users?.value > 0 ? Math.round((stats.weekly_active_users.value / stats.total_users.value) * 100) : 0,
+      days_tracked: 1
     };
 
     // Legacy compatibility
     if (!stats.total_contributions) {
-      stats.total_contributions = { 
-        value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0), 
-        days_tracked: 1 
+      stats.total_contributions = {
+        value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0),
+        days_tracked: 1
       };
     }
   }
@@ -997,10 +977,10 @@ export class StatsController {
     try {
       // Delete all community_stats records
       await this.pool.query(`DELETE FROM community_stats`);
-      
+
       // Clear all stats-related caches
       await this.clearStatsCaches();
-      
+
       return { success: true, message: 'Community statistics reset successfully' };
     } catch (error) {
       console.error('Reset community stats error:', error);
@@ -1009,21 +989,7 @@ export class StatsController {
   }
 
   private async clearStatsCaches(statType?: string, city?: string) {
-    const patterns = [
-      'community_stats_*',
-      'community_trends_*',
-      'city_stats_*',
-      'dashboard_stats',
-      'real_time_stats',
-      'category_analytics',
-      'user_analytics'
-    ];
-
-    for (const pattern of patterns) {
-      const keys = await this.redisCache.getKeys(pattern);
-      for (const key of keys) {
-        await this.redisCache.delete(key);
-      }
-    }
+    // Use the shared method from RedisCacheService
+    await this.redisCache.clearStatsCaches();
   }
 }

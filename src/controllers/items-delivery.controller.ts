@@ -6,9 +6,9 @@ import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/
 import { ItemsDeliveryService } from './items-delivery.service';
 import { CreateItemDto, UpdateItemDto, ItemFiltersDto, CreateItemRequestDto, UpdateItemRequestDto } from './dto/items.dto';
 
-@Controller('api/items')
+@Controller('api/items-delivery')
 export class ItemsDeliveryController {
-  constructor(private readonly itemsDeliveryService: ItemsDeliveryService) {}
+  constructor(private readonly itemsDeliveryService: ItemsDeliveryService) { }
 
   // ==================== Items CRUD ====================
 
@@ -31,7 +31,7 @@ export class ItemsDeliveryController {
         metadata: body.metadata || undefined,
         expires_at: body.expires_at || undefined,
       };
-      
+
       // Basic validation
       if (!createItemDto.owner_id || !createItemDto.title || !createItemDto.category) {
         return {
@@ -39,7 +39,7 @@ export class ItemsDeliveryController {
           error: 'Missing required fields: owner_id, title, and category are required',
         };
       }
-      
+
       return this.itemsDeliveryService.createItem(createItemDto);
     } catch (error) {
       console.error('Error in createItem:', error);
@@ -79,7 +79,15 @@ export class ItemsDeliveryController {
       limit: limit ? Number(limit) : undefined,
       offset: offset ? Number(offset) : undefined,
     };
-    return this.itemsDeliveryService.listItems(validatedFilters);
+    try {
+      return await this.itemsDeliveryService.listItems(validatedFilters);
+    } catch (error) {
+      console.error('Error in searchItems:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to search items',
+      };
+    }
   }
 
   @Get('user/:userId')

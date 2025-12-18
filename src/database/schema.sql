@@ -6,8 +6,12 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- Enhanced Users table with detailed profile information
+-- This is the single source of truth for all user data - replaces legacy 'users' table
+-- NOTE: id is UUID (standard identifier), firebase_uid is TEXT (for Firebase authentication linking)
 CREATE TABLE IF NOT EXISTS user_profiles (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    firebase_uid TEXT UNIQUE, -- Firebase UID for authentication linking (optional, can be null)
+    google_id TEXT UNIQUE, -- Google ID (sub claim) for authentication linking (optional, can be null)
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
     phone VARCHAR(20),
@@ -38,14 +42,9 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Create a view to map old user_id to new user_profiles.id for backward compatibility
-CREATE OR REPLACE VIEW user_id_mapping AS
-SELECT 
-    user_id as old_user_id,
-    id as new_user_id
-FROM users u
-JOIN user_profiles up ON u.data->>'email' = up.email
-WHERE u.data->>'email' IS NOT NULL;
+-- NOTE: Legacy 'users' table is no longer used - all user data is in user_profiles
+-- NOTE: user_id_mapping table has been removed - all user IDs are now unified as UUIDs in user_profiles
+-- NOTE: links table has been removed - it contained duplicate user/item data
 
 -- Organizations table
 CREATE TABLE IF NOT EXISTS organizations (
@@ -63,7 +62,7 @@ CREATE TABLE IF NOT EXISTS organizations (
     logo_url TEXT,
     is_verified BOOLEAN DEFAULT false,
     status VARCHAR(20) DEFAULT 'active', -- active, inactive, pending
-    created_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -71,7 +70,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 -- Organization applications (for org admin approval)
 CREATE TABLE IF NOT EXISTS organization_applications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    user_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
     applicant_email VARCHAR(255) NOT NULL,
     org_name VARCHAR(255) NOT NULL,
@@ -81,7 +80,7 @@ CREATE TABLE IF NOT EXISTS organization_applications (
     contact_info JSONB,
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected
     application_data JSONB,
-    reviewed_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    reviewed_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     reviewed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -106,8 +105,8 @@ CREATE TABLE IF NOT EXISTS donation_categories (
 -- Donations table with detailed tracking
 CREATE TABLE IF NOT EXISTS donations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    donor_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
-    recipient_id UUID, -- REFERENCES user_profiles(id), -- can be null for general donations
+    donor_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
+    recipient_id UUID, -- REFERENCES user_profiles(id), -- can be null for general donations, UUID to match user_profiles.id type
     organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
     category_id UUID, -- REFERENCES donation_categories(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255) NOT NULL,
@@ -130,7 +129,7 @@ CREATE TABLE IF NOT EXISTS donations (
 -- Rides table (Trump/carpooling)
 CREATE TABLE IF NOT EXISTS rides (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    driver_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    driver_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     title VARCHAR(255),
     from_location JSONB NOT NULL, -- {name, city, coordinates}
     to_location JSONB NOT NULL, -- {name, city, coordinates}
@@ -150,7 +149,7 @@ CREATE TABLE IF NOT EXISTS rides (
 CREATE TABLE IF NOT EXISTS ride_bookings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     ride_id UUID, -- REFERENCES rides(id), -- Temporarily disabled for backward compatibility
-    passenger_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    passenger_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     seats_requested INTEGER DEFAULT 1,
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, cancelled
     message TEXT,
@@ -162,7 +161,7 @@ CREATE TABLE IF NOT EXISTS ride_bookings (
 -- Community events
 CREATE TABLE IF NOT EXISTS community_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    organizer_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    organizer_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     organization_id UUID, -- REFERENCES organizations(id), -- Temporarily disabled for backward compatibility
     title VARCHAR(255) NOT NULL,
     description TEXT,
@@ -186,20 +185,22 @@ CREATE TABLE IF NOT EXISTS community_events (
 CREATE TABLE IF NOT EXISTS event_attendees (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     event_id UUID, -- REFERENCES community_events(id), -- Temporarily disabled for backward compatibility
-    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    user_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     status VARCHAR(20) DEFAULT 'going', -- going, maybe, not_going
     registered_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(event_id, user_id)
 );
 
 -- Enhanced chat conversations
+-- NOTE: All user ID fields (participants, created_by) use UUID[]/UUID to match user_profiles.id type
+-- NOTE: participants is UUID[] array - all participant IDs are UUIDs
 CREATE TABLE IF NOT EXISTS chat_conversations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(255),
     type VARCHAR(20) DEFAULT 'direct', -- direct, group
-    participants UUID[] NOT NULL,
-    created_by UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
-    last_message_id UUID,
+    participants UUID[] NOT NULL, -- Array of participant user IDs (UUIDs)
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
+    last_message_id UUID, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
     last_message_at TIMESTAMPTZ DEFAULT NOW(),
     metadata JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -207,10 +208,11 @@ CREATE TABLE IF NOT EXISTS chat_conversations (
 );
 
 -- Chat messages with rich content support
+-- NOTE: All ID fields use UUID type for consistency
 CREATE TABLE IF NOT EXISTS chat_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    conversation_id UUID, -- REFERENCES chat_conversations(id), -- Temporarily disabled for backward compatibility
-    sender_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    conversation_id UUID NOT NULL, -- REFERENCES chat_conversations(id), -- Temporarily disabled for backward compatibility
+    sender_id UUID NOT NULL, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     content TEXT,
     message_type VARCHAR(20) DEFAULT 'text', -- text, image, file, voice, location, donation
     file_url TEXT,
@@ -227,10 +229,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 -- Read receipts for messages
+-- NOTE: All ID fields use UUID type for consistency
 CREATE TABLE IF NOT EXISTS message_read_receipts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    message_id UUID, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
-    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    message_id UUID NOT NULL, -- REFERENCES chat_messages(id), -- Temporarily disabled for backward compatibility
+    user_id UUID NOT NULL, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     read_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(message_id, user_id)
 );
@@ -238,7 +241,7 @@ CREATE TABLE IF NOT EXISTS message_read_receipts (
 -- User activity tracking for analytics
 CREATE TABLE IF NOT EXISTS user_activities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    user_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     activity_type VARCHAR(50) NOT NULL, -- login, donation, chat, view_category, etc.
     activity_data JSONB,
     ip_address INET,
@@ -262,8 +265,8 @@ CREATE TABLE IF NOT EXISTS community_stats (
 -- User following relationships
 CREATE TABLE IF NOT EXISTS user_follows (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    follower_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
-    following_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    follower_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
+    following_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(follower_id, following_id)
 );
@@ -271,7 +274,7 @@ CREATE TABLE IF NOT EXISTS user_follows (
 -- User notifications
 CREATE TABLE IF NOT EXISTS user_notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    user_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     title VARCHAR(255),
     content TEXT,
     notification_type VARCHAR(50), -- donation, message, event, system
@@ -282,8 +285,17 @@ CREATE TABLE IF NOT EXISTS user_notifications (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure firebase_uid column exists (for backward compatibility with existing databases)
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS firebase_uid TEXT UNIQUE;
+-- Ensure google_id column exists (for backward compatibility with existing databases)
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE;
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));
+-- Create firebase_uid index
+CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles (firebase_uid) WHERE firebase_uid IS NOT NULL;
+-- Create google_id index
+CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_roles ON user_profiles USING GIN (roles);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);
@@ -301,9 +313,22 @@ CREATE INDEX IF NOT EXISTS idx_rides_status ON rides (status);
 CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);
 CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);
 
-CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);
+-- Chat indexes for optimal query performance
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants); -- UUID[] array
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_last_message ON chat_conversations (last_message_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_created_by ON chat_conversations (created_by);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_type ON chat_conversations (type);
+CREATE INDEX IF NOT EXISTS idx_chat_conversations_last_message_at ON chat_conversations (last_message_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id); -- UUID field
+CREATE INDEX IF NOT EXISTS idx_chat_messages_reply_to ON chat_messages (reply_to_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_type ON chat_messages (message_type);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_deleted ON chat_messages (is_deleted) WHERE is_deleted = false;
+
+CREATE INDEX IF NOT EXISTS idx_message_read_receipts_message ON message_read_receipts (message_id);
+CREATE INDEX IF NOT EXISTS idx_message_read_receipts_user ON message_read_receipts (user_id); -- UUID field
+CREATE INDEX IF NOT EXISTS idx_message_read_receipts_read_at ON message_read_receipts (read_at);
 
 CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);
 CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);
@@ -316,18 +341,28 @@ CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, da
 
 -- Create triggers for updated_at timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS '
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+' language 'plpgsql';
 
 -- Apply triggers to relevant tables
+DROP TRIGGER IF EXISTS update_user_profiles_updated_at ON user_profiles;
 CREATE TRIGGER update_user_profiles_updated_at BEFORE UPDATE ON user_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_organizations_updated_at ON organizations;
 CREATE TRIGGER update_organizations_updated_at BEFORE UPDATE ON organizations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_donations_updated_at ON donations;
 CREATE TRIGGER update_donations_updated_at BEFORE UPDATE ON donations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_rides_updated_at ON rides;
 CREATE TRIGGER update_rides_updated_at BEFORE UPDATE ON rides FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_chat_conversations_updated_at ON chat_conversations;
+CREATE TRIGGER update_chat_conversations_updated_at BEFORE UPDATE ON chat_conversations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Tasks table for group task management
 CREATE TABLE IF NOT EXISTS tasks (
@@ -338,10 +373,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority VARCHAR(10) NOT NULL DEFAULT 'medium', -- low, medium, high
     category VARCHAR(50), -- development, marketing, operations, etc.
     due_date TIMESTAMPTZ,
-    assignees UUID[] DEFAULT ARRAY[]::UUID[],
+    assignees UUID[] DEFAULT ARRAY[]::UUID[], -- UUID[] to match user_profiles.id type
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
-    created_by TEXT, -- Changed from UUID to TEXT to support Firebase UIDs
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -350,37 +385,59 @@ CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees); -- UUID[] array
 CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
 
+DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Items table for item donations/deliveries
+-- NOTE: id is TEXT to support various identifier formats
+-- NOTE: owner_id is UUID (references user_profiles.id) - all users must be in user_profiles
 CREATE TABLE IF NOT EXISTS items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    owner_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    id TEXT PRIMARY KEY,
+    owner_id UUID NOT NULL, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     title VARCHAR(255) NOT NULL,
     description TEXT,
     category VARCHAR(50) NOT NULL, -- furniture, clothes, electronics, general, etc.
     condition VARCHAR(20), -- new, like_new, used, for_parts
-    location JSONB, -- {city, address, coordinates: {lat, lng}}
+    
+    -- Location as separate columns plus JSONB for flexibility
+    location JSONB, -- {city, address, coordinates}
+    city VARCHAR(100),
+    address TEXT,
+    coordinates VARCHAR(100), -- stored as "lat,lng" string
+    
     price DECIMAL(10,2) DEFAULT 0, -- 0 means free
-    images TEXT[], -- array of image URLs
-    tags TEXT[],
+    image_base64 TEXT, -- base64 encoded image
+    rating INTEGER DEFAULT 0,
+    tags TEXT, -- comma-separated tags
     quantity INTEGER DEFAULT 1,
     status VARCHAR(20) DEFAULT 'available', -- available, reserved, delivered, expired, cancelled
-    delivery_method VARCHAR(20), -- pickup, delivery, shipping
-    metadata JSONB, -- flexible field for additional data
-    expires_at TIMESTAMPTZ, -- when item listing expires
+    delivery_method VARCHAR(20) DEFAULT 'pickup', -- pickup, delivery, shipping
+    
+    -- Soft delete fields
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ,
+    
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Indexes for better query performance
+CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);
+CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);
+CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);
+CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);
+
 -- Item requests/bookings for delivery workflow
+-- NOTE: item_id is TEXT to match items.id type
+-- NOTE: requester_id is UUID (references user_profiles.id) - all users must be in user_profiles
 CREATE TABLE IF NOT EXISTS item_requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    item_id UUID, -- REFERENCES items(id), -- Temporarily disabled for backward compatibility
-    requester_id UUID, -- REFERENCES user_profiles(id), -- Temporarily disabled for backward compatibility
+    item_id TEXT, -- Changed from UUID to TEXT to match items.id type
+    requester_id UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     status VARCHAR(20) DEFAULT 'pending', -- pending, approved, rejected, scheduled, completed, cancelled
     message TEXT,
     proposed_time TIMESTAMPTZ,
@@ -393,14 +450,13 @@ CREATE TABLE IF NOT EXISTS item_requests (
 );
 
 -- Indexes for items table
-CREATE INDEX IF NOT EXISTS idx_items_owner ON items (owner_id);
-CREATE INDEX IF NOT EXISTS idx_items_category ON items (category);
-CREATE INDEX IF NOT EXISTS idx_items_status ON items (status);
+-- Note: idx_items_owner_id, idx_items_category, idx_items_status already created above (lines 391-393)
 CREATE INDEX IF NOT EXISTS idx_items_condition ON items (condition);
-CREATE INDEX IF NOT EXISTS idx_items_location ON items USING GIN (location);
+-- Note: No location field in items table - location data is stored in separate columns: city, address, coordinates
 CREATE INDEX IF NOT EXISTS idx_items_created ON items (created_at);
 CREATE INDEX IF NOT EXISTS idx_items_price ON items (price);
-CREATE INDEX IF NOT EXISTS idx_items_tags ON items USING GIN (tags);
+-- Note: tags is TEXT (not TEXT[]), so regular index instead of GIN
+CREATE INDEX IF NOT EXISTS idx_items_tags ON items (tags);
 
 -- Full-text search index for items (using pg_trgm)
 CREATE INDEX IF NOT EXISTS idx_items_title_trgm ON items USING GIN (title gin_trgm_ops);
@@ -413,5 +469,35 @@ CREATE INDEX IF NOT EXISTS idx_item_requests_status ON item_requests (status);
 CREATE INDEX IF NOT EXISTS idx_item_requests_created ON item_requests (created_at);
 
 -- Triggers for updated_at timestamps
+DROP TRIGGER IF EXISTS update_items_updated_at ON items;
 CREATE TRIGGER update_items_updated_at BEFORE UPDATE ON items FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_item_requests_updated_at ON item_requests;
 CREATE TRIGGER update_item_requests_updated_at BEFORE UPDATE ON item_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Community members/people records table for admin management
+CREATE TABLE IF NOT EXISTS community_members (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    role VARCHAR(255) NOT NULL, -- התפקיד/התרומה שלו לקהילה
+    description TEXT, -- תיאור נוסף על התרומה
+    contact_info JSONB, -- {email, phone, etc.}
+    status VARCHAR(20) DEFAULT 'active', -- active, inactive
+    created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for community_members
+CREATE INDEX IF NOT EXISTS idx_community_members_name ON community_members (name);
+CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role);
+CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status);
+CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);
+
+-- Trigger for updated_at timestamp
+DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members;
+CREATE TRIGGER update_community_members_updated_at BEFORE UPDATE ON community_members FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- NOTE: links table has been removed - it contained duplicate user/item data
+-- All user data is now unified in user_profiles table with UUID identifiers
+

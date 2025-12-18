@@ -35,7 +35,8 @@ export class UsersController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
+
 
   @Post('register')
   async registerUser(@Body() userData: any) {
@@ -47,10 +48,12 @@ export class UsersController {
     try {
       await client.query('BEGIN');
 
-      // Check if user already exists
+      const normalizedEmail = userData.email.toLowerCase().trim();
+
+      // Check if user already exists in user_profiles table
       const { rows: existingUsers } = await client.query(
-        `SELECT id FROM user_profiles WHERE LOWER(email) = LOWER($1)`,
-        [userData.email]
+        `SELECT id FROM user_profiles WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [normalizedEmail]
       );
 
       if (existingUsers.length > 0) {
@@ -64,61 +67,98 @@ export class UsersController {
         passwordHash = await argon2.hash(userData.password);
       }
 
-      // Insert user
-      const { rows } = await client.query(`
+      const nowIso = new Date().toISOString();
+
+      const PRE_APPROVED_ADMINS = [
+        'mahalalel100@gmail.com',
+        'matan7491@gmail.com',
+        'ichai1306@gmail.com',
+        'lianbh2004@gmail.com',
+        'navesarussi@gmail.com',
+        'karmacommunity2.0@gmail.com'
+      ];
+
+      const shouldBeAdmin = PRE_APPROVED_ADMINS.includes(normalizedEmail);
+      const initialRoles = shouldBeAdmin ? ['user', 'admin'] : ['user'];
+
+      // Insert user into user_profiles table with UUID
+      // Include firebase_uid if provided (for Firebase authentication)
+      const { rows: newUser } = await client.query(`
         INSERT INTO user_profiles (
-          email, name, phone, avatar_url, bio, city, country, 
-          interests, password_hash, settings
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING id, email, name, phone, avatar_url, bio, karma_points, 
-                 join_date, city, country, interests, roles, settings
+          email, name, phone, avatar_url, bio, password_hash,
+          karma_points, join_date, is_active, last_active,
+          city, country, interests, roles, email_verified, settings, firebase_uid
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text[], $14::text[], $15, $16::jsonb, $17)
+        RETURNING id
       `, [
-        userData.email.toLowerCase().trim(),
-        userData.name || userData.email.split('@')[0],
-        userData.phone || null,
+        normalizedEmail,
+        userData.name || normalizedEmail.split('@')[0],
+        userData.phone || '+9720000000',
         userData.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(userData.name || 'User')}&background=random`,
         userData.bio || 'משתמש חדש בקארמה קומיוניטי',
-        userData.city || null,
-        userData.country || 'Israel',
-        userData.interests || [],
         passwordHash,
-        userData.settings || {
+        0, // karma_points
+        nowIso, // join_date
+        true, // is_active
+        nowIso, // last_active
+        userData.city || 'ישראל', // city
+        userData.country || 'Israel', // country
+        userData.interests || [], // interests
+        initialRoles, // roles
+        false, // email_verified
+        JSON.stringify(userData.settings || {
           "language": "he",
           "dark_mode": false,
           "notifications_enabled": true,
           "privacy": "public"
-        }
+        }), // settings
+        userData.firebase_uid || userData.id || null // firebase_uid - use id if it's a Firebase UID
       ]);
 
-      const user = rows[0];
-
-      // Track registration activity
-      await client.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        user.id,
-        'user_registered',
-        JSON.stringify({ email: user.email, name: user.name })
-      ]);
-
-      // Update community stats
-      await client.query(`
-        INSERT INTO community_stats (stat_type, stat_value, date_period)
-        VALUES ('active_members', 1, CURRENT_DATE)
-        ON CONFLICT (stat_type, city, date_period) 
-        DO UPDATE SET stat_value = community_stats.stat_value + 1, updated_at = NOW()
-      `);
+      const userId = newUser[0].id;
 
       await client.query('COMMIT');
+
+      // Clear statistics cache when new user is registered
+      // This ensures totalUsers and other user-related stats are refreshed immediately
+      await this.redisCache.clearStatsCaches();
+
+      // Fetch the created user to return full data
+      const { rows: createdUser } = await client.query(
+        `SELECT id, email, name, phone, avatar_url, bio, city, country, interests, roles, settings, created_at
+         FROM user_profiles WHERE id = $1`,
+        [userId]
+      );
+
+      // Return user data in the expected format
+      const user = {
+        id: createdUser[0].id,
+        email: createdUser[0].email,
+        name: createdUser[0].name,
+        phone: createdUser[0].phone,
+        avatar_url: createdUser[0].avatar_url,
+        bio: createdUser[0].bio || '',
+        karma_points: 0,
+        join_date: createdUser[0].created_at,
+        is_active: true,
+        last_active: nowIso,
+        city: createdUser[0].city || '',
+        country: createdUser[0].country || 'Israel',
+        interests: createdUser[0].interests || [],
+        roles: createdUser[0].roles || ['user'],
+        posts_count: 0,
+        followers_count: 0,
+        following_count: 0,
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: false,
+        settings: createdUser[0].settings || {}
+      };
 
       return { success: true, data: user };
     } catch (error) {
       await client.query('ROLLBACK');
       console.error('Register user error:', error);
-      // TODO: Implement proper error logging with context and stack traces
-      // TODO: Return more specific error messages based on error type
-      // TODO: Add error monitoring/alerting for registration failures
       return { success: false, error: 'Failed to register user' };
     } finally {
       client.release();
@@ -128,9 +168,15 @@ export class UsersController {
   @Post('login')
   async loginUser(@Body() loginData: any) {
     try {
+      const normalizedEmail = loginData.email.toLowerCase().trim();
+
+      // Use user_profiles table
       const { rows } = await this.pool.query(
-        `SELECT * FROM user_profiles WHERE LOWER(email) = LOWER($1)`,
-        [loginData.email]
+        `SELECT id, email, name, phone, avatar_url, bio, password_hash, 
+                karma_points, join_date, is_active, last_active,
+                city, country, interests, roles, settings, created_at
+         FROM user_profiles WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [normalizedEmail]
       );
 
       if (rows.length === 0) {
@@ -138,6 +184,27 @@ export class UsersController {
       }
 
       const user = rows[0];
+
+      // Auto-grant admin role for pre-approved emails (Self-healing)
+      const PRE_APPROVED_ADMINS = [
+        'mahalalel100@gmail.com',
+        'matan7491@gmail.com',
+        'ichai1306@gmail.com',
+        'lianbh2004@gmail.com',
+        'navesarussi@gmail.com',
+        'karmacommunity2.0@gmail.com'
+      ];
+
+      const shouldBeAdmin = PRE_APPROVED_ADMINS.includes(normalizedEmail);
+      const currentRoles: string[] = user.roles || [];
+
+      if (shouldBeAdmin && !currentRoles.includes('admin')) {
+        await this.pool.query(
+          `UPDATE user_profiles SET roles = array_append(roles, 'admin') WHERE id = $1`,
+          [user.id]
+        );
+        user.roles = [...currentRoles, 'admin'];
+      }
 
       // Verify password if provided
       if (loginData.password && user.password_hash) {
@@ -149,22 +216,34 @@ export class UsersController {
 
       // Update last active
       await this.pool.query(
-        `UPDATE user_profiles SET last_active = NOW() WHERE id = $1`,
+        `UPDATE user_profiles SET last_active = NOW(), updated_at = NOW() WHERE id = $1`,
         [user.id]
       );
 
-      // Track login activity
-      await this.pool.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        user.id,
-        'user_login',
-        JSON.stringify({ timestamp: new Date().toISOString() })
-      ]);
-
-      // Remove password hash from response
-      const { password_hash, ...userResponse } = user;
+      // Return user data in the expected format
+      const userResponse = {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        phone: user.phone,
+        avatar_url: user.avatar_url,
+        bio: user.bio || '',
+        karma_points: user.karma_points || 0,
+        join_date: user.join_date || user.created_at,
+        is_active: user.is_active !== false,
+        last_active: new Date().toISOString(),
+        city: user.city || '',
+        country: user.country || 'Israel',
+        interests: user.interests || [],
+        roles: user.roles || ['user'],
+        posts_count: 0, // TODO: Calculate from actual data
+        followers_count: 0, // TODO: Calculate from actual data
+        following_count: 0, // TODO: Calculate from actual data
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: user.email_verified || false,
+        settings: user.settings || {}
+      };
 
       return { success: true, data: userResponse };
     } catch (error) {
@@ -175,21 +254,95 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
-    const cacheKey = `user_profile_${id}`;
+
+    // Normalize email to lowercase for consistent lookup
+    // This matches the normalization used in auth.controller.ts
+    const normalizedId = id.includes('@')
+      ? String(id).trim().toLowerCase()
+      : id;
+
+
+    const cacheKey = `user_profile_${normalizedId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    const { rows } = await this.pool.query(`
-      SELECT id, email, name, phone, avatar_url, bio, karma_points,
-             join_date, is_active, last_active, city, country, interests,
-             roles, posts_count, followers_count, following_count,
-             total_donations_amount, total_volunteer_hours, email_verified, settings
-      FROM user_profiles 
-      WHERE id = $1
-    `, [id]);
+    // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
+
+    // Try query with google_id first, if it fails (column doesn't exist), try without it
+    let rows: any[];
+    try {
+      const result = await this.pool.query(`
+        SELECT 
+          id,
+          email,
+          COALESCE(name, 'ללא שם') as name,
+          phone,
+          COALESCE(avatar_url, '') as avatar_url,
+          COALESCE(bio, '') as bio,
+          COALESCE(karma_points, 0) as karma_points,
+          COALESCE(join_date, created_at) as join_date,
+          COALESCE(is_active, true) as is_active,
+          COALESCE(last_active, updated_at) as last_active,
+          COALESCE(city, '') as city,
+          COALESCE(country, 'Israel') as country,
+          COALESCE(interests, ARRAY[]::TEXT[]) as interests,
+          COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
+          COALESCE(posts_count, 0) as posts_count,
+          COALESCE(followers_count, 0) as followers_count,
+          COALESCE(following_count, 0) as following_count,
+          0 as total_donations_amount,
+          0 as total_volunteer_hours,
+          COALESCE(email_verified, false) as email_verified,
+          COALESCE(settings, '{}'::jsonb) as settings
+        FROM user_profiles 
+        WHERE id::text = $1 
+           OR LOWER(email) = LOWER($1)
+           OR firebase_uid = $1
+           OR google_id = $1
+        LIMIT 1
+      `, [normalizedId]);
+      rows = result.rows;
+    } catch (error: any) {
+      // If google_id column doesn't exist, try without it
+      if (error.message && error.message.includes('google_id')) {
+        const result = await this.pool.query(`
+          SELECT 
+            id,
+            email,
+            COALESCE(name, 'ללא שם') as name,
+            phone,
+            COALESCE(avatar_url, '') as avatar_url,
+            COALESCE(bio, '') as bio,
+            COALESCE(karma_points, 0) as karma_points,
+            COALESCE(join_date, created_at) as join_date,
+            COALESCE(is_active, true) as is_active,
+            COALESCE(last_active, updated_at) as last_active,
+            COALESCE(city, '') as city,
+            COALESCE(country, 'Israel') as country,
+            COALESCE(interests, ARRAY[]::TEXT[]) as interests,
+            COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
+            COALESCE(posts_count, 0) as posts_count,
+            COALESCE(followers_count, 0) as followers_count,
+            COALESCE(following_count, 0) as following_count,
+            0 as total_donations_amount,
+            0 as total_volunteer_hours,
+            COALESCE(email_verified, false) as email_verified,
+            COALESCE(settings, '{}'::jsonb) as settings
+          FROM user_profiles 
+          WHERE id::text = $1 
+             OR LOWER(email) = LOWER($1)
+             OR firebase_uid = $1
+          LIMIT 1
+        `, [normalizedId]);
+        rows = result.rows;
+      } else {
+        throw error;
+      }
+    }
+
 
     if (rows.length === 0) {
       return { success: false, error: 'User not found' };
@@ -207,63 +360,140 @@ export class UsersController {
     try {
       await client.query('BEGIN');
 
-      // Hash new password if provided
-      let passwordHash = undefined;
-      if (updateData.password) {
-        passwordHash = await argon2.hash(updateData.password);
-      }
+      // Get existing user data from user_profiles
+      const { rows: existingRows } = await client.query(`
+        SELECT id, email, name, phone, avatar_url, bio, password_hash,
+               city, country, interests, settings, roles, created_at
+        FROM user_profiles 
+        WHERE id::text = $1 OR LOWER(email) = LOWER($1) OR firebase_uid = $1 OR google_id = $1
+        LIMIT 1
+      `, [id]);
 
-      const { rows } = await client.query(`
-        UPDATE user_profiles 
-        SET name = COALESCE($1, name),
-            phone = COALESCE($2, phone),
-            avatar_url = COALESCE($3, avatar_url),
-            bio = COALESCE($4, bio),
-            city = COALESCE($5, city),
-            country = COALESCE($6, country),
-            interests = COALESCE($7, interests),
-            settings = COALESCE($8, settings),
-            password_hash = COALESCE($9, password_hash),
-            updated_at = NOW()
-        WHERE id = $10
-        RETURNING id, email, name, phone, avatar_url, bio, karma_points,
-                 join_date, is_active, last_active, city, country, interests,
-                 roles, posts_count, followers_count, following_count,
-                 total_donations_amount, total_volunteer_hours, email_verified, settings
-      `, [
-        updateData.name,
-        updateData.phone,
-        updateData.avatar_url,
-        updateData.bio,
-        updateData.city,
-        updateData.country,
-        updateData.interests,
-        updateData.settings ? JSON.stringify(updateData.settings) : null,
-        passwordHash,
-        id
-      ]);
-
-      if (rows.length === 0) {
+      if (existingRows.length === 0) {
         await client.query('ROLLBACK');
         return { success: false, error: 'User not found' };
       }
 
-      const user = rows[0];
+      const existingUser = existingRows[0];
+      const userId = existingUser.id;
 
-      // Track profile update activity
-      await client.query(`
-        INSERT INTO user_activities (user_id, activity_type, activity_data)
-        VALUES ($1, $2, $3)
-      `, [
-        id,
-        'profile_updated',
-        JSON.stringify({ fields_updated: Object.keys(updateData) })
-      ]);
+      // Build update query dynamically
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+      let paramCount = 1;
+
+      if (updateData.password) {
+        const passwordHash = await argon2.hash(updateData.password);
+        updateFields.push(`password_hash = $${paramCount++}`);
+        updateValues.push(passwordHash);
+      }
+      if (updateData.name !== undefined) {
+        updateFields.push(`name = $${paramCount++}`);
+        updateValues.push(updateData.name);
+      }
+      if (updateData.phone !== undefined) {
+        updateFields.push(`phone = $${paramCount++}`);
+        updateValues.push(updateData.phone);
+      }
+      if (updateData.avatar_url !== undefined) {
+        updateFields.push(`avatar_url = $${paramCount++}`);
+        updateValues.push(updateData.avatar_url);
+      }
+      if (updateData.bio !== undefined) {
+        updateFields.push(`bio = $${paramCount++}`);
+        updateValues.push(updateData.bio);
+      }
+      if (updateData.city !== undefined) {
+        updateFields.push(`city = $${paramCount++}`);
+        updateValues.push(updateData.city);
+      }
+      if (updateData.country !== undefined) {
+        updateFields.push(`country = $${paramCount++}`);
+        updateValues.push(updateData.country);
+      }
+      if (updateData.interests !== undefined) {
+        updateFields.push(`interests = $${paramCount++}`);
+        updateValues.push(updateData.interests);
+      }
+      if (updateData.settings !== undefined) {
+        updateFields.push(`settings = $${paramCount++}::jsonb`);
+        updateValues.push(JSON.stringify({ ...existingUser.settings, ...updateData.settings }));
+      }
+      if (updateData.firebase_uid !== undefined) {
+        updateFields.push(`firebase_uid = $${paramCount++}`);
+        updateValues.push(updateData.firebase_uid);
+      }
+      if (updateData.roles !== undefined) {
+        // STATIC PROTECTION: Prevent modifying navesarussi@gmail.com roles
+        if (existingUser.email?.toLowerCase() === 'navesarussi@gmail.com') {
+          // Instead of throwing error, we just ignore the roles update for this user to be safe but not break other updates
+          console.warn('Attempted to modify roles of Super Admin (navesarussi@gmail.com) - Ignoring role update.');
+        } else {
+          updateFields.push(`roles = $${paramCount++}::text[]`);
+          updateValues.push(updateData.roles);
+        }
+      }
+
+      // Always update last_active and updated_at
+      updateFields.push(`last_active = NOW()`, `updated_at = NOW()`);
+
+      if (updateFields.length > 2) { // More than just last_active and updated_at
+        updateValues.push(userId);
+        await client.query(`
+          UPDATE user_profiles 
+          SET ${updateFields.join(', ')}
+          WHERE id = $${paramCount}
+        `, updateValues);
+      } else {
+        // Only update last_active
+        await client.query(`
+          UPDATE user_profiles 
+          SET last_active = NOW(), updated_at = NOW()
+          WHERE id = $1
+        `, [userId]);
+      }
 
       await client.query('COMMIT');
 
-      // Clear cache
+      // Fetch updated user
+      const { rows: updatedRows } = await client.query(`
+        SELECT id, email, name, phone, avatar_url, bio, karma_points, join_date,
+               is_active, last_active, city, country, interests, roles, 
+               posts_count, followers_count, following_count, email_verified, settings, created_at
+        FROM user_profiles WHERE id = $1
+      `, [userId]);
+
+      // Clear cache to ensure fresh data after update
       await this.redisCache.delete(`user_profile_${id}`);
+      await this.redisCache.delete(`user_profile_${userId}`);
+      await this.redisCache.invalidatePattern('users_list*');
+
+      const updatedUser = updatedRows[0];
+
+      // Return user data in the expected format
+      const user = {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        phone: updatedUser.phone,
+        avatar_url: updatedUser.avatar_url,
+        bio: updatedUser.bio || '',
+        karma_points: updatedUser.karma_points || 0,
+        join_date: updatedUser.join_date || updatedUser.created_at,
+        is_active: updatedUser.is_active !== false,
+        last_active: updatedUser.last_active,
+        city: updatedUser.city || '',
+        country: updatedUser.country || 'Israel',
+        interests: updatedUser.interests || [],
+        roles: updatedUser.roles || ['user'],
+        posts_count: updatedUser.posts_count || 0,
+        followers_count: updatedUser.followers_count || 0,
+        following_count: updatedUser.following_count || 0,
+        total_donations_amount: 0,
+        total_volunteer_hours: 0,
+        email_verified: updatedUser.email_verified || false,
+        settings: updatedUser.settings || {}
+      };
 
       return { success: true, data: user };
     } catch (error) {
@@ -287,88 +517,81 @@ export class UsersController {
     // TODO: Implement cache warming for frequently accessed data
     const cacheKey = `users_list_${city || 'all'}_${search || ''}_${limit || '50'}_${offset || '0'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    // Query both user_profiles and users (legacy) tables to get all users
-    // Use UNION to combine both sources, excluding duplicates
-    let baseQuery = `
-      (
-        SELECT 
-          id::text as id,
-          name,
-          avatar_url,
-          city,
-          karma_points,
-          last_active,
-          total_donations_amount,
-          total_volunteer_hours,
-          join_date,
-          COALESCE(bio, '') as bio
-        FROM user_profiles 
-        WHERE is_active = true
-      )
-      UNION
-      (
-        SELECT 
-          user_id as id,
-          COALESCE(data->>'name', 'ללא שם') as name,
-          COALESCE(data->>'avatar', '') as avatar_url,
-          COALESCE(data->'location'->>'city', '') as city,
-          COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
-          COALESCE((data->>'lastActive')::timestamptz, updated_at) as last_active,
-          0 as total_donations_amount,
-          0 as total_volunteer_hours,
-          COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
-          COALESCE(data->>'bio', '') as bio
-        FROM users
-        WHERE 
-          (data->>'isActive' IS NULL OR data->>'isActive' = 'true')
-          AND NOT EXISTS (
-            SELECT 1 FROM user_profiles up 
-            WHERE up.email = users.data->>'email'
-          )
-      )
-    `;
-    
-    let query = `SELECT * FROM (${baseQuery}) AS all_users WHERE 1=1`;
-
+    // Unified query: Get all users from both user_profiles and users (legacy) tables
+    // טבלה מאוחדת: כל המשתמשים מ-user_profiles ו-users (legacy)
     const params: any[] = [];
     let paramCount = 0;
 
+    // Build WHERE conditions for filtering
+    let whereConditions = '';
+
     if (city) {
       paramCount++;
-      query += ` AND city ILIKE $${paramCount}`;
+      whereConditions += ` AND city ILIKE $${paramCount}`;
       params.push(`%${city}%`);
     }
 
     if (search) {
       paramCount++;
-      query += ` AND (name ILIKE $${paramCount} OR bio ILIKE $${paramCount})`;
+      whereConditions += ` AND (name ILIKE $${paramCount} OR bio ILIKE $${paramCount} OR email ILIKE $${paramCount})`;
       params.push(`%${search}%`);
     }
 
-    query += ` ORDER BY karma_points DESC, last_active DESC`;
+    // Build pagination
+    let limitClause = '';
+    let offsetClause = '';
 
     if (limit) {
       paramCount++;
-      query += ` LIMIT $${paramCount}`;
+      limitClause = `LIMIT $${paramCount}`;
       params.push(parseInt(limit));
     } else {
-      query += ` LIMIT 50`;
+      limitClause = `LIMIT 50`;
     }
 
     if (offset) {
       paramCount++;
-      query += ` OFFSET $${paramCount}`;
+      offsetClause = `OFFSET $${paramCount}`;
       params.push(parseInt(offset));
     }
 
+    // Main query: Get users from user_profiles only (legacy users table no longer used)
+    const query = `
+      SELECT 
+        id::text as id,
+        COALESCE(name, 'ללא שם') as name,
+        COALESCE(avatar_url, '') as avatar_url,
+        COALESCE(city, '') as city,
+        COALESCE(karma_points, 0) as karma_points,
+        COALESCE(last_active, updated_at) as last_active,
+        COALESCE(total_donations_amount, 0) as total_donations_amount,
+        COALESCE(total_volunteer_hours, 0) as total_volunteer_hours,
+        COALESCE(join_date, created_at) as join_date,
+        COALESCE(bio, '') as bio,
+        COALESCE(roles, ARRAY['user']::text[]) as roles,
+        email,
+        is_active,
+        created_at
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
+        ${whereConditions}
+      ORDER BY karma_points DESC, last_active DESC, join_date DESC
+      ${limitClause}
+      ${offsetClause}
+    `;
+
     const { rows } = await this.pool.query(query, params);
 
-    await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
+    // Log for debugging
+    console.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);
+
+    // Cache for 20 minutes - user lists are relatively static
+    await this.redisCache.set(cacheKey, rows, 20 * 60);
     return { success: true, data: rows };
   }
 
@@ -376,7 +599,7 @@ export class UsersController {
   async getUserActivities(@Param('id') userId: string, @Query('limit') limit?: string) {
     const cacheKey = `user_activities_${userId}_${limit || '50'}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -393,44 +616,83 @@ export class UsersController {
     return { success: true, data: rows };
   }
 
+  /**
+   * Get user statistics with partial caching optimization
+   * Each statistic type (donations, rides, bookings) is cached separately
+   * This allows partial cache hits - if only one stat changes, others remain cached
+   * Cache TTL: 15 minutes
+   */
   @Get(':id/stats')
   async getUserStats(@Param('id') userId: string) {
     const cacheKey = `user_stats_${userId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    // Get donation stats
-    const donationStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as total_donations,
-        SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
-        COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
-        COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
-      FROM donations
-      WHERE donor_id = $1
-    `, [userId]);
+    // Try to get individual cached stats using batch get for better performance
+    const donationStatsKey = `user_stats_donations_${userId}`;
+    const rideStatsKey = `user_stats_rides_${userId}`;
+    const bookingStatsKey = `user_stats_bookings_${userId}`;
 
-    // Get ride stats
-    const rideStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_created,
-        SUM(available_seats) as total_seats_offered,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
-      FROM rides
-      WHERE driver_id = $1
-    `, [userId]);
+    const cachedStats = await this.redisCache.getMultiple([
+      donationStatsKey,
+      rideStatsKey,
+      bookingStatsKey,
+    ]);
 
-    // Get booking stats (as passenger)
-    const bookingStats = await this.pool.query(`
-      SELECT 
-        COUNT(*) as rides_booked,
-        COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
-      FROM ride_bookings
-      WHERE passenger_id = $1
-    `, [userId]);
+    let donationStats: any;
+    let rideStats: any;
+    let bookingStats: any;
+
+    // Get donation stats (from cache or DB)
+    if (cachedStats.get(donationStatsKey)) {
+      donationStats = { rows: [cachedStats.get(donationStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as total_donations,
+          SUM(CASE WHEN type = 'money' THEN amount ELSE 0 END) as total_money_donated,
+          COUNT(CASE WHEN type = 'time' THEN 1 END) as volunteer_activities,
+          COUNT(CASE WHEN type = 'trump' THEN 1 END) as rides_offered
+        FROM donations
+        WHERE donor_id = $1
+      `, [userId]);
+      donationStats = result;
+      await this.redisCache.set(donationStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get ride stats (from cache or DB)
+    if (cachedStats.get(rideStatsKey)) {
+      rideStats = { rows: [cachedStats.get(rideStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_created,
+          SUM(available_seats) as total_seats_offered,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rides
+        FROM rides
+        WHERE driver_id = $1
+      `, [userId]);
+      rideStats = result;
+      await this.redisCache.set(rideStatsKey, result.rows[0], this.CACHE_TTL);
+    }
+
+    // Get booking stats (from cache or DB)
+    if (cachedStats.get(bookingStatsKey)) {
+      bookingStats = { rows: [cachedStats.get(bookingStatsKey)] };
+    } else {
+      const result = await this.pool.query(`
+        SELECT 
+          COUNT(*) as rides_booked,
+          COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_bookings
+        FROM ride_bookings
+        WHERE passenger_id = $1
+      `, [userId]);
+      bookingStats = result;
+      await this.redisCache.set(bookingStatsKey, result.rows[0], this.CACHE_TTL);
+    }
 
     const stats = {
       donations: donationStats.rows[0],
@@ -438,6 +700,7 @@ export class UsersController {
       bookings: bookingStats.rows[0]
     };
 
+    // Cache the combined result
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
     return { success: true, data: stats };
   }
@@ -547,55 +810,322 @@ export class UsersController {
   async getUsersSummary() {
     const cacheKey = 'users_summary_stats';
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
     const { rows } = await this.pool.query(`
-      WITH all_users AS (
-        -- Users from user_profiles
-        SELECT 
-          email,
-          is_active,
-          last_active,
-          join_date,
-          karma_points,
-          total_donations_amount
-        FROM user_profiles
-        WHERE email IS NOT NULL AND email <> ''
-        
-        UNION
-        
-        -- Users from legacy users table that don't exist in user_profiles
-        SELECT 
-          LOWER(data->>'email') as email,
-          COALESCE((data->>'isActive')::boolean, true) as is_active,
-          COALESCE((data->>'lastActive')::timestamptz, created_at) as last_active,
-          COALESCE((data->>'joinDate')::timestamptz, created_at) as join_date,
-          COALESCE((data->>'karmaPoints')::integer, 0) as karma_points,
-          0 as total_donations_amount
-        FROM users
-        WHERE data->>'email' IS NOT NULL
-          AND LOWER(data->>'email') <> ''
-          AND LOWER(data->>'email') NOT IN (
-            SELECT LOWER(email) FROM user_profiles WHERE email IS NOT NULL AND email <> ''
-          )
-      )
       SELECT 
-        COUNT(DISTINCT email) as total_users,
+        COUNT(DISTINCT LOWER(email)) as total_users,
         COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
         COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active_users,
         COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
         AVG(karma_points) as avg_karma_points,
         SUM(total_donations_amount) as total_platform_donations
-      FROM all_users
+      FROM user_profiles
+      WHERE email IS NOT NULL AND email <> ''
     `);
 
     const stats = rows[0];
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
 
     return { success: true, data: stats };
+  }
+
+  /**
+   * Resolve user ID from firebase_uid, google_id, or email to UUID
+   * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
+   */
+  /**
+   * Resolve user ID from firebase_uid, google_id, or email to UUID
+   * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
+   * It performs SMART LINKING: if a user exists by email but lacks the external ID, it updates the record.
+   */
+  @Post('resolve-id')
+  async resolveUserId(@Body() body: { firebase_uid?: string; google_id?: string; email?: string }) {
+    const { firebase_uid, google_id, email } = body;
+
+    // Use a clearer logging for debugging
+    console.log('🔍 ResolveUserId called with:', { firebase_uid, google_id, email });
+
+    if (!firebase_uid && !google_id && !email) {
+      return { success: false, error: 'Must provide firebase_uid, google_id, or email' };
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Try to find user by ANY of the identifiers
+      // Priorities: Database UUID (not passed here), Firebase UID, Google ID, Email
+      let query = `
+        SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid, google_id
+        FROM user_profiles 
+        WHERE false 
+      `;
+      const params: any[] = [];
+      let paramCount = 1;
+
+      if (firebase_uid) {
+        query += ` OR firebase_uid = $${paramCount++}`;
+        params.push(firebase_uid);
+      }
+      if (google_id) {
+        // Only if google_id column exists (handled by try/catch in query execution if column missing, but we assume it exists from init)
+        query += ` OR google_id = $${paramCount++}`;
+        params.push(google_id);
+      }
+      if (email) {
+        query += ` OR LOWER(email) = LOWER($${paramCount++})`;
+        params.push(email);
+      }
+
+      query += ` LIMIT 1`;
+
+      let rows: any[] = [];
+      try {
+        const result = await client.query(query, params);
+        rows = result.rows;
+      } catch (err: any) {
+        // Fallback if google_id column doesn't exist yet
+        if (err.message?.includes('google_id')) {
+          console.warn('⚠️ Google ID column missing in resolve-id, retrying without it');
+          // Retry without google_id logic
+          let fallbackQuery = `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid FROM user_profiles WHERE false`;
+          const fallbackParams: any[] = [];
+          let fbCount = 1;
+          if (firebase_uid) { fallbackQuery += ` OR firebase_uid = $${fbCount++}`; fallbackParams.push(firebase_uid); }
+          if (email) { fallbackQuery += ` OR LOWER(email) = LOWER($${fbCount++})`; fallbackParams.push(email); }
+
+          const fallbackResult = await client.query(fallbackQuery, fallbackParams);
+          rows = fallbackResult.rows;
+        } else {
+          throw err;
+        }
+      }
+
+      if (rows.length === 0) {
+        // User not found - if we have firebase_uid, try to create user from Firebase
+        if (firebase_uid) {
+          try {
+            // Try to get user info from Firebase Admin SDK
+            // Note: This requires Firebase Admin SDK to be initialized
+            // If not available, we'll just return error
+            const admin = require('firebase-admin');
+            if (admin.apps.length > 0) {
+              try {
+                const firebaseUser = await admin.auth().getUser(firebase_uid);
+                if (firebaseUser.email) {
+                  // Create user in user_profiles
+                  const normalizedEmail = firebaseUser.email.toLowerCase().trim();
+                  const googleProvider = firebaseUser.providerData?.find(
+                    (p: any) => p.providerId === 'google.com'
+                  );
+                  const googleId = googleProvider?.uid || null;
+
+                  const nowIso = new Date().toISOString();
+                  const creationTime = firebaseUser.metadata.creationTime
+                    ? new Date(firebaseUser.metadata.creationTime)
+                    : new Date();
+                  const lastSignInTime = firebaseUser.metadata.lastSignInTime
+                    ? new Date(firebaseUser.metadata.lastSignInTime)
+                    : creationTime;
+
+                  try {
+                    const { rows: newUser } = await client.query(
+                      `INSERT INTO user_profiles (
+                        firebase_uid, google_id, email, name, avatar_url, bio,
+                        karma_points, join_date, is_active, last_active,
+                        city, country, interests, roles, email_verified, settings
+                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::text[], $14::text[], $15, $16::jsonb)
+                      RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+                      [
+                        firebaseUser.uid,
+                        googleId,
+                        normalizedEmail,
+                        firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                        firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                        'משתמש חדש בקארמה קומיוניטי',
+                        0,
+                        creationTime,
+                        true,
+                        lastSignInTime,
+                        'ישראל',
+                        'Israel',
+                        [],
+                        ['user'],
+                        firebaseUser.emailVerified || false,
+                        JSON.stringify({
+                          language: 'he',
+                          dark_mode: false,
+                          notifications_enabled: true,
+                          privacy: 'public'
+                        })
+                      ]
+                    );
+                    await client.query('COMMIT');
+                    console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
+
+                    return {
+                      success: true,
+                      user: {
+                        id: newUser[0].id,
+                        email: newUser[0].email,
+                        name: newUser[0].name,
+                        avatar: newUser[0].avatar_url,
+                        roles: newUser[0].roles || ['user'],
+                        settings: newUser[0].settings || {},
+                        createdAt: newUser[0].created_at,
+                        lastActive: newUser[0].last_active,
+                      },
+                    };
+                  } catch (insertError: any) {
+                    // If google_id column doesn't exist, try without it
+                    if (insertError.message && insertError.message.includes('google_id')) {
+                      const { rows: newUser } = await client.query(
+                        `INSERT INTO user_profiles (
+                          firebase_uid, email, name, avatar_url, bio,
+                          karma_points, join_date, is_active, last_active,
+                          city, country, interests, roles, email_verified, settings
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::text[], $13::text[], $14, $15::jsonb)
+                        RETURNING id, email, name, avatar_url, roles, settings, created_at, last_active`,
+                        [
+                          firebaseUser.uid,
+                          normalizedEmail,
+                          firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
+                          firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
+                          'משתמש חדש בקארמה קומיוניטי',
+                          0,
+                          creationTime,
+                          true,
+                          lastSignInTime,
+                          'ישראל',
+                          'Israel',
+                          [],
+                          ['user'],
+                          firebaseUser.emailVerified || false,
+                          JSON.stringify({
+                            language: 'he',
+                            dark_mode: false,
+                            notifications_enabled: true,
+                            privacy: 'public'
+                          })
+                        ]
+                      );
+                      await client.query('COMMIT');
+                      console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
+
+                      return {
+                        success: true,
+                        user: {
+                          id: newUser[0].id,
+                          email: newUser[0].email,
+                          name: newUser[0].name,
+                          avatar: newUser[0].avatar_url,
+                          roles: newUser[0].roles || ['user'],
+                          settings: newUser[0].settings || {},
+                          createdAt: newUser[0].created_at,
+                          lastActive: newUser[0].last_active,
+                        },
+                      };
+                    } else {
+                      throw insertError;
+                    }
+                  }
+                }
+              } catch (firebaseError) {
+                console.warn('⚠️ Could not fetch user from Firebase Admin SDK:', firebaseError);
+                // Continue to return error
+              }
+            }
+          } catch (adminError) {
+            // Firebase Admin SDK not available - that's okay, continue
+            console.warn('⚠️ Firebase Admin SDK not available for auto-creation');
+          }
+        }
+
+        await client.query('ROLLBACK');
+        console.log('❌ User not found for resolution');
+        return { success: false, error: 'User not found' };
+      }
+
+      const user = rows[0];
+      let needsUpdate = false;
+      const updateFields: string[] = [];
+      const updateValues: any[] = [];
+      let upCount = 1;
+
+      // 2. Alert on account linking (found by email, but missing external ID)
+      if (firebase_uid && user.firebase_uid !== firebase_uid) {
+        if (!user.firebase_uid) {
+          console.log(`🔗 Linking User ${user.email} to Firebase UID: ${firebase_uid}`);
+          updateFields.push(`firebase_uid = $${upCount++}`);
+          updateValues.push(firebase_uid);
+          needsUpdate = true;
+        } else {
+          console.warn(`⚠️ Conflict: User ${user.email} has different Firebase UID (${user.firebase_uid}) than provided (${firebase_uid})`);
+        }
+      }
+
+      if (google_id && user.google_id !== google_id) {
+        // Check if row has google_id property (it might not if column missing)
+        // We assume if we are here, we want to try updating it.
+        if (!user.google_id) {
+          console.log(`🔗 Linking User ${user.email} to Google ID: ${google_id}`);
+          updateFields.push(`google_id = $${upCount++}`);
+          updateValues.push(google_id);
+          needsUpdate = true;
+        }
+      }
+
+      if (needsUpdate) {
+        try {
+          // Append ID for WHERE clause
+          updateValues.push(user.id);
+          const updateQuery = `
+            UPDATE user_profiles 
+            SET ${updateFields.join(', ')}, updated_at = NOW()
+            WHERE id = $${upCount}
+          `;
+          await client.query(updateQuery, updateValues);
+          console.log('✅ User linked successfully');
+        } catch (updateErr) {
+          console.error('❌ Failed to link user account:', updateErr);
+          // Non-fatal? Maybe. But safer to rollback if linking fails.
+          // actually, if we fail to link, we should probably still return the user found by email, 
+          // but logging the error is important.
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // Clear cache for this user
+      await this.redisCache.delete(`user_profile_${user.id}`);
+      if (user.firebase_uid) await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
+      if (user.email) await this.redisCache.delete(`user_profile_${user.email}`);
+
+      return {
+        success: true,
+        user: {
+          id: user.id, // UUID - this is the primary identifier
+          email: user.email,
+          name: user.name,
+          avatar: user.avatar_url,
+          roles: user.roles || ['user'],
+          settings: user.settings || {},
+          createdAt: user.created_at,
+          lastActive: user.last_active,
+        },
+      };
+
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error in resolveUserId:', error);
+      return { success: false, error: error.message || 'Failed to resolve user ID' };
+    } finally {
+      client.release();
+    }
   }
 }

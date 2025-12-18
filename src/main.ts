@@ -25,8 +25,10 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import * as dotenv from 'dotenv';
 import helmet from 'helmet';
+import * as bodyParser from 'body-parser';
 
 /**
  * Validate required environment variables before server startup
@@ -120,11 +122,18 @@ async function bootstrap(): Promise<void> {
     
     logger.log('🚀 Starting Karma Community Server...');
     
-    // Create NestJS application instance
-    const app = await NestFactory.create(AppModule, { 
+    // Create NestJS application instance with Express adapter
+    const app = await NestFactory.create<NestExpressApplication>(AppModule, { 
       cors: false, // We configure CORS manually for more control
-      logger: ['error', 'warn', 'log', 'debug', 'verbose']
+      logger: ['error', 'warn', 'log', 'debug', 'verbose'],
+      bodyParser: false, // Disable default body parser so we can configure it manually
     });
+    
+    // Configure body parser with 50MB limit for base64 image uploads
+    app.use(bodyParser.json({ limit: '50mb' }));
+    app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+    
+    logger.log('📦 Body parser configured with 50MB limit for image uploads');
     
     const port = Number(process.env.PORT || 3001);
     
@@ -221,21 +230,27 @@ async function bootstrap(): Promise<void> {
     
     app.use((req: any, res: any, next: any) => {
       const origin = req.headers.origin;
+      
+      // Only set CORS headers if origin is in allowed list
       if (origin && allowedOrigins.includes(origin)) {
         res.header('Access-Control-Allow-Origin', origin);
         res.header('Vary', 'Origin');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
+        
+        // Handle preflight requests
+        if (req.method === 'OPTIONS') {
+          return res.sendStatus(204);
+        }
       } else if (origin && !isProduction) {
         // In development, log blocked origins for debugging
         logger.warn(`🚫 Blocked CORS request from origin: ${origin} (not in allowed list)`);
+      } else if (origin && isProduction) {
+        // In production, silently block unauthorized origins (security)
+        // Don't set any CORS headers, browser will block the request
       }
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
       
-      // Handle preflight requests
-      if (req.method === 'OPTIONS') {
-        return res.sendStatus(204);
-      }
       next();
     });
 

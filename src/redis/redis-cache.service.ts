@@ -95,4 +95,121 @@ export class RedisCacheService {
       info: info.split('\r\n').slice(0, 10).join('\n'), // First 10 lines
     };
   }
+
+  /**
+   * Set multiple keys at once using Redis pipeline for better performance
+   * This is more efficient than calling set() multiple times as it batches operations
+   * 
+   * @param entries Array of key-value pairs with optional TTL
+   * @example
+   * await redisCache.setMultiple([
+   *   { key: 'user:1', value: userData, ttl: 600 },
+   *   { key: 'user:2', value: userData2, ttl: 600 }
+   * ]);
+   */
+  async setMultiple(entries: Array<{ key: string; value: any; ttl?: number }>): Promise<void> {
+    if (entries.length === 0) return;
+
+    const pipeline = this.redis.pipeline();
+    
+    for (const entry of entries) {
+      const serializedValue = JSON.stringify(entry.value);
+      if (entry.ttl) {
+        pipeline.setex(entry.key, entry.ttl, serializedValue);
+      } else {
+        pipeline.set(entry.key, serializedValue);
+      }
+    }
+    
+    await pipeline.exec();
+  }
+
+  /**
+   * Get multiple keys at once using Redis pipeline for better performance
+   * Returns a Map where keys are the cache keys and values are the cached data (or null if not found)
+   * 
+   * @param keys Array of cache keys to retrieve
+   * @returns Map of key -> value pairs (null if key doesn't exist)
+   * @example
+   * const results = await redisCache.getMultiple(['user:1', 'user:2', 'user:3']);
+   * const user1 = results.get('user:1'); // User data or null
+   */
+  async getMultiple<T = any>(keys: string[]): Promise<Map<string, T | null>> {
+    if (keys.length === 0) return new Map();
+
+    const pipeline = this.redis.pipeline();
+    keys.forEach(key => pipeline.get(key));
+    
+    const results = await pipeline.exec();
+    const map = new Map<string, T | null>();
+
+    if (results) {
+      for (let i = 0; i < keys.length; i++) {
+        const result = results[i];
+        const key = keys[i];
+        
+        if (result && result[1] !== null) {
+          try {
+            map.set(key, JSON.parse(result[1] as string));
+          } catch (error) {
+            // If parsing fails, return the raw string
+            map.set(key, result[1] as T);
+          }
+        } else {
+          map.set(key, null);
+        }
+      }
+    }
+
+    return map;
+  }
+
+  /**
+   * Invalidate all keys matching a pattern efficiently using Redis pipeline
+   * This is more efficient than manually getting keys and deleting them one by one
+   * 
+   * @param pattern Redis key pattern (supports wildcards like 'user:*', 'stats_*')
+   * @returns Number of keys deleted
+   * @example
+   * const deletedCount = await redisCache.invalidatePattern('user_stats_*');
+   */
+  async invalidatePattern(pattern: string): Promise<number> {
+    try {
+      const keys = await this.getKeys(pattern);
+      if (keys.length === 0) return 0;
+
+      // Use pipeline for better performance
+      const pipeline = this.redis.pipeline();
+      keys.forEach(key => pipeline.del(key));
+      await pipeline.exec();
+
+      return keys.length;
+    } catch (error) {
+      // Log error but don't throw - cache clearing should not fail the operation
+      console.warn(`Failed to invalidate cache pattern ${pattern}:`, error);
+      return 0;
+    }
+  }
+
+  /**
+   * Clear all statistics-related caches
+   * This is used when user data changes (new user registered, etc.)
+   * to ensure statistics are refreshed immediately
+   */
+  async clearStatsCaches(): Promise<void> {
+    const patterns = [
+      'community_stats_*',
+      'community_trends_*',
+      'city_stats_*',
+      'dashboard_stats',
+      'real_time_stats',
+      'category_analytics',
+      'user_analytics',
+      'community_stats_version_*',
+    ];
+
+    for (const pattern of patterns) {
+      await this.invalidatePattern(pattern);
+    }
+  }
 }
