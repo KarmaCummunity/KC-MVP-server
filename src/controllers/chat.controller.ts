@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { OptionalAuthGuard } from '../auth/jwt-auth.guard';
+import { UserResolutionService } from '../services/user-resolution.service';
 
 @Controller('api/chat')
 @UseGuards(OptionalAuthGuard)
@@ -12,65 +13,22 @@ export class ChatController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
+    private readonly userResolutionService: UserResolutionService,
   ) { }
 
-  // --- Utility: Resolve User ID ---
-  // Resolves email, firebase_uid, or UUID to user_profiles.id (UUID)
+  // resolveUserId is now handled by UserResolutionService
+  // This wrapper method maintains backward compatibility
   private async resolveUserId(userId: string): Promise<string> {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(userId)) {
-      // Already a UUID, verify it exists
-      const { rows } = await this.pool.query(
-        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
-        [userId]
-      );
-      if (rows.length > 0) {
-        return userId;
-      }
-      // UUID not found, try to resolve
-    }
-
-    const normalizedUserId = userId.includes('@')
-      ? String(userId).trim().toLowerCase()
-      : userId;
-
-    const cacheKey = `user_id_resolve_${normalizedUserId}`;
-    const cached = await this.redisCache.get<string>(cacheKey);
-    if (cached && uuidRegex.test(cached)) {
-      return cached;
-    }
-
-    // Look up in user_profiles by email, firebase_uid, google_id, or UUID
-    const { rows: existingUsers } = await this.pool.query(`
-      SELECT id FROM user_profiles 
-      WHERE LOWER(email) = LOWER($1)
-         OR firebase_uid = $1
-         OR google_id = $1
-         OR id::text = $1
-      LIMIT 1
-    `, [normalizedUserId]);
-
-    let resolvedUserId: string;
-    if (existingUsers.length > 0) {
-      resolvedUserId = existingUsers[0].id;
-    } else {
-      // If not found and it's a valid UUID format, return it (might be new user)
-      if (uuidRegex.test(normalizedUserId)) {
-        resolvedUserId = normalizedUserId;
-      } else {
-        // Not a UUID and not found - this is an error case
-        throw new Error(`User not found: ${normalizedUserId}`);
-      }
-    }
-
-    await this.redisCache.set(cacheKey, resolvedUserId, 10 * 60);
-    return resolvedUserId;
+    // With throwOnNotFound=true, this will never return null
+    return this.userResolutionService.resolveUserId(userId, {
+      throwOnNotFound: true,
+      cacheResult: true
+    }) as Promise<string>;
   }
 
   // --- Utility: Validate UUID ---
   private isValidUUID(uuid: string): boolean {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    return uuidRegex.test(uuid);
+    return this.userResolutionService.isValidUUID(uuid);
   }
 
   // --- Utility: Clear Caches ---
@@ -135,8 +93,29 @@ export class ChatController {
         }
       }
 
+      // CRITICAL FIX: Sort participants to ensure consistent order
+      // This prevents duplicate conversations when participants arrive in different order
+      const sortedParticipants = [...resolvedParticipants].sort();
+
       await client.query('BEGIN');
 
+      // Check for existing conversation with exact same participants
+      // Use sorted participants to ensure we find existing conversation regardless of order
+      const { rows: existingConvs } = await client.query(`
+        SELECT * FROM chat_conversations
+        WHERE participants @> $1::uuid[]
+          AND participants <@ $1::uuid[]
+          AND array_length(participants, 1) = $2
+        LIMIT 1
+      `, [sortedParticipants, sortedParticipants.length]);
+
+      if (existingConvs.length > 0) {
+        await client.query('COMMIT');
+        client.release();
+        return { success: true, data: existingConvs[0] };
+      }
+
+      // Insert with sorted participants to maintain consistency
       const { rows } = await client.query(`
         INSERT INTO chat_conversations (title, type, participants, created_by, metadata)
         VALUES ($1, $2, $3::uuid[], $4::uuid, $5)
@@ -144,7 +123,7 @@ export class ChatController {
       `, [
         conversationData.title || null,
         conversationData.type || 'direct',
-        resolvedParticipants,
+        sortedParticipants, // Use sorted participants
         resolvedCreatedBy,
         conversationData.metadata ? JSON.stringify(conversationData.metadata) : null
       ]);
@@ -385,30 +364,35 @@ export class ChatController {
             }
           }
 
+          // CRITICAL FIX: Sort participants to ensure consistent order
+          const sortedParticipants = [...resolvedParticipants].sort();
+
           await client.query('BEGIN');
           transactionStarted = true;
 
-          const participantsHash = resolvedParticipants.sort().join(',');
+          const participantsHash = sortedParticipants.join(',');
           const lockKey = `conversation_${Buffer.from(participantsHash).toString('base64').slice(0, 16)}`;
           const lockId = this.hashStringToInt(lockKey);
           await client.query('SELECT pg_advisory_xact_lock($1)', [lockId]);
 
+          // Check with sorted participants
           const { rows: existingConvs } = await client.query(`
               SELECT id FROM chat_conversations
               WHERE participants @> $1::uuid[]
                 AND participants <@ $1::uuid[]
                 AND array_length(participants, 1) = $2
               LIMIT 1
-            `, [resolvedParticipants.map(p => p), resolvedParticipants.length]);
+            `, [sortedParticipants, sortedParticipants.length]);
 
           if (existingConvs.length > 0) {
             conversationId = existingConvs[0].id;
           } else {
+            // Insert with sorted participants
             const { rows: newConvRows } = await client.query(`
                 INSERT INTO chat_conversations (title, type, participants, created_by, metadata)
                 VALUES ($1, $2, $3::uuid[], $4::uuid, $5)
                 RETURNING *
-              `, [null, 'direct', resolvedParticipants, resolvedSenderId, messageData.metadata ? JSON.stringify(messageData.metadata) : null]);
+              `, [null, 'direct', sortedParticipants, resolvedSenderId, messageData.metadata ? JSON.stringify(messageData.metadata) : null]);
             conversationId = newConvRows[0].id;
             conversationCreated = true;
           }

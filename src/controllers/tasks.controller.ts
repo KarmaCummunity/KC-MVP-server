@@ -7,6 +7,7 @@ import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { UserResolutionService } from '../services/user-resolution.service';
 
 type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived';
 type TaskPriority = 'low' | 'medium' | 'high';
@@ -16,46 +17,19 @@ export class TasksController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+    private readonly userResolutionService: UserResolutionService,
+  ) { }
 
   /**
    * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
-   * This ensures all user IDs are converted to UUID format before use
+   * Now delegates to UserResolutionService for consistency
    */
   private async resolveUserIdToUUID(userId: string): Promise<string | null> {
-    if (!userId) {
-      return null;
-    }
-
-    // Check if it's already a valid UUID
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(userId)) {
-      // Verify it exists in user_profiles
-      const result = await this.pool.query(
-        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
-        [userId]
-      );
-      if (result.rows.length > 0) {
-        return userId;
-      }
-    }
-
-    // Try to find user by email, firebase_uid, or google_id
-    const result = await this.pool.query(
-      `SELECT id FROM user_profiles 
-       WHERE LOWER(email) = LOWER($1) 
-          OR firebase_uid = $1 
-          OR google_id = $1 
-          OR id::text = $1
-       LIMIT 1`,
-      [userId]
-    );
-
-    if (result.rows.length > 0) {
-      return result.rows[0].id;
-    }
-
-    return null;
+    return this.userResolutionService.resolveUserId(userId, {
+      throwOnNotFound: false,
+      cacheResult: true,
+      logError: false
+    });
   }
 
   /**
@@ -72,10 +46,10 @@ export class TasksController {
           AND table_name = 'tasks'
         );
       `);
-      
+
       const tableExists = checkTable.rows[0].exists;
       let needsRecreation = false;
-      
+
       // If table exists, verify it has the required columns
       if (tableExists) {
         const checkColumns = await this.pool.query(`
@@ -85,11 +59,11 @@ export class TasksController {
           AND table_name = 'tasks'
           AND column_name IN ('id', 'title', 'description', 'status', 'priority')
         `);
-        
+
         const requiredColumns = ['id', 'title', 'description', 'status', 'priority'];
         const existingColumns = checkColumns.rows.map((r: any) => r.column_name);
         const missingColumns = requiredColumns.filter(col => !existingColumns.includes(col));
-        
+
         if (missingColumns.length > 0) {
           console.warn(`⚠️ Tasks table exists but missing columns: ${missingColumns.join(', ')}. Dropping and recreating...`);
           // Drop and recreate if columns are missing
@@ -100,12 +74,12 @@ export class TasksController {
           return;
         }
       }
-      
+
       // Create table if it doesn't exist or was dropped
       if (!tableExists || needsRecreation) {
         console.warn('⚠️ Tasks table not found, creating it...');
         console.log('📋 Attempting to create tasks table in production...');
-        
+
         try {
           // Create extension (may fail if no permissions, but continue anyway)
           try {
@@ -116,7 +90,7 @@ export class TasksController {
             console.warn('⚠️ Could not create uuid-ossp extension (may already exist or no permissions):', extError);
             // Continue - extension might already exist
           }
-          
+
           // Create the table
           console.log('📋 Creating tasks table...');
           await this.pool.query(`
@@ -137,7 +111,7 @@ export class TasksController {
             )
           `);
           console.log('✅ Tasks table CREATE statement executed');
-          
+
           // Create indexes
           console.log('📊 Creating indexes...');
           await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)');
@@ -148,7 +122,7 @@ export class TasksController {
           await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)');
           await this.pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)');
           console.log('✅ Indexes created');
-          
+
           // Create trigger function if it doesn't exist
           console.log('⚙️ Creating trigger function...');
           await this.pool.query(`
@@ -160,7 +134,7 @@ export class TasksController {
             END;
             $$ language 'plpgsql'
           `);
-          
+
           // Create trigger
           await this.pool.query('DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks');
           await this.pool.query(`
@@ -170,11 +144,11 @@ export class TasksController {
             EXECUTE FUNCTION update_updated_at_column()
           `);
           console.log('✅ Trigger created');
-          
+
           // Verify table was created - wait a bit and check again
           console.log('🔍 Verifying table creation...');
           await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for DB to sync
-          
+
           const verifyTable = await this.pool.query(`
             SELECT EXISTS (
               SELECT FROM information_schema.tables 
@@ -182,7 +156,7 @@ export class TasksController {
               AND table_name = 'tasks'
             );
           `);
-          
+
           if (verifyTable.rows[0].exists) {
             console.log('✅✅✅ Tasks table created and verified successfully!');
           } else {
@@ -218,7 +192,7 @@ export class TasksController {
     try {
       // Ensure table exists before querying
       await this.ensureTasksTable();
-      
+
       // Parse limit and offset - handle 0 correctly
       const limitNum = limitParam ? parseInt(String(limitParam), 10) : 100;
       const offsetNum = offsetParam ? parseInt(String(offsetParam), 10) : 0;
@@ -227,7 +201,7 @@ export class TasksController {
 
       // Build cache key from query parameters (include search query if present)
       const cacheKey = `tasks_list_${status || 'all'}_${priority || 'all'}_${category || 'all'}_${searchQuery || 'all'}_${limit}_${offset}`;
-      
+
       // Try to get from cache (but don't fail if Redis is unavailable)
       let cached = null;
       try {
@@ -235,24 +209,24 @@ export class TasksController {
       } catch (cacheError) {
         console.warn('Redis cache error (non-fatal):', cacheError);
       }
-      
+
       if (cached) {
         return { success: true, data: cached };
       }
 
       const filters: string[] = [];
       const params: any[] = [];
-      
+
       if (status) {
         params.push(status);
         filters.push(`status = $${params.length}`);
       }
-      
+
       if (priority) {
         params.push(priority);
         filters.push(`priority = $${params.length}`);
       }
-      
+
       if (category) {
         params.push(category);
         filters.push(`category = $${params.length}`);
@@ -265,7 +239,7 @@ export class TasksController {
         const searchParamIndex = params.length;
         filters.push(`(title ILIKE $${searchParamIndex} OR description ILIKE $${searchParamIndex})`);
       }
-      
+
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
       const sql = `
@@ -282,18 +256,18 @@ export class TasksController {
       params.push(limit, offset);
 
       const { rows } = await this.pool.query(sql, params);
-      
+
       // Try to cache the result (but don't fail if Redis is unavailable)
       try {
         await this.redisCache.set(cacheKey, rows, 10 * 60);
       } catch (cacheError) {
         console.warn('Redis cache set error (non-fatal):', cacheError);
       }
-      
+
       return { success: true, data: rows };
     } catch (error) {
       console.error('Error listing tasks:', error);
-      
+
       // Check if error is about missing table/columns
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage.includes('does not exist') || errorMessage.includes('column')) {
@@ -302,7 +276,7 @@ export class TasksController {
           error: 'Database table structure issue. Please contact administrator or check server logs.',
         };
       }
-      
+
       return {
         success: false,
         error: errorMessage || 'Failed to list tasks',
@@ -319,9 +293,9 @@ export class TasksController {
   async initTasksTable() {
     try {
       await this.ensureTasksTable();
-      return { 
-        success: true, 
-        message: 'Tasks table initialized successfully' 
+      return {
+        success: true,
+        message: 'Tasks table initialized successfully'
       };
     } catch (error) {
       console.error('Failed to initialize tasks table:', error);
@@ -341,15 +315,15 @@ export class TasksController {
     try {
       // Ensure table exists before querying
       await this.ensureTasksTable();
-      
+
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
         return { success: false, error: 'Invalid task ID format' };
       }
-      
+
       const cacheKey = `task_${id}`;
-      
+
       // Try to get from cache (but don't fail if Redis is unavailable)
       let cached = null;
       try {
@@ -357,7 +331,7 @@ export class TasksController {
       } catch (cacheError) {
         console.warn('Redis cache error (non-fatal):', cacheError);
       }
-      
+
       if (cached) {
         return { success: true, data: cached };
       }
@@ -370,14 +344,14 @@ export class TasksController {
       if (!rows.length) {
         return { success: false, error: 'Task not found' };
       }
-      
+
       // Try to cache the result (but don't fail if Redis is unavailable)
       try {
         await this.redisCache.set(cacheKey, rows[0], 15 * 60);
       } catch (cacheError) {
         console.warn('Redis cache set error (non-fatal):', cacheError);
       }
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error getting task:', error);
@@ -393,7 +367,7 @@ export class TasksController {
     try {
       // Ensure table exists before inserting
       await this.ensureTasksTable();
-      
+
       const {
         title,
         description = null,
@@ -416,12 +390,12 @@ export class TasksController {
       if (status && !['open', 'in_progress', 'done', 'archived'].includes(status)) {
         return { success: false, error: 'Invalid status value' };
       }
-      
+
       // Validate priority
       if (priority && !['low', 'medium', 'high'].includes(priority)) {
         return { success: false, error: 'Invalid priority value' };
       }
-      
+
       // Validate and parse due_date if provided
       let parsedDueDate = null;
       if (due_date) {
@@ -438,7 +412,7 @@ export class TasksController {
 
       // Convert emails to UUIDs if assigneesEmails is provided
       let assigneeUUIDs: string[] = [];
-      
+
       // If assigneesEmails is provided (array of emails), convert to UUIDs
       if (Array.isArray(assigneesEmails) && assigneesEmails.length > 0) {
         const emailList = assigneesEmails.filter((e) => typeof e === 'string' && e.trim());
@@ -450,7 +424,7 @@ export class TasksController {
           const { rows: userRows } = await this.pool.query(emailQuery, [emailList]);
           assigneeUUIDs = userRows.map((row) => row.id);
         }
-      } 
+      }
       // Otherwise, use assignees if provided (should be UUIDs)
       else if (Array.isArray(assignees) && assignees.length > 0) {
         assigneeUUIDs = assignees;
@@ -484,18 +458,18 @@ export class TasksController {
       ];
 
       const { rows } = await this.pool.query(sql, params);
-      
+
       // Clear task list caches (non-blocking)
       this.clearTaskCaches().catch((err) => {
         console.warn('Error clearing caches after task creation:', err);
       });
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error creating task:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to create task' 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to create task'
       };
     }
   }
@@ -505,23 +479,23 @@ export class TasksController {
     try {
       // Ensure table exists before updating
       await this.ensureTasksTable();
-      
+
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
         return { success: false, error: 'Invalid task ID format' };
       }
-      
+
       // Validate status if provided
       if (body.status && !['open', 'in_progress', 'done', 'archived'].includes(body.status)) {
         return { success: false, error: 'Invalid status value' };
       }
-      
+
       // Validate priority if provided
       if (body.priority && !['low', 'medium', 'high'].includes(body.priority)) {
         return { success: false, error: 'Invalid priority value' };
       }
-      
+
       // Validate and parse due_date if provided
       let parsedDueDate = null;
       if (body.due_date !== undefined && body.due_date !== null) {
@@ -535,7 +509,7 @@ export class TasksController {
           parsedDueDate = body.due_date;
         }
       }
-      
+
       // Build partial update dynamically
       const allowed = [
         'title',
@@ -578,7 +552,7 @@ export class TasksController {
           // Skip, handled above
           continue;
         }
-        
+
         if (key === 'due_date') {
           // Handle due_date separately with parsed value
           if (body.due_date !== undefined) {
@@ -587,7 +561,7 @@ export class TasksController {
           }
           continue;
         }
-        
+
         if (key in body) {
           params.push(
             key === 'tags'
@@ -626,7 +600,7 @@ export class TasksController {
       if (!rows.length) {
         return { success: false, error: 'Task not found' };
       }
-      
+
       // Clear task caches (non-blocking)
       this.redisCache.delete(`task_${id}`).catch((err) => {
         console.warn('Error deleting task cache:', err);
@@ -634,13 +608,13 @@ export class TasksController {
       this.clearTaskCaches().catch((err) => {
         console.warn('Error clearing caches after task update:', err);
       });
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error updating task:', error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to update task' 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update task'
       };
     }
   }
@@ -650,18 +624,18 @@ export class TasksController {
     try {
       // Ensure table exists before deleting
       await this.ensureTasksTable();
-      
+
       // Validate UUID format
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
         return { success: false, error: 'Invalid task ID format' };
       }
-      
+
       const { rowCount } = await this.pool.query('DELETE FROM tasks WHERE id = $1', [id]);
       if (!rowCount) {
         return { success: false, error: 'Task not found' };
       }
-      
+
       // Try to clear task caches (but don't fail if Redis is unavailable)
       try {
         await this.redisCache.delete(`task_${id}`);
@@ -669,7 +643,7 @@ export class TasksController {
       } catch (cacheError) {
         console.warn('Redis cache delete error (non-fatal):', cacheError);
       }
-      
+
       return { success: true, message: 'Task deleted' };
     } catch (error) {
       console.error('Error deleting task:', error);

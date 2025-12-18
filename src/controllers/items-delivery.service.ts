@@ -17,62 +17,11 @@ export class ItemsDeliveryService {
     private readonly redisCache: RedisCacheService,
   ) { }
 
-  /**
-   * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
-   * This ensures all user IDs are converted to UUID format before use
-   */
-  private async resolveUserIdToUUID(userId: string): Promise<string> {
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
-    // Check if it's already a valid UUID
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(userId)) {
-      // Verify it exists in user_profiles
-      const result = await this.pool.query(
-        `SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
-        [userId]
-      );
-      if (result.rows.length > 0) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:38',message:'UUID validation found user, returning input userId',data:{userId,userIdType:typeof userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-        // #endregion
-        return userId;
-      }
-    }
-
-    // Try to find user by email, firebase_uid, or google_id
-    const result = await this.pool.query(
-      `SELECT id FROM user_profiles 
-       WHERE LOWER(email) = LOWER($1) 
-          OR firebase_uid = $1 
-          OR google_id = $1 
-          OR id::text = $1
-       LIMIT 1`,
-      [userId]
-    );
-
-    if (result.rows.length > 0) {
-      const uuidValue = result.rows[0].id;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:54',message:'resolveUserIdToUUID returning UUID',data:{userId,resolvedUuid:uuidValue,uuidType:typeof uuidValue,uuidConstructor:uuidValue?.constructor?.name,uuidStringValue:String(uuidValue)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
-      // Convert UUID object to string if needed
-      return String(uuidValue);
-    }
-
-    throw new Error(`User not found: ${userId}`);
-  }
-
   // ==================== Items CRUD ====================
 
   async createItem(createItemDto: CreateItemDto) {
     const client = await this.pool.connect();
     try {
-      // Resolve owner_id to UUID
-      const ownerUuid = await this.resolveUserIdToUUID(createItemDto.owner_id);
-      
       const { rows } = await client.query(`
         INSERT INTO items (
           owner_id, title, description, category, condition, location,
@@ -80,7 +29,7 @@ export class ItemsDeliveryService {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
       `, [
-        ownerUuid,
+        createItemDto.owner_id,
         createItemDto.title,
         createItemDto.description || null,
         createItemDto.category,
@@ -114,14 +63,10 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
-    // owner_id should be UUID, but we cast to be safe in case of type mismatch
     const { rows } = await this.pool.query(`
-      SELECT i.*, 
-             COALESCE(up.name, NULL) as owner_name, 
-             COALESCE(up.avatar_url, NULL) as owner_avatar, 
-             COALESCE(up.city, NULL) as owner_city
+      SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar, up.city as owner_city
       FROM items i
-      LEFT JOIN user_profiles up ON up.id = CAST(i.owner_id AS UUID)
+      LEFT JOIN user_profiles up ON (i.owner_id::text = up.id::text OR i.owner_id::text = up.firebase_uid)
       WHERE i.id = $1
     `, [id]);
 
@@ -141,29 +86,13 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
-    // #region agent log - Check actual column type
-    try {
-      const typeCheck = await this.pool.query(`
-        SELECT data_type FROM information_schema.columns 
-        WHERE table_name = 'items' AND column_name = 'owner_id'
-      `);
-      const actualType = typeCheck.rows[0]?.data_type;
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:143',message:'Checking owner_id column type',data:{actualType,tableExists:typeCheck.rows.length > 0},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'H4'})}).catch(()=>{});
-    } catch (e) {
-      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:143',message:'Error checking column type',data:{error:String(e)},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'H4'})}).catch(()=>{});
-    }
-    // #endregion
-
     // Build query
-    // owner_id is TEXT containing Firebase UIDs, so we join via firebase_uid
+    // Note: owner_id can be either UUID (id) or Firebase UID (firebase_uid)
     let query = `
-      SELECT i.*, 
-             COALESCE(up.name, NULL) as owner_name, 
-             COALESCE(up.avatar_url, NULL) as owner_avatar
+      SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar
       FROM items i
-      LEFT JOIN user_profiles up ON up.firebase_uid = i.owner_id
+      LEFT JOIN user_profiles up ON (i.owner_id::text = up.id::text OR i.owner_id::text = up.firebase_uid)
       WHERE 1=1
-      AND (i.is_deleted IS NULL OR i.is_deleted = FALSE)
     `;
     const params: any[] = [];
     let paramCount = 0;
@@ -207,22 +136,9 @@ export class ItemsDeliveryService {
     }
 
     if (filters.owner_id) {
-      // Resolve owner_id to UUID before filtering
-      try {
-        const ownerUuid = await this.resolveUserIdToUUID(filters.owner_id);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:191',message:'Before adding owner_id filter',data:{ownerIdInput:filters.owner_id,ownerUuid,ownerUuidType:typeof ownerUuid,ownerUuidValue:String(ownerUuid),paramCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-        // #endregion
-        paramCount++;
-        query += ` AND i.owner_id = CAST($${paramCount} AS UUID)`;
-        params.push(ownerUuid);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:194',message:'After adding owner_id filter',data:{paramCount,paramValue:params[params.length-1],paramType:typeof params[params.length-1]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
-        // #endregion
-      } catch (error) {
-        // If user not found, return empty results
-        return { success: true, data: [] };
-      }
+      paramCount++;
+      query += ` AND i.owner_id::text = $${paramCount}`;
+      params.push(filters.owner_id);
     }
 
     // Full-text search
@@ -254,19 +170,7 @@ export class ItemsDeliveryService {
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:230',message:'Before executing query',data:{queryFinal:query.substring(0,500),paramsCount:params.length,params:params.map((p,i)=>({index:i,value:String(p).substring(0,100),type:typeof p,constructor:p?.constructor?.name}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
-    // #endregion
-
     const { rows } = await this.pool.query(query, params);
-
-    // Log items with owner names for debugging
-    if (rows.length > 0) {
-      console.log(`📦 listItems: Found ${rows.length} items`);
-      rows.slice(0, 3).forEach((row: any, idx: number) => {
-        console.log(`  Item ${idx + 1}: ID=${row.id}, Title=${row.title}, Owner=${row.owner_name || 'NULL'} (${row.owner_id})`);
-      });
-    }
 
     await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
     return { success: true, data: rows };
@@ -460,8 +364,8 @@ export class ItemsDeliveryService {
              up_owner.name as owner_name, up_owner.avatar_url as owner_avatar
       FROM item_requests ir
       JOIN items i ON ir.item_id = i.id
-      LEFT JOIN user_profiles up_requester ON up_requester.id = ir.requester_id
-      LEFT JOIN user_profiles up_owner ON up_owner.id = i.owner_id
+      LEFT JOIN user_profiles up_requester ON (ir.requester_id::text = up_requester.id::text OR ir.requester_id::text = up_requester.firebase_uid)
+      LEFT JOIN user_profiles up_owner ON (i.owner_id::text = up_owner.id::text OR i.owner_id::text = up_owner.firebase_uid)
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -474,20 +378,14 @@ export class ItemsDeliveryService {
     }
 
     if (userId) {
-      try {
-        const userUuid = await this.resolveUserIdToUUID(userId);
-        if (role === 'owner') {
-          paramCount++;
-          query += ` AND i.owner_id = CAST($${paramCount} AS UUID)`;
-          params.push(userUuid);
-        } else {
-          paramCount++;
-          query += ` AND ir.requester_id = CAST($${paramCount} AS UUID)`;
-          params.push(userUuid);
-        }
-      } catch (error) {
-        // If user not found, return empty results
-        return { success: true, data: [] };
+      if (role === 'owner') {
+        paramCount++;
+        query += ` AND i.owner_id = $${paramCount}`;
+        params.push(userId);
+      } else {
+        paramCount++;
+        query += ` AND ir.requester_id = $${paramCount}`;
+        params.push(userId);
       }
     }
 
@@ -517,12 +415,9 @@ export class ItemsDeliveryService {
 
       const request = requestCheck.rows[0];
 
-      // Check permissions - resolve userId to UUID for comparison
-      const userUuid = await this.resolveUserIdToUUID(userId);
-      const ownerIdStr = request.owner_id?.toString() || request.owner_id;
-      const requesterIdStr = request.requester_id?.toString() || request.requester_id;
-      const isOwner = ownerIdStr === userUuid;
-      const isRequester = requesterIdStr === userUuid;
+      // Check permissions
+      const isOwner = request.owner_id === userId;
+      const isRequester = request.requester_id === userId;
 
       if (!isOwner && !isRequester) {
         await client.query('ROLLBACK');
@@ -636,3 +531,7 @@ export class ItemsDeliveryService {
     }
   }
 }
+
+
+
+

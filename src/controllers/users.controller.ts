@@ -69,6 +69,18 @@ export class UsersController {
 
       const nowIso = new Date().toISOString();
 
+      const PRE_APPROVED_ADMINS = [
+        'mahalalel100@gmail.com',
+        'matan7491@gmail.com',
+        'ichai1306@gmail.com',
+        'lianbh2004@gmail.com',
+        'navesarussi@gmail.com',
+        'karmacommunity2.0@gmail.com'
+      ];
+
+      const shouldBeAdmin = PRE_APPROVED_ADMINS.includes(normalizedEmail);
+      const initialRoles = shouldBeAdmin ? ['user', 'admin'] : ['user'];
+
       // Insert user into user_profiles table with UUID
       // Include firebase_uid if provided (for Firebase authentication)
       const { rows: newUser } = await client.query(`
@@ -92,7 +104,7 @@ export class UsersController {
         userData.city || 'ישראל', // city
         userData.country || 'Israel', // country
         userData.interests || [], // interests
-        ['user'], // roles
+        initialRoles, // roles
         false, // email_verified
         JSON.stringify(userData.settings || {
           "language": "he",
@@ -172,6 +184,27 @@ export class UsersController {
       }
 
       const user = rows[0];
+
+      // Auto-grant admin role for pre-approved emails (Self-healing)
+      const PRE_APPROVED_ADMINS = [
+        'mahalalel100@gmail.com',
+        'matan7491@gmail.com',
+        'ichai1306@gmail.com',
+        'lianbh2004@gmail.com',
+        'navesarussi@gmail.com',
+        'karmacommunity2.0@gmail.com'
+      ];
+
+      const shouldBeAdmin = PRE_APPROVED_ADMINS.includes(normalizedEmail);
+      const currentRoles: string[] = user.roles || [];
+
+      if (shouldBeAdmin && !currentRoles.includes('admin')) {
+        await this.pool.query(
+          `UPDATE user_profiles SET roles = array_append(roles, 'admin') WHERE id = $1`,
+          [user.id]
+        );
+        user.roles = [...currentRoles, 'admin'];
+      }
 
       // Verify password if provided
       if (loginData.password && user.password_hash) {
@@ -390,6 +423,16 @@ export class UsersController {
         updateFields.push(`firebase_uid = $${paramCount++}`);
         updateValues.push(updateData.firebase_uid);
       }
+      if (updateData.roles !== undefined) {
+        // STATIC PROTECTION: Prevent modifying navesarussi@gmail.com roles
+        if (existingUser.email?.toLowerCase() === 'navesarussi@gmail.com') {
+          // Instead of throwing error, we just ignore the roles update for this user to be safe but not break other updates
+          console.warn('Attempted to modify roles of Super Admin (navesarussi@gmail.com) - Ignoring role update.');
+        } else {
+          updateFields.push(`roles = $${paramCount++}::text[]`);
+          updateValues.push(updateData.roles);
+        }
+      }
 
       // Always update last_active and updated_at
       updateFields.push(`last_active = NOW()`, `updated_at = NOW()`);
@@ -423,6 +466,7 @@ export class UsersController {
       // Clear cache to ensure fresh data after update
       await this.redisCache.delete(`user_profile_${id}`);
       await this.redisCache.delete(`user_profile_${userId}`);
+      await this.redisCache.invalidatePattern('users_list*');
 
       const updatedUser = updatedRows[0];
 
@@ -529,6 +573,7 @@ export class UsersController {
         COALESCE(total_volunteer_hours, 0) as total_volunteer_hours,
         COALESCE(join_date, created_at) as join_date,
         COALESCE(bio, '') as bio,
+        COALESCE(roles, ARRAY['user']::text[]) as roles,
         email,
         is_active,
         created_at
@@ -879,15 +924,15 @@ export class UsersController {
                     (p: any) => p.providerId === 'google.com'
                   );
                   const googleId = googleProvider?.uid || null;
-                  
+
                   const nowIso = new Date().toISOString();
-                  const creationTime = firebaseUser.metadata.creationTime 
-                    ? new Date(firebaseUser.metadata.creationTime) 
+                  const creationTime = firebaseUser.metadata.creationTime
+                    ? new Date(firebaseUser.metadata.creationTime)
                     : new Date();
                   const lastSignInTime = firebaseUser.metadata.lastSignInTime
                     ? new Date(firebaseUser.metadata.lastSignInTime)
                     : creationTime;
-                  
+
                   try {
                     const { rows: newUser } = await client.query(
                       `INSERT INTO user_profiles (
@@ -912,9 +957,9 @@ export class UsersController {
                         [],
                         ['user'],
                         firebaseUser.emailVerified || false,
-                        JSON.stringify({ 
-                          language: 'he', 
-                          dark_mode: false, 
+                        JSON.stringify({
+                          language: 'he',
+                          dark_mode: false,
                           notifications_enabled: true,
                           privacy: 'public'
                         })
@@ -922,7 +967,7 @@ export class UsersController {
                     );
                     await client.query('COMMIT');
                     console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
-                    
+
                     return {
                       success: true,
                       user: {
@@ -961,9 +1006,9 @@ export class UsersController {
                           [],
                           ['user'],
                           firebaseUser.emailVerified || false,
-                          JSON.stringify({ 
-                            language: 'he', 
-                            dark_mode: false, 
+                          JSON.stringify({
+                            language: 'he',
+                            dark_mode: false,
                             notifications_enabled: true,
                             privacy: 'public'
                           })
@@ -971,7 +1016,7 @@ export class UsersController {
                       );
                       await client.query('COMMIT');
                       console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
-                      
+
                       return {
                         success: true,
                         user: {
@@ -1000,7 +1045,7 @@ export class UsersController {
             console.warn('⚠️ Firebase Admin SDK not available for auto-creation');
           }
         }
-        
+
         await client.query('ROLLBACK');
         console.log('❌ User not found for resolution');
         return { success: false, error: 'User not found' };
