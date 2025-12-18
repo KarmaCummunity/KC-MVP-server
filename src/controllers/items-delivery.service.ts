@@ -35,6 +35,9 @@ export class ItemsDeliveryService {
         [userId]
       );
       if (result.rows.length > 0) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:38',message:'UUID validation found user, returning input userId',data:{userId,userIdType:typeof userId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
         return userId;
       }
     }
@@ -51,7 +54,12 @@ export class ItemsDeliveryService {
     );
 
     if (result.rows.length > 0) {
-      return result.rows[0].id;
+      const uuidValue = result.rows[0].id;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:54',message:'resolveUserIdToUUID returning UUID',data:{userId,resolvedUuid:uuidValue,uuidType:typeof uuidValue,uuidConstructor:uuidValue?.constructor?.name,uuidStringValue:String(uuidValue)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H1'})}).catch(()=>{});
+      // #endregion
+      // Convert UUID object to string if needed
+      return String(uuidValue);
     }
 
     throw new Error(`User not found: ${userId}`);
@@ -106,14 +114,14 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
-    // owner_id is now UUID, so we can use a simple JOIN
+    // owner_id should be UUID, but we cast to be safe in case of type mismatch
     const { rows } = await this.pool.query(`
       SELECT i.*, 
              COALESCE(up.name, NULL) as owner_name, 
              COALESCE(up.avatar_url, NULL) as owner_avatar, 
              COALESCE(up.city, NULL) as owner_city
       FROM items i
-      LEFT JOIN user_profiles up ON up.id = i.owner_id
+      LEFT JOIN user_profiles up ON up.id = CAST(i.owner_id AS UUID)
       WHERE i.id = $1
     `, [id]);
 
@@ -133,14 +141,27 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
+    // #region agent log - Check actual column type
+    try {
+      const typeCheck = await this.pool.query(`
+        SELECT data_type FROM information_schema.columns 
+        WHERE table_name = 'items' AND column_name = 'owner_id'
+      `);
+      const actualType = typeCheck.rows[0]?.data_type;
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:143',message:'Checking owner_id column type',data:{actualType,tableExists:typeCheck.rows.length > 0},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'H4'})}).catch(()=>{});
+    } catch (e) {
+      fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:143',message:'Error checking column type',data:{error:String(e)},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'H4'})}).catch(()=>{});
+    }
+    // #endregion
+
     // Build query
-    // owner_id is now UUID, so we can use a simple JOIN
+    // owner_id is TEXT containing Firebase UIDs, so we join via firebase_uid
     let query = `
       SELECT i.*, 
              COALESCE(up.name, NULL) as owner_name, 
              COALESCE(up.avatar_url, NULL) as owner_avatar
       FROM items i
-      LEFT JOIN user_profiles up ON up.id = i.owner_id
+      LEFT JOIN user_profiles up ON up.firebase_uid = i.owner_id
       WHERE 1=1
       AND (i.is_deleted IS NULL OR i.is_deleted = FALSE)
     `;
@@ -189,9 +210,15 @@ export class ItemsDeliveryService {
       // Resolve owner_id to UUID before filtering
       try {
         const ownerUuid = await this.resolveUserIdToUUID(filters.owner_id);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:191',message:'Before adding owner_id filter',data:{ownerIdInput:filters.owner_id,ownerUuid,ownerUuidType:typeof ownerUuid,ownerUuidValue:String(ownerUuid),paramCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
+        // #endregion
         paramCount++;
-        query += ` AND i.owner_id = $${paramCount}::uuid`;
+        query += ` AND i.owner_id = CAST($${paramCount} AS UUID)`;
         params.push(ownerUuid);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:194',message:'After adding owner_id filter',data:{paramCount,paramValue:params[params.length-1],paramType:typeof params[params.length-1]},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H2'})}).catch(()=>{});
+        // #endregion
       } catch (error) {
         // If user not found, return empty results
         return { success: true, data: [] };
@@ -226,6 +253,10 @@ export class ItemsDeliveryService {
     paramCount++;
     query += ` OFFSET $${paramCount}`;
     params.push(offset);
+
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'items-delivery.service.ts:230',message:'Before executing query',data:{queryFinal:query.substring(0,500),paramsCount:params.length,params:params.map((p,i)=>({index:i,value:String(p).substring(0,100),type:typeof p,constructor:p?.constructor?.name}))},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
 
     const { rows } = await this.pool.query(query, params);
 
@@ -429,8 +460,8 @@ export class ItemsDeliveryService {
              up_owner.name as owner_name, up_owner.avatar_url as owner_avatar
       FROM item_requests ir
       JOIN items i ON ir.item_id = i.id
-      LEFT JOIN user_profiles up_requester ON (ir.requester_id = up_requester.id::text OR ir.requester_id = up_requester.firebase_uid)
-      LEFT JOIN user_profiles up_owner ON (i.owner_id = up_owner.id::text OR i.owner_id = up_owner.firebase_uid)
+      LEFT JOIN user_profiles up_requester ON up_requester.id = ir.requester_id
+      LEFT JOIN user_profiles up_owner ON up_owner.id = i.owner_id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -443,14 +474,20 @@ export class ItemsDeliveryService {
     }
 
     if (userId) {
-      if (role === 'owner') {
-        paramCount++;
-        query += ` AND i.owner_id = $${paramCount}`;
-        params.push(userId);
-      } else {
-        paramCount++;
-        query += ` AND ir.requester_id = $${paramCount}`;
-        params.push(userId);
+      try {
+        const userUuid = await this.resolveUserIdToUUID(userId);
+        if (role === 'owner') {
+          paramCount++;
+          query += ` AND i.owner_id = CAST($${paramCount} AS UUID)`;
+          params.push(userUuid);
+        } else {
+          paramCount++;
+          query += ` AND ir.requester_id = CAST($${paramCount} AS UUID)`;
+          params.push(userUuid);
+        }
+      } catch (error) {
+        // If user not found, return empty results
+        return { success: true, data: [] };
       }
     }
 
@@ -480,9 +517,12 @@ export class ItemsDeliveryService {
 
       const request = requestCheck.rows[0];
 
-      // Check permissions
-      const isOwner = request.owner_id === userId;
-      const isRequester = request.requester_id === userId;
+      // Check permissions - resolve userId to UUID for comparison
+      const userUuid = await this.resolveUserIdToUUID(userId);
+      const ownerIdStr = request.owner_id?.toString() || request.owner_id;
+      const requesterIdStr = request.requester_id?.toString() || request.requester_id;
+      const isOwner = ownerIdStr === userUuid;
+      const isRequester = requesterIdStr === userUuid;
 
       if (!isOwner && !isRequester) {
         await client.query('ROLLBACK');
