@@ -453,12 +453,55 @@ BEGIN
             END IF;
         END IF;
     END IF;
+    
+    -- Add post_type if missing
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'post_type'
+    ) THEN
+        ALTER TABLE posts ADD COLUMN post_type VARCHAR(50) DEFAULT 'task_completion';
+    END IF;
+    
+    -- Add created_at if missing (should always exist, but check just in case)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'created_at'
+    ) THEN
+        ALTER TABLE posts ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW();
+    END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
-CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);
-CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type);
+-- Only create indexes if the columns exist
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'author_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'task_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'created_at'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'post_type'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type);
+    END IF;
+END $$;
 
 DROP TRIGGER IF EXISTS update_posts_updated_at ON posts;
 CREATE TRIGGER update_posts_updated_at 
