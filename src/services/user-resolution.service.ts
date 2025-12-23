@@ -76,13 +76,13 @@ export class UserResolutionService {
         }
 
         try {
-            // Query database - support UUID, email, firebase_uid, google_id
+            // Query database - support UUID, email, firebase_uid ONLY
+            // We do NOT use google_id - only our own UUID (user_profiles.id)
             const { rows } = await this.pool.query(`
         SELECT id FROM user_profiles
         WHERE id::text = $1
            OR LOWER(email) = LOWER($1)
            OR firebase_uid = $1
-           OR google_id = $1
         LIMIT 1
       `, [normalizedId]);
 
@@ -145,8 +145,10 @@ export class UserResolutionService {
     }
 
     /**
-     * Link external IDs (firebase_uid, google_id) to an existing user
+     * Link external IDs (firebase_uid) to an existing user
      * Should only be called from authenticated endpoints
+     * 
+     * NOTE: We only link firebase_uid. We do NOT use google_id.
      * 
      * @param userId - UUID of the user to update
      * @param externalIds - External IDs to link
@@ -155,7 +157,6 @@ export class UserResolutionService {
         userId: string,
         externalIds: {
             firebase_uid?: string;
-            google_id?: string;
         }
     ): Promise<void> {
         const updates: string[] = [];
@@ -165,11 +166,6 @@ export class UserResolutionService {
         if (externalIds.firebase_uid) {
             updates.push(`firebase_uid = $${paramCount++}`);
             values.push(externalIds.firebase_uid);
-        }
-
-        if (externalIds.google_id) {
-            updates.push(`google_id = $${paramCount++}`);
-            values.push(externalIds.google_id);
         }
 
         if (updates.length === 0) {
@@ -189,9 +185,6 @@ export class UserResolutionService {
             await this.redisCache.delete(`user_profile_${userId}`);
             if (externalIds.firebase_uid) {
                 await this.redisCache.delete(`user_id_resolve_${externalIds.firebase_uid}`);
-            }
-            if (externalIds.google_id) {
-                await this.redisCache.delete(`user_id_resolve_${externalIds.google_id}`);
             }
 
         } catch (error) {

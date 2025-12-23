@@ -42,11 +42,12 @@ export class CommunityMembersController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   /**
-   * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
+   * Resolve any user identifier (email, firebase_uid, UUID string) to UUID
    * This ensures all user IDs are converted to UUID format before use
+   * NOTE: We only use our own UUID (user_profiles.id) for user identification
    */
   private async resolveUserIdToUUID(userId: string): Promise<string | null> {
     if (!userId) {
@@ -66,12 +67,11 @@ export class CommunityMembersController {
       }
     }
 
-    // Try to find user by email, firebase_uid, or google_id
+    // Try to find user by email or firebase_uid ONLY
     const result = await this.pool.query(
       `SELECT id FROM user_profiles 
        WHERE LOWER(email) = LOWER($1) 
           OR firebase_uid = $1 
-          OR google_id = $1 
           OR id::text = $1
        LIMIT 1`,
       [userId]
@@ -96,19 +96,19 @@ export class CommunityMembersController {
           AND table_name = 'community_members'
         );
       `);
-      
+
       const tableExists = checkTable.rows[0].exists;
-      
+
       if (!tableExists) {
         console.log('📋 Creating community_members table...');
-        
+
         // Create extension if needed
         try {
           await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
         } catch (extError) {
           console.warn('⚠️ Could not create uuid-ossp extension:', extError);
         }
-        
+
         // Create the table
         await this.pool.query(`
           CREATE TABLE IF NOT EXISTS community_members (
@@ -123,13 +123,13 @@ export class CommunityMembersController {
             updated_at TIMESTAMPTZ DEFAULT NOW()
           )
         `);
-        
+
         // Create indexes
         await this.pool.query('CREATE INDEX IF NOT EXISTS idx_community_members_name ON community_members (name)');
         await this.pool.query('CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role)');
         await this.pool.query('CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status)');
         await this.pool.query('CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC)');
-        
+
         // Create trigger function if it doesn't exist
         await this.pool.query(`
           CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -140,7 +140,7 @@ export class CommunityMembersController {
           END;
           $$ language 'plpgsql'
         `);
-        
+
         // Create trigger
         await this.pool.query('DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members');
         await this.pool.query(`
@@ -149,7 +149,7 @@ export class CommunityMembersController {
           FOR EACH ROW 
           EXECUTE FUNCTION update_updated_at_column()
         `);
-        
+
         console.log('✅ community_members table created successfully');
       }
     } catch (error) {
@@ -164,10 +164,10 @@ export class CommunityMembersController {
     @Query('search') search?: string,
   ) {
     await this.ensureTable();
-    
+
     const cacheKey = `community_members_list_${status || 'all'}_${search || ''}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -205,16 +205,16 @@ export class CommunityMembersController {
       query += ` ORDER BY created_at DESC`;
 
       const { rows } = await this.pool.query(query, params);
-      
+
       await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
-      
+
       return { success: true, data: rows };
     } catch (error) {
       console.error('Error fetching community members:', error);
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: 'Failed to fetch community members',
-        data: [] 
+        data: []
       };
     }
   }
@@ -222,10 +222,10 @@ export class CommunityMembersController {
   @Get(':id')
   async getMemberById(@Param('id') id: string) {
     await this.ensureTable();
-    
+
     const cacheKey = `community_member_${id}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -248,20 +248,20 @@ export class CommunityMembersController {
       );
 
       if (rows.length === 0) {
-        return { 
-          success: false, 
-          error: 'Member not found' 
+        return {
+          success: false,
+          error: 'Member not found'
         };
       }
 
       await this.redisCache.set(cacheKey, rows[0], this.CACHE_TTL);
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error fetching community member:', error);
-      return { 
-        success: false, 
-        error: 'Failed to fetch community member' 
+      return {
+        success: false,
+        error: 'Failed to fetch community member'
       };
     }
   }
@@ -273,9 +273,9 @@ export class CommunityMembersController {
     try {
       // Validate required fields
       if (!dto.name || !dto.role) {
-        return { 
-          success: false, 
-          error: 'Name and role are required' 
+        return {
+          success: false,
+          error: 'Name and role are required'
         };
       }
 
@@ -313,13 +313,13 @@ export class CommunityMembersController {
 
       // Invalidate cache
       await this.redisCache.invalidatePattern('community_members_list_*');
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error creating community member:', error);
-      return { 
-        success: false, 
-        error: 'Failed to create community member' 
+      return {
+        success: false,
+        error: 'Failed to create community member'
       };
     }
   }
@@ -364,9 +364,9 @@ export class CommunityMembersController {
       }
 
       if (updates.length === 0) {
-        return { 
-          success: false, 
-          error: 'No fields to update' 
+        return {
+          success: false,
+          error: 'No fields to update'
         };
       }
 
@@ -389,22 +389,22 @@ export class CommunityMembersController {
       );
 
       if (rows.length === 0) {
-        return { 
-          success: false, 
-          error: 'Member not found' 
+        return {
+          success: false,
+          error: 'Member not found'
         };
       }
 
       // Invalidate cache
       await this.redisCache.delete(`community_member_${id}`);
       await this.redisCache.invalidatePattern('community_members_list_*');
-      
+
       return { success: true, data: rows[0] };
     } catch (error) {
       console.error('Error updating community member:', error);
-      return { 
-        success: false, 
-        error: 'Failed to update community member' 
+      return {
+        success: false,
+        error: 'Failed to update community member'
       };
     }
   }
@@ -422,22 +422,22 @@ export class CommunityMembersController {
       );
 
       if (rows.length === 0) {
-        return { 
-          success: false, 
-          error: 'Member not found' 
+        return {
+          success: false,
+          error: 'Member not found'
         };
       }
 
       // Invalidate cache
       await this.redisCache.delete(`community_member_${id}`);
       await this.redisCache.invalidatePattern('community_members_list_*');
-      
+
       return { success: true, message: 'Member deleted successfully' };
     } catch (error) {
       console.error('Error deleting community member:', error);
-      return { 
-        success: false, 
-        error: 'Failed to delete community member' 
+      return {
+        success: false,
+        error: 'Failed to delete community member'
       };
     }
   }

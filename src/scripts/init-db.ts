@@ -112,12 +112,46 @@ async function run() {
       'org_applications',
       // Links (for groups and organizations)
       'links',
+      'analytics',
     ];
 
     for (const t of tables) {
       // eslint-disable-next-line no-console
       console.log(`Ensuring table: ${t}`);
-      await client.query(baseTable(t));
+
+      try {
+        // 1. Create Table
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS ${t} (
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            data JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, item_id)
+          );
+        `);
+
+        // 2. Create Indexes (Individually)
+        // Check if index exists is tricky in one-liner, but IF NOT EXISTS handles it.
+        // However, we catch errors individually.
+
+        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_user_idx ON ${t}(user_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_item_idx ON ${t}(item_id);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_data_gin ON ${t} USING GIN (data);`);
+
+      } catch (err: any) {
+        console.error(`❌ Error initializing table '${t}':`, err.message);
+        if (err.code === '42501') {
+          // Permission denied - try to grant myself? No.
+          // Check ownership?
+          const res = await client.query(`
+               SELECT tableowner FROM pg_tables WHERE tablename = $1
+            `, [t]);
+          console.log(`Owner of ${t}:`, res.rows[0]?.tableowner || 'Unknown (table might not exist)');
+        }
+        throw err;
+      }
     }
 
     // Check if tasks table exists in new schema format (with 'title' column)
@@ -128,7 +162,7 @@ async function run() {
         WHERE table_name = 'tasks' AND column_name = 'title'
       ) AS exists;
     `);
-    
+
     if (!newTasks?.rows?.[0]?.exists) {
       // Create legacy JSONB tasks table only if new schema doesn't exist
       // eslint-disable-next-line no-console
@@ -416,8 +450,7 @@ async function run() {
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         user_id TEXT UNIQUE,
         email VARCHAR(255),
-        display_name VARCHAR(255),
-        full_name VARCHAR(255),
+        name VARCHAR(255),
         phone VARCHAR(50),
         city VARCHAR(100),
         address TEXT,

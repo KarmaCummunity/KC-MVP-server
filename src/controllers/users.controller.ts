@@ -37,6 +37,172 @@ export class UsersController {
     private readonly redisCache: RedisCacheService,
   ) { }
 
+  /**
+   * Search users for autocomplete (lightweight)
+   * GET /api/users/search?q=...
+   */
+  @Get('search')
+  async searchUsers(@Query('q') query: string) {
+    if (!query || query.length < 2) {
+      return { success: true, data: [] };
+    }
+
+    try {
+      const { rows } = await this.pool.query(`
+        SELECT id, name, email, avatar_url, roles
+        FROM user_profiles
+        WHERE (name ILIKE $1 OR email ILIKE $1)
+        AND is_active = true
+        LIMIT 20
+      `, [`%${query}%`]);
+
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Search users error:', error);
+      return { success: false, error: 'Failed to search users' };
+    }
+  }
+
+  /**
+   * Set parent manager for a user
+   * POST /api/users/:id/set-manager
+   */
+  @Post(':id/set-manager')
+  async setManager(@Param('id') id: string, @Body() body: { managerId: string | null }) {
+    try {
+      // TODO: Add permission check (only admin or current manager)
+      const { managerId } = body;
+
+      // Prevent validation loop (user cannot be their own manager)
+      if (managerId && managerId === id) {
+        return { success: false, error: 'User cannot be their own manager' };
+      }
+
+      // Check if manager exists
+      if (managerId) {
+        const checkManager = await this.pool.query('SELECT id FROM user_profiles WHERE id = $1', [managerId]);
+        if (checkManager.rows.length === 0) {
+          return { success: false, error: 'Manager not found' };
+        }
+      }
+
+      await this.pool.query(`
+        UPDATE user_profiles 
+        SET parent_manager_id = $1, updated_at = NOW()
+        WHERE id = $2
+      `, [managerId, id]);
+
+      return { success: true, message: 'Manager updated successfully' };
+    } catch (error) {
+      console.error('Set manager error:', error);
+      return { success: false, error: 'Failed to set manager' };
+    }
+  }
+
+  /**
+   * Manage hierarchy: Add or Remove subordinate
+   * POST /api/users/:id/hierarchy/manage
+   * Body: { action: 'add' | 'remove', managerId: string }
+   */
+  @Post(':id/hierarchy/manage')
+  async manageHierarchy(@Param('id') subordinateId: string, @Body() body: { action: 'add' | 'remove', managerId: string }) {
+    const client = await this.pool.connect();
+    try {
+      const { action, managerId } = body;
+      await client.query('BEGIN');
+
+      if (action === 'add') {
+        // Validation: Prevent cycles (simple check: am I their boss?)
+        // In a real app, we should check full cycle. For now, check if they are already my boss.
+        const { rows: subCheck } = await client.query('SELECT parent_manager_id FROM user_profiles WHERE id = $1', [managerId]);
+        if (subCheck[0]?.parent_manager_id === subordinateId) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'Cannot add your own manager as a subordinate' };
+        }
+
+        await client.query(`
+          UPDATE user_profiles 
+          SET parent_manager_id = $1, updated_at = NOW()
+          WHERE id = $2
+        `, [managerId, subordinateId]);
+
+        await client.query('COMMIT');
+        return { success: true, message: 'Subordinate added successfully' };
+
+      } else if (action === 'remove') {
+        // Validate that they are currently managed by this manager
+        const { rows: currentCheck } = await client.query('SELECT parent_manager_id FROM user_profiles WHERE id = $1', [subordinateId]);
+        if (currentCheck[0]?.parent_manager_id !== managerId) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'User is not your subordinate' };
+        }
+
+        // 1. Remove manager link
+        await client.query(`
+          UPDATE user_profiles 
+          SET parent_manager_id = NULL, updated_at = NOW()
+          WHERE id = $1
+        `, [subordinateId]);
+
+        // 2. Transfer active tasks (assignees) from subordinate to manager
+        // We replace the subordinate's ID with the manager's ID in the assignees array
+        // for all tasks where the subordinate is an assignee and status is not done/archived
+        await client.query(`
+          UPDATE tasks
+          SET assignees = array_replace(assignees, $1, $2)
+          WHERE $1 = ANY(assignees) 
+          AND status NOT IN ('done', 'archived')
+        `, [subordinateId, managerId]);
+
+        await client.query('COMMIT');
+        return { success: true, message: 'Subordinate removed and tasks transferred' };
+      }
+
+      await client.query('ROLLBACK');
+      return { success: false, error: 'Invalid action' };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Manage hierarchy error:', error);
+      return { success: false, error: 'Failed to manage hierarchy' };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get direct subordinates and their sub-tree (hierarchy)
+   * GET /api/users/:id/hierarchy
+   */
+  @Get(':id/hierarchy')
+  async getUserHierarchy(@Param('id') id: string) {
+    try {
+      // Recursive CTE to get full hierarchy
+      const { rows } = await this.pool.query(`
+        WITH RECURSIVE subordinates AS (
+          -- Base case: direct subordinates
+          SELECT id, name, email, avatar_url, parent_manager_id, 1 as level
+          FROM user_profiles
+          WHERE parent_manager_id = $1
+          
+          UNION ALL
+          
+          -- Recursive member: subordinates of subordinates
+          SELECT u.id, u.name, u.email, u.avatar_url, u.parent_manager_id, s.level + 1
+          FROM user_profiles u
+          INNER JOIN subordinates s ON u.parent_manager_id = s.id
+        )
+        SELECT * FROM subordinates ORDER BY level, name
+      `, [id]);
+
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Get hierarchy error:', error);
+      return { success: false, error: 'Failed to get hierarchy' };
+    }
+  }
+
+
 
   @Post('register')
   async registerUser(@Body() userData: any) {
@@ -60,6 +226,7 @@ export class UsersController {
         await client.query('ROLLBACK');
         return { success: false, error: 'User already exists' };
       }
+
 
       // Hash password if provided
       let passwordHash = null;
@@ -125,7 +292,7 @@ export class UsersController {
 
       // Fetch the created user to return full data
       const { rows: createdUser } = await client.query(
-        `SELECT id, email, name, phone, avatar_url, bio, city, country, interests, roles, settings, created_at
+        `SELECT id, email, name, phone, avatar_url, bio, city, country, interests, roles, settings, created_at, parent_manager_id
          FROM user_profiles WHERE id = $1`,
         [userId]
       );
@@ -152,6 +319,7 @@ export class UsersController {
         total_donations_amount: 0,
         total_volunteer_hours: 0,
         email_verified: false,
+        parent_manager_id: createdUser[0].parent_manager_id || null,
         settings: createdUser[0].settings || {}
       };
 
@@ -173,7 +341,7 @@ export class UsersController {
       // Use user_profiles table
       const { rows } = await this.pool.query(
         `SELECT id, email, name, phone, avatar_url, bio, password_hash, 
-                karma_points, join_date, is_active, last_active,
+                karma_points, join_date, is_active, last_active, parent_manager_id,
                 city, country, interests, roles, settings, created_at
          FROM user_profiles WHERE LOWER(email) = LOWER($1) LIMIT 1`,
         [normalizedEmail]
@@ -242,6 +410,7 @@ export class UsersController {
         total_donations_amount: 0,
         total_volunteer_hours: 0,
         email_verified: user.email_verified || false,
+        parent_manager_id: user.parent_manager_id || null,
         settings: user.settings || {}
       };
 
@@ -254,60 +423,39 @@ export class UsersController {
 
   @Get(':id')
   async getUserById(@Param('id') id: string) {
-
-    // Normalize email to lowercase for consistent lookup
-    // This matches the normalization used in auth.controller.ts
-    const normalizedId = id.includes('@')
-      ? String(id).trim().toLowerCase()
-      : id;
-
-
-    const cacheKey = `user_profile_${normalizedId}`;
-    const cached = await this.redisCache.get(cacheKey);
-
-    if (cached) {
-      return { success: true, data: cached };
-    }
-
-    // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
-
-    // Try query with google_id first, if it fails (column doesn't exist), try without it
-    let rows: any[];
     try {
-      const result = await this.pool.query(`
-        SELECT 
-          id,
-          email,
-          COALESCE(name, 'ללא שם') as name,
-          phone,
-          COALESCE(avatar_url, '') as avatar_url,
-          COALESCE(bio, '') as bio,
-          COALESCE(karma_points, 0) as karma_points,
-          COALESCE(join_date, created_at) as join_date,
-          COALESCE(is_active, true) as is_active,
-          COALESCE(last_active, updated_at) as last_active,
-          COALESCE(city, '') as city,
-          COALESCE(country, 'Israel') as country,
-          COALESCE(interests, ARRAY[]::TEXT[]) as interests,
-          COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
-          COALESCE(posts_count, 0) as posts_count,
-          COALESCE(followers_count, 0) as followers_count,
-          COALESCE(following_count, 0) as following_count,
-          0 as total_donations_amount,
-          0 as total_volunteer_hours,
-          COALESCE(email_verified, false) as email_verified,
-          COALESCE(settings, '{}'::jsonb) as settings
-        FROM user_profiles 
-        WHERE id::text = $1 
-           OR LOWER(email) = LOWER($1)
-           OR firebase_uid = $1
-           OR google_id = $1
-        LIMIT 1
-      `, [normalizedId]);
-      rows = result.rows;
-    } catch (error: any) {
-      // If google_id column doesn't exist, try without it
-      if (error.message && error.message.includes('google_id')) {
+      console.log(`[UsersController] getUserById called with id: ${id}`);
+
+      // Normalize email to lowercase for consistent lookup
+      // This matches the normalization used in auth.controller.ts
+      const normalizedId = id.includes('@')
+        ? String(id).trim().toLowerCase()
+        : id;
+
+      console.log(`[UsersController] Normalized id: ${normalizedId}`);
+
+      const cacheKey = `user_profile_${normalizedId}`;
+
+      // Try to get from cache, but handle Redis errors gracefully
+      let cached = null;
+      try {
+        cached = await this.redisCache.get(cacheKey);
+        if (cached) {
+          console.log(`[UsersController] Cache hit for ${normalizedId}`);
+          return { success: true, data: cached };
+        }
+        console.log(`[UsersController] Cache miss for ${normalizedId}`);
+      } catch (cacheError) {
+        console.warn(`[UsersController] Redis cache error (non-fatal):`, cacheError);
+        // Continue without cache - don't fail the request
+      }
+
+      // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
+      console.log(`[UsersController] Querying database for ${normalizedId}`);
+
+      // Try query with google_id first, if it fails (column doesn't exist), try without it
+      let rows: any[];
+      try {
         const result = await this.pool.query(`
           SELECT 
             id,
@@ -316,6 +464,7 @@ export class UsersController {
             phone,
             COALESCE(avatar_url, '') as avatar_url,
             COALESCE(bio, '') as bio,
+            parent_manager_id,
             COALESCE(karma_points, 0) as karma_points,
             COALESCE(join_date, created_at) as join_date,
             COALESCE(is_active, true) as is_active,
@@ -335,23 +484,79 @@ export class UsersController {
           WHERE id::text = $1 
              OR LOWER(email) = LOWER($1)
              OR firebase_uid = $1
+             OR google_id = $1
           LIMIT 1
         `, [normalizedId]);
         rows = result.rows;
-      } else {
-        throw error;
+        console.log(`[UsersController] Database query returned ${rows.length} rows`);
+      } catch (error: any) {
+        // If google_id column doesn't exist, try without it
+        if (error.message && error.message.includes('google_id')) {
+          console.log(`[UsersController] Retrying query without google_id column`);
+          const result = await this.pool.query(`
+            SELECT 
+              id,
+              email,
+              COALESCE(name, 'ללא שם') as name,
+              phone,
+              COALESCE(avatar_url, '') as avatar_url,
+              COALESCE(bio, '') as bio,
+              parent_manager_id,
+              COALESCE(karma_points, 0) as karma_points,
+              COALESCE(join_date, created_at) as join_date,
+              COALESCE(is_active, true) as is_active,
+              COALESCE(last_active, updated_at) as last_active,
+              COALESCE(city, '') as city,
+              COALESCE(country, 'Israel') as country,
+              COALESCE(interests, ARRAY[]::TEXT[]) as interests,
+              COALESCE(roles, ARRAY['user']::TEXT[]) as roles,
+              COALESCE(posts_count, 0) as posts_count,
+              COALESCE(followers_count, 0) as followers_count,
+              COALESCE(following_count, 0) as following_count,
+              0 as total_donations_amount,
+              0 as total_volunteer_hours,
+              COALESCE(email_verified, false) as email_verified,
+              COALESCE(settings, '{}'::jsonb) as settings
+            FROM user_profiles 
+            WHERE id::text = $1 
+               OR LOWER(email) = LOWER($1)
+               OR firebase_uid = $1
+            LIMIT 1
+          `, [normalizedId]);
+          rows = result.rows;
+          console.log(`[UsersController] Retry query returned ${rows.length} rows`);
+        } else {
+          throw error;
+        }
       }
+
+      if (rows.length === 0) {
+        console.log(`[UsersController] User not found for ${normalizedId}`);
+        return { success: false, error: 'User not found' };
+      }
+
+      const user = rows[0];
+      console.log(`[UsersController] User found: ${user.email} (${user.id})`);
+
+      // Try to cache the result, but don't fail if Redis is down
+      try {
+        await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
+        console.log(`[UsersController] User cached successfully`);
+      } catch (cacheError) {
+        console.warn(`[UsersController] Failed to cache user (non-fatal):`, cacheError);
+        // Continue - caching failure shouldn't fail the request
+      }
+
+      return { success: true, data: user };
+    } catch (error: any) {
+      console.error(`[UsersController] getUserById error for id ${id}:`, error);
+      console.error(`[UsersController] Error stack:`, error?.stack);
+      return {
+        success: false,
+        error: 'Failed to get user',
+        details: error?.message || 'Unknown error'
+      };
     }
-
-
-    if (rows.length === 0) {
-      return { success: false, error: 'User not found' };
-    }
-
-    const user = rows[0];
-    await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
-
-    return { success: true, data: user };
   }
 
   @Put(':id')
@@ -907,6 +1112,7 @@ export class UsersController {
       }
 
       if (rows.length === 0) {
+        console.log('❌ User not found for resolution:', { firebase_uid, google_id, email });
         // User not found - if we have firebase_uid, try to create user from Firebase
         if (firebase_uid) {
           try {
@@ -1052,6 +1258,18 @@ export class UsersController {
       }
 
       const user = rows[0];
+
+      // Log which identifier was used to find the user
+      let resolvedBy = 'unknown';
+      if (firebase_uid && user.firebase_uid === firebase_uid) {
+        resolvedBy = 'firebase_uid';
+      } else if (google_id && user.google_id === google_id) {
+        resolvedBy = 'google_id';
+      } else if (email && user.email?.toLowerCase() === email.toLowerCase()) {
+        resolvedBy = 'email';
+      }
+      console.log(`✅ User resolved by ${resolvedBy}:`, { email: user.email, id: user.id });
+
       let needsUpdate = false;
       const updateFields: string[] = [];
       const updateValues: any[] = [];

@@ -106,3 +106,4 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
 1. **אבטחה:** ה-endpoint `/api/sync/user` צריך להיות מוגן (API key או admin authentication)
 2. **ביצועים:** הסנכרון החד-פעמי יכול לקחת זמן אם יש הרבה משתמשים
 3. **כפילויות:** הסקריפט בודק כפילויות לפי email ו-firebase_uid כדי למנוע יצירת משתמשים כפולים
+

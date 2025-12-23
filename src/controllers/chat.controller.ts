@@ -198,7 +198,7 @@ export class ChatController {
           CASE 
             WHEN cm.sender_id IS NULL THEN 'ללא שם'
             ELSE COALESCE(
-              (SELECT name FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+              (SELECT name FROM user_profiles WHERE id = cm.sender_id LIMIT 1),
               'ללא שם'
             )
           END as last_sender_name,
@@ -289,11 +289,11 @@ export class ChatController {
         SELECT 
           cm.*,
           COALESCE(
-            (SELECT name FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+            (SELECT name FROM user_profiles WHERE id = cm.sender_id LIMIT 1),
             'ללא שם'
           ) as sender_name,
           COALESCE(
-            (SELECT avatar_url FROM user_profiles WHERE id::text = cm.sender_id LIMIT 1),
+            (SELECT avatar_url FROM user_profiles WHERE id = cm.sender_id LIMIT 1),
             ''
           ) as sender_avatar
         FROM chat_messages cm

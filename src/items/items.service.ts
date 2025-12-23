@@ -16,7 +16,7 @@ export class ItemsService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) {}
+  ) { }
 
   private tableFor(collection: string): string {
     // map collection names to table names; default: use as-is
@@ -68,9 +68,13 @@ export class ItemsService {
     const table = this.tableFor(collection);
     const client = await this.pool.connect();
     try {
-      // Add activity tracking
-      await this.trackUserActivity(userId, 'create', collection, itemId);
-      
+      // Add activity tracking (safely)
+      try {
+        await this.trackUserActivity(userId, 'create', collection, itemId);
+      } catch (err) {
+        console.warn('⚠️ Failed to track user activity (non-fatal):', err);
+      }
+
       await client.query(
         `INSERT INTO ${table} (user_id, item_id, data, created_at, updated_at)
          VALUES ($1, $2, $3, NOW(), NOW())
@@ -78,17 +82,29 @@ export class ItemsService {
          DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
         [userId, itemId, data],
       );
-      
-      // Cache the created item
-      const cacheKey = `item:${collection}:${userId}:${itemId}`;
-      await this.redisCache.set(cacheKey, data, this.CACHE_TTL);
-      
-      // Invalidate list cache for this user and collection
-      await this.invalidateListCache(collection, userId);
-      
-      // Track popular collections
-      await this.incrementCollectionCounter(collection);
-      
+
+      // Cache the created item (safely)
+      try {
+        const cacheKey = `item:${collection}:${userId}:${itemId}`;
+        await this.redisCache.set(cacheKey, data, this.CACHE_TTL);
+      } catch (err) {
+        console.warn('⚠️ Failed to cache created item (non-fatal):', err);
+      }
+
+      // Invalidate list cache for this user and collection (safely)
+      try {
+        await this.invalidateListCache(collection, userId);
+      } catch (err) {
+        console.warn('⚠️ Failed to invalidate list cache (non-fatal):', err);
+      }
+
+      // Track popular collections (safely)
+      try {
+        await this.incrementCollectionCounter(collection);
+      } catch (err) {
+        console.warn('⚠️ Failed to increment collection counter (non-fatal):', err);
+      }
+
       return { ok: true };
     } finally {
       client.release();
@@ -99,29 +115,29 @@ export class ItemsService {
     // Try cache first
     const cacheKey = `item:${collection}:${userId}:${itemId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       // Track cache hit
       await this.trackUserActivity(userId, 'read_cached', collection, itemId);
       return cached;
     }
-    
+
     // Cache miss - get from database
     const table = this.tableFor(collection);
     const { rows } = await this.pool.query(
       `SELECT data FROM ${table} WHERE user_id = $1 AND item_id = $2 LIMIT 1`,
       [userId, itemId],
     );
-    
+
     const data = rows[0]?.data ?? null;
-    
+
     if (data) {
       // Cache the result
       await this.redisCache.set(cacheKey, data, this.CACHE_TTL);
       // Track cache miss
       await this.trackUserActivity(userId, 'read_db', collection, itemId);
     }
-    
+
     return data;
   }
 
@@ -138,25 +154,25 @@ export class ItemsService {
   async delete(collection: string, userId: string, itemId: string) {
     const table = this.tableFor(collection);
     console.log(`🗑️  DELETE Request - table: ${table}, userId: ${userId}, itemId: ${itemId}`);
-    
+
     // First check if item exists
     const checkResult = await this.pool.query(
       `SELECT * FROM ${table} WHERE user_id = $1 AND item_id = $2`,
       [userId, itemId],
     );
     console.log(`🔍 Item exists check: ${checkResult.rowCount} rows found`);
-    
+
     const { rowCount } = await this.pool.query(
       `DELETE FROM ${table} WHERE user_id = $1 AND item_id = $2`,
       [userId, itemId],
     );
     console.log(`✅ DELETE result: ${rowCount} rows deleted`);
-    
+
     // Invalidate cache
     await this.invalidateListCache(collection, userId);
     const cacheKey = `item:${collection}:${userId}:${itemId}`;
     await this.redisCache.delete(cacheKey);
-    
+
     return { ok: (rowCount ?? 0) > 0, deleted: rowCount };
   }
 
@@ -184,7 +200,7 @@ export class ItemsService {
   async listAll(collection: string, q?: string) {
     const table = this.tableFor(collection);
     console.log(`🔍 ItemsService - listAll for ${collection}, table: ${table}, q: ${q || 'none'}`);
-    
+
     if (q) {
       const { rows } = await this.pool.query(
         `SELECT data FROM ${table}
@@ -214,7 +230,7 @@ export class ItemsService {
   }
 
   // Redis Helper Functions
-  
+
   private async trackUserActivity(userId: string, action: string, collection: string, itemId: string) {
     const activityKey = `activity:${userId}`;
     const activity = {
@@ -223,45 +239,45 @@ export class ItemsService {
       itemId,
       timestamp: new Date().toISOString(),
     };
-    
+
     // Get recent activities (max 50)
     const recentActivities = await this.redisCache.get<any[]>(activityKey) || [];
     recentActivities.unshift(activity);
-    
+
     // Keep only last 50 activities
     if (recentActivities.length > 50) {
       recentActivities.splice(50);
     }
-    
+
     // Store with 1 hour TTL
     await this.redisCache.set(activityKey, recentActivities, 60 * 60);
-    
+
     // Also increment daily activity counter
     const today = new Date().toISOString().split('T')[0];
     const dailyKey = `daily_activity:${userId}:${today}`;
     await this.redisCache.increment(dailyKey);
   }
-  
+
   private async invalidateListCache(collection: string, userId: string) {
     const listCacheKey = `list:${collection}:${userId}`;
     await this.redisCache.delete(listCacheKey);
   }
-  
+
   private async incrementCollectionCounter(collection: string) {
     const counterKey = `popular_collections:${collection}`;
     await this.redisCache.increment(counterKey);
   }
 
   // Public methods for Redis data access
-  
+
   async getUserActivity(userId: string) {
     const activityKey = `activity:${userId}`;
     const activities = await this.redisCache.get<any[]>(activityKey) || [];
-    
+
     const today = new Date().toISOString().split('T')[0];
     const dailyKey = `daily_activity:${userId}:${today}`;
     const dailyCount = await this.redisCache.get<number>(dailyKey) || 0;
-    
+
     return {
       recentActivities: activities.slice(0, 10), // Last 10 activities
       totalActivities: activities.length,
@@ -269,25 +285,25 @@ export class ItemsService {
       lastActivity: activities[0]?.timestamp || null,
     };
   }
-  
+
   async getPopularCollections() {
     const keys = await this.redisCache.getKeys('popular_collections:*');
     const collections = [];
-    
+
     for (const key of keys) {
       const collection = key.replace('popular_collections:', '');
       const count = await this.redisCache.get<number>(key) || 0;
       collections.push({ collection, count });
     }
-    
+
     return collections.sort((a, b) => b.count - a.count);
   }
-  
+
   async getCacheStats() {
     const itemKeys = await this.redisCache.getKeys('item:*');
     const listKeys = await this.redisCache.getKeys('list:*');
     const activityKeys = await this.redisCache.getKeys('activity:*');
-    
+
     return {
       cachedItems: itemKeys.length,
       cachedLists: listKeys.length,

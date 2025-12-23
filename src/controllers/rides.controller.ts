@@ -300,16 +300,16 @@ export class RidesController {
         return { success: false, error: 'Not enough available seats' };
       }
 
-      // Resolve passenger ID to UUID (supports email, firebase_uid, google_id, or UUID)
+      // Resolve passenger ID to UUID (supports email, firebase_uid, or UUID)
+      // NOTE: We only use our own UUID (user_profiles.id) for user identification
       let passengerUuid = bookingData.passenger_id;
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(passengerUuid)) {
-        // Try to find user by email, firebase_uid, or google_id
+        // Try to find user by email or firebase_uid ONLY
         const { rows: existingUsers } = await client.query(`
           SELECT id FROM user_profiles 
           WHERE LOWER(email) = LOWER($1) 
              OR firebase_uid = $1 
-             OR google_id = $1 
              OR id::text = $1
           LIMIT 1
         `, [passengerUuid]);
@@ -327,7 +327,7 @@ export class RidesController {
         const { rows: verifyUsers } = await client.query(`
           SELECT id FROM user_profiles WHERE id = $1::uuid LIMIT 1
         `, [passengerUuid]);
-        
+
         if (verifyUsers.length === 0) {
           await client.query('ROLLBACK');
           return { success: false, error: `User not found: ${passengerUuid}. User must be registered before booking a ride.` };

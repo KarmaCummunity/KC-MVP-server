@@ -64,3 +64,4 @@ npm run sync:firebase-users
 
 ✅ Firebase users sync completed!
 ```
+
