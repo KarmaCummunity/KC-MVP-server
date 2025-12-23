@@ -263,7 +263,8 @@ export class TasksController {
 
         params.push(assigneeUuid);
         // "assigneeUuid = ANY(assignees)" checks if uuid is in the array
-        filters.push(`$${params.length}::UUID = ANY(assignees)`);
+        // Cast both sides to UUID to ensure type compatibility
+        filters.push(`$${params.length}::UUID = ANY(assignees::UUID[])`);
       }
 
       // Add text search if query parameter is provided
@@ -282,7 +283,7 @@ export class TasksController {
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
              FROM user_profiles u WHERE u.id = t.created_by) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
-             FROM user_profiles u WHERE u.id = ANY(t.assignees)) as assignees_details
+             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
         FROM tasks t
         ${where}
         ORDER BY 
@@ -385,7 +386,7 @@ export class TasksController {
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
              FROM user_profiles u WHERE u.id = t.created_by) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
-             FROM user_profiles u WHERE u.id = ANY(t.assignees)) as assignees_details
+             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
          FROM tasks t WHERE t.id = $1`,
         [id],
       );

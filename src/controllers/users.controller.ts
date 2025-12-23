@@ -149,8 +149,8 @@ export class UsersController {
         // for all tasks where the subordinate is an assignee and status is not done/archived
         await client.query(`
           UPDATE tasks
-          SET assignees = array_replace(assignees, $1, $2)
-          WHERE $1 = ANY(assignees) 
+          SET assignees = array_replace(assignees::UUID[], $1::UUID, $2::UUID)::UUID[]
+          WHERE $1::UUID = ANY(assignees::UUID[]) 
           AND status NOT IN ('done', 'archived')
         `, [subordinateId, managerId]);
 
