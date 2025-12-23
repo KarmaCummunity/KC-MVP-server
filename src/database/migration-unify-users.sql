@@ -370,3 +370,4 @@ END $$;
 -- ============================================
 -- All user ID fields have been converted to UUID
 -- Duplicate tables (links, user_id_mapping) have been removed
+

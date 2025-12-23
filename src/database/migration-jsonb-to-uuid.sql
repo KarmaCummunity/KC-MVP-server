@@ -117,3 +117,4 @@ DROP TABLE IF EXISTS users CASCADE; -- Duplicate of user_profiles
 DROP TABLE IF EXISTS links CASCADE; -- Removed per UNIFICATION_SUMMARY
 
 RAISE NOTICE 'Migration completed successfully';
+

@@ -391,6 +391,33 @@ CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
 DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Posts table for user posts and task-related posts
+CREATE TABLE IF NOT EXISTS posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    images TEXT[],
+    likes INTEGER DEFAULT 0,
+    comments INTEGER DEFAULT 0,
+    post_type VARCHAR(50) DEFAULT 'task_completion', -- task_completion, task_assignment, general_update, donation, etc.
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
+CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type);
+
+DROP TRIGGER IF EXISTS update_posts_updated_at ON posts;
+CREATE TRIGGER update_posts_updated_at 
+  BEFORE UPDATE ON posts 
+  FOR EACH ROW 
+  EXECUTE FUNCTION update_updated_at_column();
+
 -- Items table for item donations/deliveries
 -- NOTE: id is TEXT to support various identifier formats
 -- NOTE: owner_id is UUID (references user_profiles.id) - all users must be in user_profiles

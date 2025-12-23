@@ -157,3 +157,4 @@
 - לבדוק את כל ה-controllers שמשתמשים ב-user_id
 - לבדוק את כל ה-services שמשתמשים ב-user_id
 - לבדוק את כל ה-queries שמשתמשים ב-joins
+

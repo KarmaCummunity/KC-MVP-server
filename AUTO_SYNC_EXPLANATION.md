@@ -138,3 +138,4 @@ exports.onUserCreate = functions.auth.user().onCreate(async (user) => {
 
 3. **למשתמשים חדשים:**
    - הסנכרון האוטומטי יעבוד מיד כשהם מתחברים
+

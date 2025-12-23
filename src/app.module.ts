@@ -53,6 +53,9 @@ import { ItemsDeliveryController } from './controllers/items-delivery.controller
 import { ItemsDeliveryService } from './controllers/items-delivery.service';
 import { CommunityMembersController } from './controllers/community-members.controller';
 import { SyncController } from './controllers/sync.controller';
+import { CrmController } from './controllers/crm.controller';
+import { AdminFilesController } from './controllers/admin-files.controller';
+import { PostsController } from './controllers/posts.controller';
 
 @Module({
   imports: [
@@ -94,6 +97,7 @@ import { SyncController } from './controllers/sync.controller';
     RidesController,       // Ride sharing functionality
     ItemsDeliveryController, // Items delivery and search
     UsersController,       // User profile management
+    PostsController,       // Posts management
 
     // Analytics and monitoring
     StatsController,       // Statistics and analytics
@@ -102,6 +106,8 @@ import { SyncController } from './controllers/sync.controller';
     ChallengesController,  // Personal challenges/timers for admins
     CommunityMembersController, // Community members management
     SyncController,        // Firebase users sync
+    CrmController,         // CRM / Relationship management
+    AdminFilesController,  // Admin shared files
 
     // Testing (TODO: Remove in production)
     RedisTestController,   // Redis connectivity testing
