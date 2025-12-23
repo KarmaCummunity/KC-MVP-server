@@ -281,7 +281,11 @@ export class TasksController {
         SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
-             FROM user_profiles u WHERE u.id = CAST(t.created_by AS UUID)) as creator_details,
+             FROM user_profiles u 
+             WHERE u.id::text = t.created_by::text 
+                OR u.firebase_uid = t.created_by::text
+                OR u.google_id = t.created_by::text
+             LIMIT 1) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
              FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
         FROM tasks t
@@ -384,7 +388,11 @@ export class TasksController {
         `SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.created_by, t.parent_task_id, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
-             FROM user_profiles u WHERE u.id = CAST(t.created_by AS UUID)) as creator_details,
+             FROM user_profiles u 
+             WHERE u.id::text = t.created_by::text 
+                OR u.firebase_uid = t.created_by::text
+                OR u.google_id = t.created_by::text
+             LIMIT 1) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
              FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
          FROM tasks t WHERE t.id = $1`,
