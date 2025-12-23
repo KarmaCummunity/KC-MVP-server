@@ -38,9 +38,30 @@ CREATE TABLE IF NOT EXISTS user_profiles (
         "notifications_enabled": true,
         "privacy": "public"
     }'::jsonb,
+    parent_manager_id UUID, -- REFERENCES user_profiles(id) ON DELETE SET NULL, -- For hierarchy management
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure parent_manager_id column exists (for existing tables that might not have it)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'parent_manager_id'
+    ) THEN
+        ALTER TABLE user_profiles ADD COLUMN parent_manager_id UUID;
+        -- Add foreign key constraint only if user_profiles table exists and constraint doesn't exist
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'user_profiles_parent_manager_id_fkey' AND table_name = 'user_profiles'
+            ) THEN
+                ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_parent_manager_id_fkey FOREIGN KEY (parent_manager_id) REFERENCES user_profiles(id) ON DELETE SET NULL;
+            END IF;
+        END IF;
+    END IF;
+END $$;
 
 -- NOTE: Legacy 'users' table is no longer used - all user data is in user_profiles
 -- NOTE: user_id_mapping table has been removed - all user IDs are now unified as UUIDs in user_profiles
@@ -299,6 +320,17 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_google_id ON user_profiles (google_
 CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_roles ON user_profiles USING GIN (roles);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);
+
+-- Only create parent_manager_id index if the column exists
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'parent_manager_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_user_profiles_parent_manager_id ON user_profiles (parent_manager_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_donations_donor ON donations (donor_id);
 CREATE INDEX IF NOT EXISTS idx_donations_category ON donations (category_id);
