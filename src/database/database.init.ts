@@ -66,11 +66,8 @@ export class DatabaseInit implements OnModuleInit {
   // All code should use the new relational schema (user_profiles, etc.)
 
   /**
-   * Split SQL statements intelligently, handling DO $$ blocks that shouldn't be split
-   * Finds DO $$ ... END$$; blocks and preserves them as single statements
-   */
-  /**
    * Split SQL statements intelligently, handling quoted strings, dollar quotes, and comments.
+   * Preserves DO $$ ... END$$; blocks as single statements.
    */
   private splitSqlStatements(sql: string): string[] {
     const statements: string[] = [];
