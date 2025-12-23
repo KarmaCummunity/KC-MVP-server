@@ -250,7 +250,6 @@ export class TasksController {
    * Cache TTL: 10 minutes (tasks change moderately frequently)
    */
   @Get()
-  @UseGuards(JwtAuthGuard)
   async listTasks(
     @Query('status') status?: TaskStatus,
     @Query('priority') priority?: TaskPriority,
@@ -425,7 +424,6 @@ export class TasksController {
    * Cache TTL: 15 minutes
    */
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
   async getTask(@Param('id') id: string) {
     try {
       // Ensure table exists before querying
@@ -491,7 +489,6 @@ export class TasksController {
    * GET /api/tasks/:id/subtasks
    */
   @Get(':id/subtasks')
-  @UseGuards(JwtAuthGuard)
   async getSubtasks(@Param('id') parentId: string) {
     try {
       await this.ensureTasksTable();
@@ -535,7 +532,6 @@ export class TasksController {
    * GET /api/tasks/:id/tree
    */
   @Get(':id/tree')
-  @UseGuards(JwtAuthGuard)
   async getTaskTree(@Param('id') rootId: string) {
     try {
       await this.ensureTasksTable();

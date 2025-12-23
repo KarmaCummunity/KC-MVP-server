@@ -583,7 +583,6 @@ export class UsersController {
    * Returns users that can be promoted by this admin
    */
   @Get('eligible-for-promotion/:adminId')
-  @UseGuards(JwtAuthGuard)
   async getEligibleForPromotion(@Param('adminId') adminId: string) {
     try {
       // Get admin info
@@ -675,7 +674,6 @@ export class UsersController {
    * NOTE: This route MUST be defined BEFORE :id/hierarchy to avoid route conflict
    */
   @Get('hierarchy/tree')
-  @UseGuards(JwtAuthGuard)
   async getFullHierarchyTree() {
     try {
       // First, get the super admin (root of the tree)
@@ -768,7 +766,6 @@ export class UsersController {
    * GET /api/users/:id/hierarchy
    */
   @Get(':id/hierarchy')
-  @UseGuards(JwtAuthGuard)
   async getUserHierarchy(@Param('id') id: string) {
     try {
       // Recursive CTE to get full hierarchy
@@ -1404,7 +1401,6 @@ export class UsersController {
   }
 
   @Get(':id/activities')
-  @UseGuards(JwtAuthGuard)
   async getUserActivities(@Param('id') userId: string, @Query('limit') limit?: string) {
     const cacheKey = `user_activities_${userId}_${limit || '50'}`;
     const cached = await this.redisCache.get(cacheKey);
@@ -1432,7 +1428,6 @@ export class UsersController {
    * Cache TTL: 15 minutes
    */
   @Get(':id/stats')
-  @UseGuards(JwtAuthGuard)
   async getUserStats(@Param('id') userId: string) {
     const cacheKey = `user_stats_${userId}`;
     const cached = await this.redisCache.get(cacheKey);
