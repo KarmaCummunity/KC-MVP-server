@@ -377,9 +377,31 @@ CREATE TABLE IF NOT EXISTS tasks (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[],
     checklist JSONB, -- [{id, text, done}]
     created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
+    parent_task_id UUID, -- REFERENCES tasks(id) ON DELETE CASCADE, -- For subtasks hierarchy
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure parent_task_id column exists (for existing tables that might not have it)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'tasks' AND column_name = 'parent_task_id'
+    ) THEN
+        ALTER TABLE tasks ADD COLUMN parent_task_id UUID;
+        -- Add foreign key constraint only if tasks table exists and constraint doesn't exist
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'tasks_parent_task_id_fkey' AND table_name = 'tasks'
+            ) THEN
+                ALTER TABLE tasks ADD CONSTRAINT tasks_parent_task_id_fkey FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE CASCADE;
+            END IF;
+        END IF;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
 CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority);
 CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category);
@@ -387,6 +409,17 @@ CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees); -- UUID[] array
 CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags);
+
+-- Only create parent_task_id index if the column exists
+DO $$ 
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'tasks' AND column_name = 'parent_task_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_id ON tasks (parent_task_id);
+    END IF;
+END $$;
 
 DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
