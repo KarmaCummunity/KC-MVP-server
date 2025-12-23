@@ -925,6 +925,14 @@ export class DatabaseInit implements OnModuleInit {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()
       `);
+      
+      // Ensure super admin always has the correct roles
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = ARRAY['super_admin', 'admin', 'user']::TEXT[]
+        WHERE email = 'navesarussi@gmail.com'
+          AND (roles IS NULL OR NOT (roles @> ARRAY['super_admin']::TEXT[]))
+      `);
 
       console.log('✅ Default data initialized');
     } catch (err) {

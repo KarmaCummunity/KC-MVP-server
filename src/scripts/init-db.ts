@@ -92,7 +92,7 @@ async function run() {
 
     const tables = [
       'users',
-      'posts',
+      // 'posts' - handled separately as relational table (not JSONB)
       'followers',
       'following',
       'chats',
@@ -509,6 +509,114 @@ async function run() {
         END IF;
       END$$;
     `);
+
+    // Ensure posts table - relational table (not JSONB)
+    // Check if posts table exists and what schema it has
+    const postsTableExists = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables 
+        WHERE table_name = 'posts'
+      ) AS exists;
+    `);
+    
+    if (postsTableExists?.rows?.[0]?.exists) {
+      // Check if it's legacy JSONB format (has 'user_id' and 'item_id' columns instead of 'author_id')
+      const legacyPostsCheck = await client.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'posts' AND column_name = 'user_id'
+        ) AS exists;
+      `);
+      const hasAuthorId = await client.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'posts' AND column_name = 'author_id'
+        ) AS exists;
+      `);
+      
+      if (legacyPostsCheck?.rows?.[0]?.exists && !hasAuthorId?.rows?.[0]?.exists) {
+        // eslint-disable-next-line no-console
+        console.warn('⚠️  Replacing legacy JSONB posts table with relational schema');
+        await client.query('DROP TABLE IF EXISTS posts CASCADE;');
+      }
+    }
+    
+    // Check if posts table exists with correct structure (author_id column)
+    const postsCheck = await client.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'author_id'
+      ) AS exists;
+    `);
+    if (!postsCheck?.rows?.[0]?.exists) {
+      // eslint-disable-next-line no-console
+      console.log('Ensuring table: posts (relational schema)');
+      // Create task_id without foreign key constraint first (tasks table might not exist yet)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS posts (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+          task_id UUID,
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          images TEXT[],
+          likes INTEGER DEFAULT 0,
+          comments INTEGER DEFAULT 0,
+          post_type VARCHAR(50) DEFAULT 'task_completion',
+          metadata JSONB DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+      `);
+      // Add foreign key constraint to tasks if tasks table exists
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.table_constraints 
+              WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+            ) THEN
+              ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey 
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
+            END IF;
+          END IF;
+        END$$;
+      `);
+      // Create indexes only if columns exist (safe on re-run)
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='posts' AND column_name='author_id'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts (author_id);
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='posts' AND column_name='task_id'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts (task_id);
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='posts' AND column_name='created_at'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts (created_at DESC);
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name='posts' AND column_name='post_type'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts (post_type);
+          END IF;
+        END$$;
+      `);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('✅ Posts table exists with correct schema - skipping creation');
+    }
 
     // Ensure user_activities table - required by StatsController for real-time tracking
     await client.query(`

@@ -3,10 +3,11 @@
 // - Provides: Endpoint to sync users automatically (can be called from Firebase Cloud Function)
 // - Security: Should be protected with API key or admin authentication
 
-import { Controller, Post, Body, Get, Query, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, Headers, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
+import { AdminAuthGuard } from '../auth/jwt-auth.guard';
 import * as admin from 'firebase-admin';
 
 @Controller('api/sync')
@@ -51,6 +52,7 @@ export class SyncController {
    * @returns Success status
    */
   @Post('user')
+  @UseGuards(AdminAuthGuard)
   async syncUser(
     @Body() body: { firebase_uid?: string; email?: string },
     @Headers('x-api-key') apiKey?: string
@@ -266,6 +268,7 @@ export class SyncController {
    * @returns Sync summary with created/updated counts
    */
   @Post('all')
+  @UseGuards(AdminAuthGuard)
   async syncAllUsers(
     @Headers('x-api-key') apiKey?: string
   ) {
@@ -503,6 +506,7 @@ export class SyncController {
    * Useful for monitoring sync health
    */
   @Get('status')
+  @UseGuards(AdminAuthGuard)
   async getSyncStatus() {
     try {
       // Count users in Firebase

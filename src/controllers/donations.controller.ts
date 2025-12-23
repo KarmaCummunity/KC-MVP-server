@@ -18,11 +18,12 @@
 // TODO: Add comprehensive unit tests for all donation operations
 // TODO: Implement proper data sanitization and validation
 // TODO: Add comprehensive API documentation with Swagger decorators
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/donations')
 export class DonationsController {
@@ -89,6 +90,7 @@ export class DonationsController {
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   async createDonation(@Body() donationData: any) {
     // TODO: Replace 'any' with proper CreateDonationDTO interface
     // TODO: Add comprehensive input validation and sanitization
@@ -287,6 +289,7 @@ export class DonationsController {
   }
 
   @Put(':id')
+  @UseGuards(JwtAuthGuard)
   async updateDonation(@Param('id') id: string, @Body() updateData: any) {
     const { rows } = await this.pool.query(`
       UPDATE donations 
@@ -328,6 +331,7 @@ export class DonationsController {
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard)
   async deleteDonation(@Param('id') id: string) {
     // First check if donation exists
     const { rows } = await this.pool.query(`

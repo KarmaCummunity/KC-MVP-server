@@ -18,11 +18,12 @@
 // TODO: Add comprehensive logging and monitoring for analytics queries
 // TODO: Add comprehensive unit tests for all statistical calculations
 // TODO: Implement proper data privacy and anonymization
-import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Param, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/stats')
 export class StatsController {
@@ -253,6 +254,7 @@ export class StatsController {
   }
 
   @Post('increment')
+  @UseGuards(AdminAuthGuard)
   async incrementStat(@Body() statData: any) {
     const client = await this.pool.connect();
     try {
@@ -342,6 +344,7 @@ export class StatsController {
   }
 
   @Get('analytics/users')
+  @UseGuards(AdminAuthGuard)
   async getUserAnalytics() {
     const cacheKey = 'user_analytics';
     const cached = await this.redisCache.get(cacheKey);
@@ -571,6 +574,7 @@ export class StatsController {
   }
 
   @Get('details/:statType')
+  @UseGuards(JwtAuthGuard)
   async getStatDetails(@Param('statType') statType: string) {
     // TODO: Add proper pagination for large datasets
     // TODO: Add proper data anonymization for sensitive data
@@ -973,6 +977,7 @@ export class StatsController {
   }
 
   @Post('community/reset')
+  @UseGuards(AdminAuthGuard)
   async resetCommunityStats() {
     try {
       // Delete all community_stats records
