@@ -407,6 +407,54 @@ CREATE TABLE IF NOT EXISTS posts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure author_id and task_id columns exist (for existing tables that might not have them)
+DO $$ 
+BEGIN
+    -- Add author_id if missing
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'author_id'
+    ) THEN
+        -- Add column as nullable first (without constraint to avoid issues)
+        ALTER TABLE posts ADD COLUMN author_id UUID;
+        -- Update existing rows to have a default author_id if needed
+        -- Only update if user_profiles has rows
+        IF EXISTS (SELECT 1 FROM user_profiles LIMIT 1) THEN
+            UPDATE posts SET author_id = (SELECT id FROM user_profiles LIMIT 1) WHERE author_id IS NULL;
+        END IF;
+        -- Add foreign key constraint only if user_profiles exists and constraint doesn't exist
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
+            ) THEN
+                ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+            END IF;
+        END IF;
+        -- Only set NOT NULL if all rows have author_id
+        IF NOT EXISTS (SELECT 1 FROM posts WHERE author_id IS NULL) THEN
+            ALTER TABLE posts ALTER COLUMN author_id SET NOT NULL;
+        END IF;
+    END IF;
+    
+    -- Add task_id if missing
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'task_id'
+    ) THEN
+        ALTER TABLE posts ADD COLUMN task_id UUID;
+        -- Add foreign key constraint only if tasks table exists and constraint doesn't exist
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+            ) THEN
+                ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
+            END IF;
+        END IF;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id);
 CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);
 CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC);
