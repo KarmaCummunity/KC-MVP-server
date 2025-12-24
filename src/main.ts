@@ -197,40 +197,21 @@ async function bootstrap(): Promise<void> {
     // ═══════════════════════════════════════════════════════════════
     // SECURITY MIDDLEWARE - Helmet.js
     // ═══════════════════════════════════════════════════════════════
-    // Helmet helps secure Express apps by setting various HTTP headers
-    // Protects against: XSS, clickjacking, MITM attacks, and more
-    // 
-    // NOTE: CSP is disabled to prevent "upstream sent too big header" error in Railway proxy
-    // Railway's nginx proxy has limited buffer size for headers
-    app.use(helmet({
-      // Disable CSP to reduce header size (Railway proxy limitation)
-      contentSecurityPolicy: false,
-      // HTTP Strict Transport Security - forces HTTPS
-      hsts: {
-        maxAge: 31536000, // 1 year in seconds
-        includeSubDomains: true,
-        preload: true
-      },
-      // X-Frame-Options - prevents clickjacking
-      frameguard: {
-        action: 'deny'
-      },
-      // X-Content-Type-Options - prevents MIME sniffing
-      noSniff: true,
-      // X-XSS-Protection - enables browser XSS filter
-      xssFilter: true,
-      // Referrer-Policy - controls referrer information
-      referrerPolicy: {
-        policy: 'strict-origin-when-cross-origin'
-      },
-      // Cross-Origin-Opener-Policy - allows postMessage for OAuth popups
-      // Set to "same-origin-allow-popups" to allow OAuth window.postMessage calls
-      crossOriginOpenerPolicy: {
-        policy: 'same-origin-allow-popups'
-      }
-    }));
+    // TEMPORARILY DISABLED: Helmet was causing "upstream sent too big header" error
+    // Railway's nginx proxy has limited buffer size for response headers
+    // TODO: Re-enable with minimal configuration after fixing the issue
     
-    logger.log('🛡️  Security headers configured (Helmet.js)');
+    // app.use(helmet({
+    //   contentSecurityPolicy: false,
+    //   hsts: false,
+    //   frameguard: false,
+    //   noSniff: false,
+    //   xssFilter: false,
+    //   referrerPolicy: false,
+    //   crossOriginOpenerPolicy: false
+    // }));
+    
+    logger.log('⚠️  Security headers (Helmet.js) temporarily disabled to fix 502 error');
 
     // Determine environment for CORS configuration
     const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
