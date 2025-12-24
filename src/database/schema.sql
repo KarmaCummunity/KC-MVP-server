@@ -459,8 +459,8 @@ CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECU
 -- Posts table for user posts and task-related posts
 CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    author_id UUID NOT NULL, -- Foreign key constraint added below in DO block
+    task_id UUID, -- Foreign key constraint added below in DO block
     title VARCHAR(255) NOT NULL,
     description TEXT,
     images TEXT[],
@@ -472,9 +472,24 @@ CREATE TABLE IF NOT EXISTS posts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure author_id and task_id columns exist (for existing tables that might not have them)
+-- Ensure author_id and task_id columns exist and have foreign key constraints
 DO $$ 
 BEGIN
+    -- Drop existing foreign key constraints if they exist (from old schema)
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
+    ) THEN
+        ALTER TABLE posts DROP CONSTRAINT posts_author_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+    ) THEN
+        ALTER TABLE posts DROP CONSTRAINT posts_task_id_fkey;
+    END IF;
+    
     -- Add author_id if missing
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -487,19 +502,16 @@ BEGIN
         IF EXISTS (SELECT 1 FROM user_profiles LIMIT 1) THEN
             UPDATE posts SET author_id = (SELECT id FROM user_profiles LIMIT 1) WHERE author_id IS NULL;
         END IF;
-        -- Add foreign key constraint only if user_profiles exists and constraint doesn't exist
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
-            ) THEN
-                ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
-            END IF;
-        END IF;
-        -- Only set NOT NULL if all rows have author_id
-        IF NOT EXISTS (SELECT 1 FROM posts WHERE author_id IS NULL) THEN
-            ALTER TABLE posts ALTER COLUMN author_id SET NOT NULL;
-        END IF;
+    END IF;
+    
+    -- Add foreign key constraint for author_id
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+        ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+    
+    -- Only set NOT NULL if all rows have author_id
+    IF NOT EXISTS (SELECT 1 FROM posts WHERE author_id IS NULL) THEN
+        ALTER TABLE posts ALTER COLUMN author_id SET NOT NULL;
     END IF;
     
     -- Add task_id if missing
@@ -508,15 +520,11 @@ BEGIN
         WHERE table_name = 'posts' AND column_name = 'task_id'
     ) THEN
         ALTER TABLE posts ADD COLUMN task_id UUID;
-        -- Add foreign key constraint only if tasks table exists and constraint doesn't exist
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
-            ) THEN
-                ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
-            END IF;
-        END IF;
+    END IF;
+    
+    -- Add foreign key constraint for task_id
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
+        ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
     END IF;
     
     -- Add post_type if missing
@@ -573,6 +581,233 @@ CREATE TRIGGER update_posts_updated_at
   BEFORE UPDATE ON posts 
   FOR EACH ROW 
   EXECUTE FUNCTION update_updated_at_column();
+
+-- Post Likes table - tracks which users liked which posts
+CREATE TABLE IF NOT EXISTS post_likes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    post_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(post_id, user_id) -- Each user can only like a post once
+);
+
+-- Add foreign key constraints for post_likes
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_likes_post_id_fkey' AND table_name = 'post_likes'
+    ) THEN
+        ALTER TABLE post_likes DROP CONSTRAINT post_likes_post_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_likes_user_id_fkey' AND table_name = 'post_likes'
+    ) THEN
+        ALTER TABLE post_likes DROP CONSTRAINT post_likes_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE post_likes ADD CONSTRAINT post_likes_post_id_fkey 
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE post_likes ADD CONSTRAINT post_likes_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- Indexes for post_likes
+CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);
+CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);
+
+-- Post Comments table - stores all comments on posts
+CREATE TABLE IF NOT EXISTS post_comments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    post_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+    likes_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Add foreign key constraints for post_comments
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_comments_post_id_fkey' AND table_name = 'post_comments'
+    ) THEN
+        ALTER TABLE post_comments DROP CONSTRAINT post_comments_post_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_comments_user_id_fkey' AND table_name = 'post_comments'
+    ) THEN
+        ALTER TABLE post_comments DROP CONSTRAINT post_comments_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE post_comments ADD CONSTRAINT post_comments_post_id_fkey 
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE post_comments ADD CONSTRAINT post_comments_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- Indexes for post_comments
+CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
+CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
+
+-- Trigger for post_comments updated_at
+DROP TRIGGER IF EXISTS update_post_comments_updated_at ON post_comments;
+CREATE TRIGGER update_post_comments_updated_at 
+    BEFORE UPDATE ON post_comments 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Comment Likes table - tracks which users liked which comments
+CREATE TABLE IF NOT EXISTS comment_likes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    comment_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(comment_id, user_id) -- Each user can only like a comment once
+);
+
+-- Add foreign key constraints for comment_likes
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'comment_likes_comment_id_fkey' AND table_name = 'comment_likes'
+    ) THEN
+        ALTER TABLE comment_likes DROP CONSTRAINT comment_likes_comment_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'comment_likes_user_id_fkey' AND table_name = 'comment_likes'
+    ) THEN
+        ALTER TABLE comment_likes DROP CONSTRAINT comment_likes_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'post_comments' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_comment_id_fkey 
+            FOREIGN KEY (comment_id) REFERENCES post_comments(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
+        ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- Indexes for comment_likes
+CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
+CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);
+
+-- Functions to update like/comment counts on posts automatically
+
+-- Function to update post likes count
+CREATE OR REPLACE FUNCTION update_post_likes_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE posts SET likes = likes + 1, updated_at = NOW() WHERE id = NEW.post_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE posts SET likes = GREATEST(0, likes - 1), updated_at = NOW() WHERE id = OLD.post_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to update post comments count
+CREATE OR REPLACE FUNCTION update_post_comments_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE posts SET comments = comments + 1, updated_at = NOW() WHERE id = NEW.post_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE posts SET comments = GREATEST(0, comments - 1), updated_at = NOW() WHERE id = OLD.post_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to update comment likes count
+CREATE OR REPLACE FUNCTION update_comment_likes_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE post_comments SET likes_count = likes_count + 1, updated_at = NOW() WHERE id = NEW.comment_id;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        UPDATE post_comments SET likes_count = GREATEST(0, likes_count - 1), updated_at = NOW() WHERE id = OLD.comment_id;
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Triggers to automatically update counts when likes/comments are added/removed
+DROP TRIGGER IF EXISTS trigger_update_post_likes_count ON post_likes;
+CREATE TRIGGER trigger_update_post_likes_count
+    AFTER INSERT OR DELETE ON post_likes
+    FOR EACH ROW
+    EXECUTE FUNCTION update_post_likes_count();
+
+DROP TRIGGER IF EXISTS trigger_update_post_comments_count ON post_comments;
+CREATE TRIGGER trigger_update_post_comments_count
+    AFTER INSERT OR DELETE ON post_comments
+    FOR EACH ROW
+    EXECUTE FUNCTION update_post_comments_count();
+
+DROP TRIGGER IF EXISTS trigger_update_comment_likes_count ON comment_likes;
+CREATE TRIGGER trigger_update_comment_likes_count
+    AFTER INSERT OR DELETE ON comment_likes
+    FOR EACH ROW
+    EXECUTE FUNCTION update_comment_likes_count();
 
 -- Items table for item donations/deliveries
 -- NOTE: id is TEXT to support various identifier formats

@@ -199,9 +199,16 @@ export class DatabaseInit implements OnModuleInit {
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
 
-      for (const statement of statements) {
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
         if (statement.trim()) {
-          await client.query(statement.trim());
+          try {
+            await client.query(statement.trim());
+          } catch (err: any) {
+            console.error(`❌ Failed at statement #${i + 1} of ${statements.length}:`);
+            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            throw err;
+          }
         }
       }
 
@@ -925,6 +932,14 @@ export class DatabaseInit implements OnModuleInit {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()
       `);
+      
+      // Ensure super admin always has the correct roles
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = ARRAY['super_admin', 'admin', 'user']::TEXT[]
+        WHERE email = 'navesarussi@gmail.com'
+          AND (roles IS NULL OR NOT (roles @> ARRAY['super_admin']::TEXT[]))
+      `);
 
       console.log('✅ Default data initialized');
     } catch (err) {
@@ -961,9 +976,16 @@ export class DatabaseInit implements OnModuleInit {
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
 
-      for (const statement of statements) {
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
         if (statement.trim()) {
-          await client.query(statement.trim());
+          try {
+            await client.query(statement.trim());
+          } catch (err: any) {
+            console.error(`❌ Failed at CHALLENGES statement #${i + 1} of ${statements.length}:`);
+            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            throw err;
+          }
         }
       }
 

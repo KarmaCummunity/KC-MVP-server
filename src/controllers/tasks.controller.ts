@@ -2,13 +2,14 @@
 // - Purpose: CRUD עבור משימות קבוצתיות למנהל האפליקציה
 // - Routes: /api/tasks (GET, POST), /api/tasks/:id (GET, PATCH, DELETE)
 // - Storage: PostgreSQL טבלת tasks (schema.sql)
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { UserResolutionService } from '../services/user-resolution.service';
 import { ItemsService } from '../items/items.service';
+import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived';
 type TaskPriority = 'low' | 'medium' | 'high';
@@ -182,6 +183,69 @@ export class TasksController {
   }
 
   /**
+   * Get the Super Admin user ID (navesarussi@gmail.com)
+   * Used for default task assignment and permission checks
+   */
+  private async getSuperAdminId(): Promise<string | null> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT id FROM user_profiles WHERE email = 'navesarussi@gmail.com' LIMIT 1`
+      );
+      return rows[0]?.id || null;
+    } catch (error) {
+      console.error('❌ Error getting super admin ID:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if a manager can assign tasks to a specific user
+   * Super admin can assign to anyone
+   * Other managers can only assign to their direct/indirect subordinates
+   */
+  private async canAssignToUser(managerId: string, targetUserId: string): Promise<boolean> {
+    try {
+      // If assigning to self, always allowed
+      if (managerId === targetUserId) {
+        return true;
+      }
+
+      // Check if manager is super admin
+      const { rows: superCheck } = await this.pool.query(
+        `SELECT 1 FROM user_profiles WHERE id = $1 AND email = 'navesarussi@gmail.com'`,
+        [managerId]
+      );
+      if (superCheck.length > 0) {
+        console.log(`✅ Super admin ${managerId} can assign to anyone`);
+        return true;
+      }
+
+      // Check if targetUser is in manager's hierarchy (recursive - all levels down)
+      const { rows } = await this.pool.query(`
+        WITH RECURSIVE subordinates AS (
+          -- Base case: direct subordinates of manager
+          SELECT id, 1 as depth FROM user_profiles WHERE parent_manager_id = $1
+          UNION ALL
+          -- Recursive: subordinates of subordinates
+          SELECT u.id, s.depth + 1
+          FROM user_profiles u
+          INNER JOIN subordinates s ON u.parent_manager_id = s.id
+          WHERE s.depth < 100
+        )
+        SELECT 1 FROM subordinates WHERE id = $2 LIMIT 1
+      `, [managerId, targetUserId]);
+
+      const canAssign = rows.length > 0;
+      console.log(`🔐 Manager ${managerId} ${canAssign ? 'CAN' : 'CANNOT'} assign to ${targetUserId}`);
+      return canAssign;
+    } catch (error) {
+      console.error('❌ Error checking hierarchy permissions:', error);
+      // On error, deny assignment to be safe
+      return false;
+    }
+  }
+
+  /**
    * List tasks with filtering and pagination
    * Cache TTL: 10 minutes (tasks change moderately frequently)
    */
@@ -208,9 +272,7 @@ export class TasksController {
       // Build cache key from query parameters (include search query if present)
       const cacheKey = `tasks_list_${status || 'all'}_${priority || 'all'}_${category || 'all'}_${assignee || 'all'}_${searchQuery || 'all'}_${limit}_${offset}`;
 
-      // Temporarily disable cache to fix "disappearing task" issue
-      console.log('⚠️ Cache disabled for listTasks debugging');
-      /* 
+      // Cache restored - race condition was fixed by awaiting cache clearing in create/update/delete
       // Try to get from cache (but don't fail if Redis is unavailable)
       let cached = null;
       try {
@@ -223,7 +285,6 @@ export class TasksController {
         console.log('✅ Returning cached tasks list');
         return { success: true, data: cached };
       }
-      */
 
       const filters: string[] = [];
       const params: any[] = [];
@@ -281,9 +342,16 @@ export class TasksController {
         SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
-             FROM user_profiles u WHERE u.id = t.created_by) as creator_details,
+             FROM user_profiles u 
+             WHERE u.id::text = t.created_by::text 
+                OR u.firebase_uid = t.created_by::text
+                OR u.google_id = t.created_by::text
+             LIMIT 1) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
-             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
+             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details,
+            (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id) as subtask_count,
+            (SELECT json_build_object('id', pt.id, 'title', pt.title) 
+             FROM tasks pt WHERE pt.id = t.parent_task_id) as parent_task_details
         FROM tasks t
         ${where}
         ORDER BY 
@@ -334,6 +402,7 @@ export class TasksController {
    * GET /api/tasks/init-table
    */
   @Get('init-table')
+  @UseGuards(AdminAuthGuard)
   async initTasksTable() {
     try {
       await this.ensureTasksTable();
@@ -384,7 +453,11 @@ export class TasksController {
         `SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.created_by, t.parent_task_id, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
-             FROM user_profiles u WHERE u.id = t.created_by) as creator_details,
+             FROM user_profiles u 
+             WHERE u.id::text = t.created_by::text 
+                OR u.firebase_uid = t.created_by::text
+                OR u.google_id = t.created_by::text
+             LIMIT 1) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
              FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
          FROM tasks t WHERE t.id = $1`,
@@ -411,7 +484,114 @@ export class TasksController {
     }
   }
 
+  /**
+   * Get subtasks of a specific task
+   * GET /api/tasks/:id/subtasks
+   */
+  @Get(':id/subtasks')
+  async getSubtasks(@Param('id') parentId: string) {
+    try {
+      await this.ensureTasksTable();
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(parentId)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+
+      const { rows } = await this.pool.query(`
+        SELECT 
+          t.id, t.title, t.description, t.status, t.priority, t.category, 
+          t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
+          t.created_at, t.updated_at,
+          (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
+           FROM user_profiles u WHERE u.id = CAST(t.created_by AS UUID)) as creator_details,
+          (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
+           FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details,
+          (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id) as subtask_count
+        FROM tasks t
+        WHERE t.parent_task_id = $1
+        ORDER BY 
+          CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
+          created_at DESC
+      `, [parentId]);
+
+      console.log(`📋 Found ${rows.length} subtasks for task ${parentId}`);
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Error getting subtasks:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get subtasks',
+      };
+    }
+  }
+
+  /**
+   * Get full task tree (recursive - all subtasks at all levels)
+   * GET /api/tasks/:id/tree
+   */
+  @Get(':id/tree')
+  async getTaskTree(@Param('id') rootId: string) {
+    try {
+      await this.ensureTasksTable();
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(rootId)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+
+      // Use recursive CTE to get all subtasks at all levels
+      const { rows } = await this.pool.query(`
+        WITH RECURSIVE task_tree AS (
+          -- Base case: the root task
+          SELECT 
+            t.id, t.title, t.description, t.status, t.priority, t.category, 
+            t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
+            t.created_by, t.created_at, t.updated_at,
+            0 as level,
+            ARRAY[t.id] as path
+          FROM tasks t
+          WHERE t.id = $1
+          
+          UNION ALL
+          
+          -- Recursive: get children
+          SELECT 
+            t.id, t.title, t.description, t.status, t.priority, t.category, 
+            t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
+            t.created_by, t.created_at, t.updated_at,
+            tt.level + 1,
+            tt.path || t.id
+          FROM tasks t
+          INNER JOIN task_tree tt ON t.parent_task_id = tt.id
+          WHERE tt.level < 10  -- Max depth to prevent infinite loops
+        )
+        SELECT 
+          tt.*,
+          (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
+           FROM user_profiles u WHERE u.id = CAST(tt.created_by AS UUID)) as creator_details,
+          (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
+           FROM user_profiles u WHERE u.id = ANY(tt.assignees::UUID[])) as assignees_details,
+          (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tt.id) as subtask_count
+        FROM task_tree tt
+        ORDER BY tt.path
+      `, [rootId]);
+
+      console.log(`🌳 Found ${rows.length} tasks in tree for root ${rootId}`);
+      return { success: true, data: rows };
+    } catch (error) {
+      console.error('Error getting task tree:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get task tree',
+      };
+    }
+  }
+
   @Post()
+  @UseGuards(JwtAuthGuard)
   async createTask(@Body() body: any) {
     try {
       // Ensure table exists before inserting
@@ -449,17 +629,18 @@ export class TasksController {
 
       console.log(`📝 POST /api/tasks payload:`, JSON.stringify(body));
 
-      // Resolve created_by to UUID if provided (Declared here to avoid used-before-assigned error)
+      // Resolve created_by to UUID - REQUIRED field
       let createdByUuid: string | null = null;
       if (created_by) {
         const resolutionStart = Date.now();
         createdByUuid = await this.resolveUserIdToUUID(created_by);
         console.log(`👤 Resolved created_by ${created_by} to ${createdByUuid} in ${Date.now() - resolutionStart}ms`);
         if (!createdByUuid) {
-          console.warn(`⚠️ Could not resolve created_by user: ${created_by}`);
+          return { success: false, error: 'Could not resolve created_by user - invalid user ID' };
         }
       } else {
-        console.log(`👤 No created_by provided in payload`);
+        console.log(`❌ No created_by provided in payload - this is required`);
+        return { success: false, error: 'created_by is required - every task must have a creator' };
       }
 
       console.log(`👤 Final createdByUuid:`, createdByUuid);
@@ -502,7 +683,38 @@ export class TasksController {
         assigneeUUIDs = assignees;
       }
 
-      // created_by already resolved above
+      // DEFAULT ASSIGNEES: If no assignees provided, assign to creator + super admin
+      if (assigneeUUIDs.length === 0) {
+        console.log('📋 No assignees provided - setting default (creator + super admin)');
+        
+        // Add creator as assignee
+        if (createdByUuid) {
+          assigneeUUIDs.push(createdByUuid);
+        }
+        
+        // Add super admin if different from creator
+        const superAdminId = await this.getSuperAdminId();
+        if (superAdminId && superAdminId !== createdByUuid) {
+          assigneeUUIDs.push(superAdminId);
+        }
+        
+        console.log('📋 Default assignees set:', assigneeUUIDs);
+      }
+
+      // HIERARCHY PERMISSION CHECK: Verify creator can assign to all assignees
+      for (const assigneeId of assigneeUUIDs) {
+        if (assigneeId !== createdByUuid) {
+          const canAssign = await this.canAssignToUser(createdByUuid!, assigneeId);
+          if (!canAssign) {
+            console.log(`❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`);
+            return { 
+              success: false, 
+              error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך' 
+            };
+          }
+        }
+      }
+      console.log('✅ Hierarchy permission check passed for all assignees');
 
 
       const sql = `
@@ -564,35 +776,87 @@ export class TasksController {
         }
 
         // AUTO-POST: Create posts for task assignment
-        // Ensure posts table exists before creating posts
-        await this.ensurePostsTable();
+        // Track post creation results for response
+        const postResults = { created: 0, failed: 0, errors: [] as string[] };
         
-        console.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
-        for (const assigneeId of assigneeUUIDs) {
-          try {
-            await this.pool.query(`
-              INSERT INTO posts (author_id, task_id, title, description, post_type)
-              VALUES ($1, $2, $3, $4, 'task_assignment')
-            `, [
-              assigneeId,
-              newTask.id,
-              `משימה חדשה: ${newTask.title}`,
-              newTask.description 
-                ? `הוקצתה לך משימה חדשה: ${newTask.description}`
-                : `הוקצתה לך משימה חדשה: ${newTask.title}`
-            ]);
-            console.log(`✅ Post created for assignee ${assigneeId}`);
-          } catch (postError) {
-            console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
-            // Don't fail the request, just log
+        try {
+          // Ensure posts table exists before creating posts
+          await this.ensurePostsTable();
+          
+          // Track who already got a post to avoid duplicates
+          const postCreatedFor = new Set<string>();
+          
+          // 1. Create post for the CREATOR first (if they exist)
+          if (createdByUuid) {
+            try {
+              await this.pool.query(`
+                INSERT INTO posts (author_id, task_id, title, description, post_type)
+                VALUES ($1, $2, $3, $4, 'task_assignment')
+              `, [
+                createdByUuid,
+                newTask.id,
+                `יצרת משימה חדשה: ${newTask.title}`,
+                newTask.description 
+                  ? `יצרת משימה חדשה: ${newTask.description}`
+                  : `יצרת משימה חדשה: ${newTask.title}`
+              ]);
+              postResults.created++;
+              postCreatedFor.add(createdByUuid);
+              console.log(`✅ Post created for creator ${createdByUuid}`);
+            } catch (postError) {
+              postResults.failed++;
+              const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+              postResults.errors.push(`Failed for creator ${createdByUuid}: ${errorMsg}`);
+              console.error(`❌ Failed to create post for creator ${createdByUuid}:`, postError);
+            }
           }
+          
+          // 2. Create posts for ASSIGNEES (skip if already got post as creator)
+          console.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
+          for (const assigneeId of assigneeUUIDs) {
+            // Skip if this assignee already got a post (e.g., they are also the creator)
+            if (postCreatedFor.has(assigneeId)) {
+              console.log(`⏭️ Skipping post for ${assigneeId} - already created as creator`);
+              continue;
+            }
+            
+            try {
+              await this.pool.query(`
+                INSERT INTO posts (author_id, task_id, title, description, post_type)
+                VALUES ($1, $2, $3, $4, 'task_assignment')
+              `, [
+                assigneeId,
+                newTask.id,
+                `משימה חדשה: ${newTask.title}`,
+                newTask.description 
+                  ? `הוקצתה לך משימה חדשה: ${newTask.description}`
+                  : `הוקצתה לך משימה חדשה: ${newTask.title}`
+              ]);
+              postResults.created++;
+              postCreatedFor.add(assigneeId);
+              console.log(`✅ Post created for assignee ${assigneeId}`);
+            } catch (postError) {
+              postResults.failed++;
+              const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+              postResults.errors.push(`Failed for ${assigneeId}: ${errorMsg}`);
+              console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+            }
+          }
+          
+          console.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
+        } catch (tableError) {
+          console.error('❌ Failed to ensure posts table:', tableError);
+          postResults.errors.push('Posts table initialization failed');
         }
       }
 
-      // Clear task list caches (non-blocking)
-      this.clearTaskCaches().catch((err) => {
-        console.warn('Error clearing caches after task creation:', err);
-      });
+      // Clear task list caches (blocking to prevent race condition)
+      try {
+        await this.clearTaskCaches();
+        console.log('✅ Task caches cleared after creation');
+      } catch (cacheErr) {
+        console.warn('Error clearing caches after task creation (non-fatal):', cacheErr);
+      }
 
       return { success: true, data: newTask };
     } catch (error) {
@@ -605,6 +869,7 @@ export class TasksController {
   }
 
   @Patch(':id')
+  @UseGuards(JwtAuthGuard)
   async updateTask(@Param('id') id: string, @Body() body: any) {
     try {
       // Ensure table exists before updating
@@ -722,6 +987,31 @@ export class TasksController {
 
       if (shouldUpdateAssignees) {
         console.log('👥 Updating assignees to set:', assigneeUUIDs);
+        
+        // HIERARCHY PERMISSION CHECK: Get the task's created_by and verify permissions
+        const taskCreatorRes = await this.pool.query('SELECT created_by FROM tasks WHERE id = $1', [id]);
+        const taskCreatorId = taskCreatorRes.rows[0]?.created_by;
+        
+        if (taskCreatorId) {
+          // Check permissions for new assignees only (not ones that were already there)
+          const safeOldAssignees = (oldAssignees || []).filter(Boolean);
+          const newlyAddedAssignees = assigneeUUIDs.filter((uid: string) => !safeOldAssignees.includes(uid));
+          
+          for (const assigneeId of newlyAddedAssignees) {
+            if (assigneeId !== taskCreatorId) {
+              const canAssign = await this.canAssignToUser(taskCreatorId, assigneeId);
+              if (!canAssign) {
+                console.log(`❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`);
+                return { 
+                  success: false, 
+                  error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך' 
+                };
+              }
+            }
+          }
+          console.log('✅ Hierarchy permission check passed for updated assignees');
+        }
+        
         params.push(assigneeUUIDs);
         sets.push(`assignees = $${params.length}::UUID[]`);
       }
@@ -788,86 +1078,110 @@ export class TasksController {
           }
 
           // AUTO-POST: Create posts for newly assigned users
-          // Ensure posts table exists before creating posts
-          await this.ensurePostsTable();
+          const assignPostResults = { created: 0, failed: 0 };
           
-          console.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
-          for (const assigneeId of addedAssignees) {
-            try {
-              await this.pool.query(`
-                INSERT INTO posts (author_id, task_id, title, description, post_type)
-                VALUES ($1, $2, $3, $4, 'task_assignment')
-              `, [
-                assigneeId,
-                updatedTask.id,
-                `משימה חדשה: ${updatedTask.title}`,
-                updatedTask.description 
-                  ? `הוקצתה לך משימה חדשה: ${updatedTask.description}`
-                  : `הוקצתה לך משימה חדשה: ${updatedTask.title}`
-              ]);
-              console.log(`✅ Post created for newly assigned user ${assigneeId}`);
-            } catch (postError) {
-              console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
-              // Don't fail the request, just log
+          try {
+            // Ensure posts table exists before creating posts
+            await this.ensurePostsTable();
+            
+            console.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
+            for (const assigneeId of addedAssignees) {
+              try {
+                await this.pool.query(`
+                  INSERT INTO posts (author_id, task_id, title, description, post_type)
+                  VALUES ($1, $2, $3, $4, 'task_assignment')
+                `, [
+                  assigneeId,
+                  updatedTask.id,
+                  `משימה חדשה: ${updatedTask.title}`,
+                  updatedTask.description 
+                    ? `הוקצתה לך משימה חדשה: ${updatedTask.description}`
+                    : `הוקצתה לך משימה חדשה: ${updatedTask.title}`
+                ]);
+                assignPostResults.created++;
+                console.log(`✅ Post created for newly assigned user ${assigneeId}`);
+              } catch (postError) {
+                assignPostResults.failed++;
+                console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+              }
             }
+            console.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
+          } catch (tableError) {
+            console.error('❌ Failed to ensure posts table for assignment posts:', tableError);
           }
         }
       }
 
-      // Clear task caches (non-blocking)
-      this.redisCache.delete(`task_${id}`).catch((err) => {
-        console.warn('Error deleting task cache:', err);
-      });
-      this.clearTaskCaches().catch((err) => {
-        console.warn('Error clearing caches after task update:', err);
-      });
+      // Clear task caches (blocking to prevent race condition)
+      try {
+        await this.redisCache.delete(`task_${id}`);
+        await this.clearTaskCaches();
+        console.log('✅ Task caches cleared after update');
+      } catch (cacheErr) {
+        console.warn('Error clearing caches after task update (non-fatal):', cacheErr);
+      }
 
       if (rows.length > 0 && body.status === 'done') {
         const task = rows[0];
         // AUTO-POST: Create posts for task completion
-        // Ensure posts table exists before creating posts
-        await this.ensurePostsTable();
+        const completionPostResults = { created: 0, failed: 0 };
         
-        console.log(`📝 Creating completion posts for task ${task.id}...`);
         try {
+          // Ensure posts table exists before creating posts
+          await this.ensurePostsTable();
+          
+          console.log(`📝 Creating completion posts for task ${task.id}...`);
+          
           // 1. Post for creator
           if (task.created_by) {
-            await this.pool.query(`
-              INSERT INTO posts (author_id, task_id, title, description, post_type)
-              VALUES ($1, $2, $3, $4, 'task_completion')
-            `, [
-              task.created_by, 
-              task.id, 
-              `משימה הושלמה: ${task.title}`, 
-              task.description 
-                ? `המשימה "${task.title}" הושלמה בהצלחה! ${task.description}`
-                : `המשימה "${task.title}" הושלמה בהצלחה!`
-            ]);
-            console.log(`✅ Completion post created for creator ${task.created_by}`);
+            try {
+              await this.pool.query(`
+                INSERT INTO posts (author_id, task_id, title, description, post_type)
+                VALUES ($1, $2, $3, $4, 'task_completion')
+              `, [
+                task.created_by, 
+                task.id, 
+                `משימה הושלמה: ${task.title}`, 
+                task.description 
+                  ? `המשימה "${task.title}" הושלמה בהצלחה! ${task.description}`
+                  : `המשימה "${task.title}" הושלמה בהצלחה!`
+              ]);
+              completionPostResults.created++;
+              console.log(`✅ Completion post created for creator ${task.created_by}`);
+            } catch (creatorPostError) {
+              completionPostResults.failed++;
+              console.error(`❌ Failed to create completion post for creator ${task.created_by}:`, creatorPostError);
+            }
           }
 
           // 2. Post for assignees
           if (task.assignees && task.assignees.length > 0) {
             for (const assigneeId of task.assignees) {
               if (assigneeId !== task.created_by) { // Avoid duplicate if assigned to creator
-                await this.pool.query(`
-                  INSERT INTO posts (author_id, task_id, title, description, post_type)
-                  VALUES ($1, $2, $3, $4, 'task_completion')
-                `, [
-                  assigneeId, 
-                  task.id, 
-                  `ביצעתי משימה: ${task.title}`, 
-                  task.description 
-                    ? `השלמתי את המשימה "${task.title}" בהצלחה! ${task.description}`
-                    : `השלמתי את המשימה "${task.title}" בהצלחה!`
-                ]);
-                console.log(`✅ Completion post created for assignee ${assigneeId}`);
+                try {
+                  await this.pool.query(`
+                    INSERT INTO posts (author_id, task_id, title, description, post_type)
+                    VALUES ($1, $2, $3, $4, 'task_completion')
+                  `, [
+                    assigneeId, 
+                    task.id, 
+                    `ביצעתי משימה: ${task.title}`, 
+                    task.description 
+                      ? `השלמתי את המשימה "${task.title}" בהצלחה! ${task.description}`
+                      : `השלמתי את המשימה "${task.title}" בהצלחה!`
+                  ]);
+                  completionPostResults.created++;
+                  console.log(`✅ Completion post created for assignee ${assigneeId}`);
+                } catch (assigneePostError) {
+                  completionPostResults.failed++;
+                  console.error(`❌ Failed to create completion post for assignee ${assigneeId}:`, assigneePostError);
+                }
               }
             }
           }
-        } catch (postError) {
-          console.error('❌ Failed to create auto-posts for task completion:', postError);
-          // Don't fail the request, just log
+          console.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
+        } catch (tableError) {
+          console.error('❌ Failed to ensure posts table for completion posts:', tableError);
         }
       }
 
@@ -882,6 +1196,7 @@ export class TasksController {
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard)
   async deleteTask(@Param('id') id: string) {
     try {
       // Ensure table exists before deleting

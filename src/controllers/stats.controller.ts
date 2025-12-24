@@ -18,11 +18,12 @@
 // TODO: Add comprehensive logging and monitoring for analytics queries
 // TODO: Add comprehensive unit tests for all statistical calculations
 // TODO: Implement proper data privacy and anonymization
-import { Controller, Get, Post, Body, Query, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Param, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/stats')
 export class StatsController {
@@ -253,6 +254,7 @@ export class StatsController {
   }
 
   @Post('increment')
+  @UseGuards(AdminAuthGuard)
   async incrementStat(@Body() statData: any) {
     const client = await this.pool.connect();
     try {
@@ -342,6 +344,7 @@ export class StatsController {
   }
 
   @Get('analytics/users')
+  @UseGuards(AdminAuthGuard)
   async getUserAnalytics() {
     const cacheKey = 'user_analytics';
     const cached = await this.redisCache.get(cacheKey);
@@ -571,6 +574,7 @@ export class StatsController {
   }
 
   @Get('details/:statType')
+  @UseGuards(JwtAuthGuard)
   async getStatDetails(@Param('statType') statType: string) {
     // TODO: Add proper pagination for large datasets
     // TODO: Add proper data anonymization for sensitive data
@@ -686,6 +690,25 @@ export class StatsController {
           `;
           break;
 
+        case 'completedTasks':
+          // Get completed community tasks
+          // משימות קהילתיות שהושלמו
+          query = `
+            SELECT 
+              t.title,
+              t.description,
+              t.category,
+              t.updated_at,
+              t.created_at,
+              up.name as completed_by
+            FROM tasks t
+            LEFT JOIN user_profiles up ON up.id = t.created_by
+            WHERE t.status = 'done'
+            ORDER BY t.updated_at DESC
+            LIMIT 500
+          `;
+          break;
+
         default:
           return { success: false, error: 'Unknown stat type' };
       }
@@ -730,6 +753,7 @@ export class StatsController {
       activityMetrics: `computed_stats_activities_${cityKey}`,
       chatMetrics: `computed_stats_chat_${cityKey}`,
       siteVisitsMetrics: `computed_stats_site_visits_${cityKey}`,
+      taskMetrics: `computed_stats_tasks_${cityKey}`,
     };
 
     // Try to get all cached metrics at once
@@ -741,6 +765,7 @@ export class StatsController {
       cacheKeys.activityMetrics,
       cacheKeys.chatMetrics,
       cacheKeys.siteVisitsMetrics,
+      cacheKeys.taskMetrics,
     ]);
 
     // Helper function to get cached or execute query
@@ -875,10 +900,25 @@ export class StatsController {
         FROM community_stats 
         WHERE stat_type = 'site_visits'
         ${city ? 'AND city IS NULL' : ''}
-      `, params), 5 * 60) // Cache for 5 minutes
+      `, params), 5 * 60), // Cache for 5 minutes
+
+      // Task metrics - community tasks (all tasks are community tasks, not personal)
+      // סטטיסטיקות משימות - משימות קהילתיות (כל המשימות הן קהילתיות ולא אישיות)
+      getCachedOrQuery(
+        cacheKeys.taskMetrics,
+        () => this.pool.query(`
+        SELECT 
+          COUNT(*) as total_tasks,
+          COUNT(CASE WHEN status = 'done' THEN 1 END) as completed_tasks,
+          COUNT(CASE WHEN status = 'open' THEN 1 END) as open_tasks,
+          COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_tasks,
+          COUNT(CASE WHEN status = 'done' AND updated_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as completed_tasks_this_week,
+          COUNT(CASE WHEN status = 'done' AND updated_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as completed_tasks_this_month
+        FROM tasks
+      `, []), 10 * 60) // Cache for 10 minutes
     ]);
 
-    const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics] = queries;
+    const [userMetrics, donationMetrics, rideMetrics, eventMetrics, activityMetrics, chatMetrics, siteVisitsMetrics, taskMetrics] = queries;
 
     // Map all computed stats
     const computed = {
@@ -944,6 +984,15 @@ export class StatsController {
       // ביקורים באתר - השתמש בערך הקיים מ-getCommunityStats אם קיים, אחרת חשב
       site_visits: stats.site_visits || { value: parseInt(siteVisitsMetrics.rows[0].site_visits || '0'), days_tracked: 1 },
 
+      // Task stats - community tasks (all tasks are community tasks)
+      // סטטיסטיקות משימות קהילתיות
+      total_tasks: { value: parseInt(taskMetrics.rows[0].total_tasks || '0'), days_tracked: 1 },
+      completed_tasks: { value: parseInt(taskMetrics.rows[0].completed_tasks || '0'), days_tracked: 1 },
+      open_tasks: { value: parseInt(taskMetrics.rows[0].open_tasks || '0'), days_tracked: 1 },
+      in_progress_tasks: { value: parseInt(taskMetrics.rows[0].in_progress_tasks || '0'), days_tracked: 1 },
+      completed_tasks_this_week: { value: parseInt(taskMetrics.rows[0].completed_tasks_this_week || '0'), days_tracked: 1 },
+      completed_tasks_this_month: { value: parseInt(taskMetrics.rows[0].completed_tasks_this_month || '0'), days_tracked: 1 },
+
     };
 
     // Add computed stats to the main stats object
@@ -973,6 +1022,7 @@ export class StatsController {
   }
 
   @Post('community/reset')
+  @UseGuards(AdminAuthGuard)
   async resetCommunityStats() {
     try {
       // Delete all community_stats records

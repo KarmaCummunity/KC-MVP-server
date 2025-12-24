@@ -18,11 +18,13 @@
 // TODO: Add comprehensive logging and monitoring
 // TODO: Add unit and integration tests for all endpoints
 // TODO: Optimize database queries - many N+1 query problems
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtService } from '../auth/jwt.service';
 import * as argon2 from 'argon2';
 
 @Controller('api/users')
@@ -35,6 +37,7 @@ export class UsersController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
+    private readonly jwtService: JwtService,
   ) { }
 
   /**
@@ -66,12 +69,32 @@ export class UsersController {
   /**
    * Set parent manager for a user
    * POST /api/users/:id/set-manager
+   * Body: { managerId: string | null, requestingUserId?: string }
    */
   @Post(':id/set-manager')
-  async setManager(@Param('id') id: string, @Body() body: { managerId: string | null }) {
+  @UseGuards(JwtAuthGuard)
+  async setManager(@Param('id') id: string, @Body() body: { managerId: string | null, requestingUserId?: string }) {
     try {
-      // TODO: Add permission check (only admin or current manager)
-      const { managerId } = body;
+      const { managerId, requestingUserId } = body;
+      
+      // Permission check: only admin or super admin can change manager assignments
+      if (requestingUserId) {
+        const { rows: reqUser } = await this.pool.query(
+          `SELECT id, email, roles FROM user_profiles WHERE id = $1`,
+          [requestingUserId]
+        );
+        
+        if (reqUser.length > 0) {
+          const isSuperAdmin = reqUser[0].email === 'navesarussi@gmail.com';
+          const isAdmin = (reqUser[0].roles || []).includes('admin') || 
+                          (reqUser[0].roles || []).includes('super_admin') ||
+                          isSuperAdmin;
+          
+          if (!isAdmin) {
+            return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
+          }
+        }
+      }
 
       // Prevent validation loop (user cannot be their own manager)
       if (managerId && managerId === id) {
@@ -84,6 +107,53 @@ export class UsersController {
         if (checkManager.rows.length === 0) {
           return { success: false, error: 'Manager not found' };
         }
+
+        // Full cycle detection using recursive CTE
+        // Check if 'id' (subordinate) appears anywhere in managerId's hierarchy chain
+        const { rows: cycleCheck } = await this.pool.query(`
+          WITH RECURSIVE manager_chain AS (
+            -- Base case: start from the proposed manager
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $1
+            
+            UNION ALL
+            
+            -- Recursive: go up the chain
+            SELECT u.id, u.parent_manager_id, mc.depth + 1
+            FROM user_profiles u
+            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+            WHERE mc.depth < 100
+          )
+          SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
+        `, [managerId, id]);
+
+        if (cycleCheck.length > 0) {
+          return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
+        }
+
+        // Check reverse direction - if manager is subordinate of user
+        const { rows: reverseCheck } = await this.pool.query(`
+          WITH RECURSIVE subordinate_tree AS (
+            -- Base case: direct subordinates of user
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE parent_manager_id = $2
+            
+            UNION ALL
+            
+            -- Recursive: subordinates of subordinates
+            SELECT u.id, u.parent_manager_id, st.depth + 1
+            FROM user_profiles u
+            INNER JOIN subordinate_tree st ON u.parent_manager_id = st.id
+            WHERE st.depth < 100
+          )
+          SELECT 1 FROM subordinate_tree WHERE id = $1 LIMIT 1
+        `, [managerId, id]);
+
+        if (reverseCheck.length > 0) {
+          return { success: false, error: 'Cannot assign - the proposed manager is currently your subordinate' };
+        }
       }
 
       await this.pool.query(`
@@ -92,6 +162,7 @@ export class UsersController {
         WHERE id = $2
       `, [managerId, id]);
 
+      console.log(`✅ Manager set: ${id} now reports to ${managerId || 'no one'}`);
       return { success: true, message: 'Manager updated successfully' };
     } catch (error) {
       console.error('Set manager error:', error);
@@ -105,6 +176,7 @@ export class UsersController {
    * Body: { action: 'add' | 'remove', managerId: string }
    */
   @Post(':id/hierarchy/manage')
+  @UseGuards(JwtAuthGuard)
   async manageHierarchy(@Param('id') subordinateId: string, @Body() body: { action: 'add' | 'remove', managerId: string }) {
     const client = await this.pool.connect();
     try {
@@ -112,12 +184,54 @@ export class UsersController {
       await client.query('BEGIN');
 
       if (action === 'add') {
-        // Validation: Prevent cycles (simple check: am I their boss?)
-        // In a real app, we should check full cycle. For now, check if they are already my boss.
-        const { rows: subCheck } = await client.query('SELECT parent_manager_id FROM user_profiles WHERE id = $1', [managerId]);
-        if (subCheck[0]?.parent_manager_id === subordinateId) {
+        // Full cycle detection using recursive CTE
+        // Check if subordinateId appears anywhere in managerId's hierarchy chain (upwards)
+        // This prevents: A → B → C → A cycles at any depth
+        const { rows: cycleCheck } = await client.query(`
+          WITH RECURSIVE manager_chain AS (
+            -- Base case: start from the proposed manager
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $1
+            
+            UNION ALL
+            
+            -- Recursive: go up the chain
+            SELECT u.id, u.parent_manager_id, mc.depth + 1
+            FROM user_profiles u
+            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+            WHERE mc.depth < 100  -- Prevent infinite loops in case of existing cycles
+          )
+          SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
+        `, [managerId, subordinateId]);
+
+        if (cycleCheck.length > 0) {
           await client.query('ROLLBACK');
-          return { success: false, error: 'Cannot add your own manager as a subordinate' };
+          return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
+        }
+
+        // Also check if subordinate would become manager of someone in their own chain
+        const { rows: reverseCheck } = await client.query(`
+          WITH RECURSIVE subordinate_chain AS (
+            -- Base case: start from the subordinate
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $2
+            
+            UNION ALL
+            
+            -- Recursive: go up the chain
+            SELECT u.id, u.parent_manager_id, sc.depth + 1
+            FROM user_profiles u
+            INNER JOIN subordinate_chain sc ON u.id = sc.parent_manager_id
+            WHERE sc.depth < 100
+          )
+          SELECT 1 FROM subordinate_chain WHERE id = $1 LIMIT 1
+        `, [managerId, subordinateId]);
+
+        if (reverseCheck.length > 0) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'Cannot assign - this user is already in your management chain' };
         }
 
         await client.query(`
@@ -127,35 +241,91 @@ export class UsersController {
         `, [managerId, subordinateId]);
 
         await client.query('COMMIT');
+        console.log(`✅ Hierarchy updated: ${subordinateId} now reports to ${managerId}`);
         return { success: true, message: 'Subordinate added successfully' };
 
       } else if (action === 'remove') {
         // Validate that they are currently managed by this manager
-        const { rows: currentCheck } = await client.query('SELECT parent_manager_id FROM user_profiles WHERE id = $1', [subordinateId]);
+        const { rows: currentCheck } = await client.query('SELECT parent_manager_id, name, email FROM user_profiles WHERE id = $1', [subordinateId]);
         if (currentCheck[0]?.parent_manager_id !== managerId) {
           await client.query('ROLLBACK');
           return { success: false, error: 'User is not your subordinate' };
         }
+        
+        const subordinateName = currentCheck[0]?.name || currentCheck[0]?.email || 'Unknown';
 
-        // 1. Remove manager link
+        // 1. Get tasks that will be transferred (for notification and logging)
+        const { rows: tasksToTransfer } = await client.query(`
+          SELECT id, title, status, priority
+          FROM tasks
+          WHERE $1::UUID = ANY(assignees::UUID[]) 
+          AND status NOT IN ('done', 'archived')
+        `, [subordinateId]);
+        
+        const transferCount = tasksToTransfer.length;
+        console.log(`📋 Found ${transferCount} active tasks to transfer from ${subordinateId} to ${managerId}`);
+
+        // 2. Remove manager link
         await client.query(`
           UPDATE user_profiles 
           SET parent_manager_id = NULL, updated_at = NOW()
           WHERE id = $1
         `, [subordinateId]);
 
-        // 2. Transfer active tasks (assignees) from subordinate to manager
-        // We replace the subordinate's ID with the manager's ID in the assignees array
-        // for all tasks where the subordinate is an assignee and status is not done/archived
-        await client.query(`
-          UPDATE tasks
-          SET assignees = array_replace(assignees::UUID[], $1::UUID, $2::UUID)::UUID[]
-          WHERE $1::UUID = ANY(assignees::UUID[]) 
-          AND status NOT IN ('done', 'archived')
-        `, [subordinateId, managerId]);
+        // 3. Transfer active tasks (assignees) from subordinate to manager
+        if (transferCount > 0) {
+          await client.query(`
+            UPDATE tasks
+            SET assignees = array_replace(assignees::UUID[], $1::UUID, $2::UUID)::UUID[],
+                updated_at = NOW()
+            WHERE $1::UUID = ANY(assignees::UUID[]) 
+            AND status NOT IN ('done', 'archived')
+          `, [subordinateId, managerId]);
+          
+          console.log(`✅ Transferred ${transferCount} tasks from ${subordinateName} to manager ${managerId}`);
+          
+          // Log the transfer details
+          console.log('📝 Transferred tasks:', tasksToTransfer.map(t => `${t.id.substring(0, 8)}: ${t.title} (${t.priority})`).join(', '));
+        }
 
         await client.query('COMMIT');
-        return { success: true, message: 'Subordinate removed and tasks transferred' };
+
+        // 4. Create notification for manager about transferred tasks (non-blocking)
+        if (transferCount > 0) {
+          try {
+            // Insert notification directly to the database
+            await this.pool.query(`
+              INSERT INTO notifications (user_id, item_id, data, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT (user_id, item_id) DO NOTHING
+            `, [
+              managerId,
+              require('crypto').randomUUID(),
+              JSON.stringify({
+                title: 'משימות הועברו אליך',
+                body: `${transferCount} משימות הועברו אליך מ${subordinateName} שהוסר מהניהול שלך`,
+                type: 'system',
+                timestamp: new Date().toISOString(),
+                read: false,
+                data: { 
+                  transferredTaskIds: tasksToTransfer.map(t => t.id),
+                  fromUser: subordinateId,
+                  fromUserName: subordinateName,
+                  count: transferCount
+                }
+              })
+            ]);
+            console.log(`🔔 Notification sent to manager ${managerId} about ${transferCount} transferred tasks`);
+          } catch (notifError) {
+            console.warn('Failed to create transfer notification (non-fatal):', notifError);
+          }
+        }
+
+        return { 
+          success: true, 
+          message: `Subordinate removed and ${transferCount} tasks transferred`,
+          data: { transferredTasks: transferCount }
+        };
       }
 
       await client.query('ROLLBACK');
@@ -167,6 +337,429 @@ export class UsersController {
       return { success: false, error: 'Failed to manage hierarchy' };
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Promote a user to admin role with hierarchy validation
+   * POST /api/users/:id/promote-admin
+   * Body: { requestingAdminId: string }
+   * 
+   * Rules:
+   * 1. The requesting admin must be an admin
+   * 2. The target user must NOT already be an admin under someone else
+   * 3. The target user must NOT be a manager above the requesting admin
+   * 4. The target user will be set as subordinate of the requesting admin
+   */
+  @Post(':id/promote-admin')
+  @UseGuards(JwtAuthGuard)
+  async promoteToAdmin(@Param('id') targetUserId: string, @Body() body: { requestingAdminId: string }) {
+    const client = await this.pool.connect();
+    try {
+      const { requestingAdminId } = body;
+      
+      if (!requestingAdminId) {
+        return { success: false, error: 'requestingAdminId is required' };
+      }
+      
+      await client.query('BEGIN');
+      
+      // 1. Verify requesting user exists and is an admin
+      const { rows: requestingUser } = await client.query(
+        `SELECT id, email, roles FROM user_profiles WHERE id = $1`,
+        [requestingAdminId]
+      );
+      
+      if (requestingUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Requesting user not found' };
+      }
+      
+      const isSuperAdmin = requestingUser[0].email === 'navesarussi@gmail.com';
+      const isAdmin = (requestingUser[0].roles || []).includes('admin') || 
+                      (requestingUser[0].roles || []).includes('super_admin') ||
+                      isSuperAdmin;
+      
+      if (!isAdmin) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
+      }
+      
+      // 2. Get target user info
+      const { rows: targetUser } = await client.query(
+        `SELECT id, name, email, roles, parent_manager_id FROM user_profiles WHERE id = $1`,
+        [targetUserId]
+      );
+      
+      if (targetUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'User not found' };
+      }
+      
+      const targetIsSuperAdmin = targetUser[0].email === 'navesarussi@gmail.com';
+      if (targetIsSuperAdmin) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי' };
+      }
+      
+      const targetIsAlreadyAdmin = (targetUser[0].roles || []).includes('admin') || 
+                                    (targetUser[0].roles || []).includes('super_admin');
+      
+      // 3. Check if target is already an admin under someone else
+      if (targetIsAlreadyAdmin && targetUser[0].parent_manager_id) {
+        if (targetUser[0].parent_manager_id !== requestingAdminId) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'משתמש זה כבר מנהל תחת מישהו אחר - לא ניתן להעביר' };
+        }
+        // Already an admin under requesting admin - nothing to do
+        await client.query('ROLLBACK');
+        return { success: true, message: 'משתמש זה כבר מנהל תחתיך' };
+      }
+      
+      // 4. Check if target is in the management chain above the requesting admin
+      // (Cannot promote your own manager or their managers)
+      if (!isSuperAdmin) {
+        const { rows: chainCheck } = await client.query(`
+          WITH RECURSIVE manager_chain AS (
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $1
+            
+            UNION ALL
+            
+            SELECT u.id, u.parent_manager_id, mc.depth + 1
+            FROM user_profiles u
+            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+            WHERE mc.depth < 100
+          )
+          SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
+        `, [requestingAdminId, targetUserId]);
+        
+        if (chainCheck.length > 0) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'לא ניתן להפוך את המנהל שלך או מנהלים מעליו למנהל תחתיך' };
+        }
+      }
+      
+      // 5. All checks passed - promote the user
+      // Add 'admin' role and set parent_manager_id
+      const currentRoles = targetUser[0].roles || [];
+      const newRoles = currentRoles.includes('admin') ? currentRoles : [...currentRoles, 'admin'];
+      
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = $1, parent_manager_id = $2, updated_at = NOW()
+        WHERE id = $3
+      `, [newRoles, requestingAdminId, targetUserId]);
+      
+      await client.query('COMMIT');
+      
+      console.log(`✅ User ${targetUserId} promoted to admin under ${requestingAdminId}`);
+      return { 
+        success: true, 
+        message: `${targetUser[0].name || targetUser[0].email} הפך למנהל תחתיך` 
+      };
+      
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Promote to admin error:', error);
+      return { success: false, error: 'Failed to promote user to admin' };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Demote an admin to regular user (remove admin role)
+   * POST /api/users/:id/demote-admin
+   * Body: { requestingAdminId: string }
+   * 
+   * Rules:
+   * 1. The requesting admin must be an admin
+   * 2. Can only demote admins that are YOUR subordinates
+   * 3. Super admin can demote anyone except themselves
+   */
+  @Post(':id/demote-admin')
+  @UseGuards(JwtAuthGuard)
+  async demoteAdmin(@Param('id') targetUserId: string, @Body() body: { requestingAdminId: string }) {
+    const client = await this.pool.connect();
+    try {
+      const { requestingAdminId } = body;
+      
+      if (!requestingAdminId) {
+        return { success: false, error: 'requestingAdminId is required' };
+      }
+      
+      await client.query('BEGIN');
+      
+      // 1. Verify requesting user exists and is an admin
+      const { rows: requestingUser } = await client.query(
+        `SELECT id, email, roles FROM user_profiles WHERE id = $1`,
+        [requestingAdminId]
+      );
+      
+      if (requestingUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Requesting user not found' };
+      }
+      
+      const isSuperAdmin = requestingUser[0].email === 'navesarussi@gmail.com';
+      const isAdmin = (requestingUser[0].roles || []).includes('admin') || 
+                      (requestingUser[0].roles || []).includes('super_admin') ||
+                      isSuperAdmin;
+      
+      if (!isAdmin) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
+      }
+      
+      // 2. Get target user info
+      const { rows: targetUser } = await client.query(
+        `SELECT id, name, email, roles, parent_manager_id FROM user_profiles WHERE id = $1`,
+        [targetUserId]
+      );
+      
+      if (targetUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'User not found' };
+      }
+      
+      const targetIsSuperAdmin = targetUser[0].email === 'navesarussi@gmail.com';
+      if (targetIsSuperAdmin) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי' };
+      }
+      
+      // 3. Check authorization - can only demote your own subordinates
+      if (!isSuperAdmin) {
+        // Check if target is a direct subordinate OR in the subordinate tree
+        const { rows: subordinateCheck } = await client.query(`
+          WITH RECURSIVE subordinates AS (
+            SELECT id, 1 as depth FROM user_profiles WHERE parent_manager_id = $1
+            UNION ALL
+            SELECT u.id, s.depth + 1
+            FROM user_profiles u
+            INNER JOIN subordinates s ON u.parent_manager_id = s.id
+            WHERE s.depth < 100
+          )
+          SELECT 1 FROM subordinates WHERE id = $2 LIMIT 1
+        `, [requestingAdminId, targetUserId]);
+        
+        if (subordinateCheck.length === 0) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'ניתן להסיר הרשאות מנהל רק ממנהלים שתחתיך' };
+        }
+      }
+      
+      // 4. Remove admin role
+      const currentRoles = targetUser[0].roles || [];
+      const newRoles = currentRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
+      
+      // Also clear parent_manager_id since they're no longer an admin
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = $1, parent_manager_id = NULL, updated_at = NOW()
+        WHERE id = $2
+      `, [newRoles, targetUserId]);
+      
+      await client.query('COMMIT');
+      
+      console.log(`✅ User ${targetUserId} demoted from admin by ${requestingAdminId}`);
+      return { 
+        success: true, 
+        message: `הרשאות מנהל הוסרו מ-${targetUser[0].name || targetUser[0].email}` 
+      };
+      
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Demote admin error:', error);
+      return { success: false, error: 'Failed to demote admin' };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get users eligible for admin promotion by a specific admin
+   * GET /api/users/eligible-for-promotion/:adminId
+   * Returns users that can be promoted by this admin
+   */
+  @Get('eligible-for-promotion/:adminId')
+  async getEligibleForPromotion(@Param('adminId') adminId: string) {
+    try {
+      // Get admin info
+      const { rows: adminRows } = await this.pool.query(
+        `SELECT id, email, roles FROM user_profiles WHERE id = $1`,
+        [adminId]
+      );
+      
+      if (adminRows.length === 0) {
+        return { success: false, error: 'Admin not found' };
+      }
+      
+      const isSuperAdmin = adminRows[0].email === 'navesarussi@gmail.com';
+      
+      // Get all users who are NOT:
+      // 1. The requesting admin themselves
+      // 2. Already admins under someone else (unless super admin)
+      // 3. In the management chain above the requesting admin
+      // 4. Super admin
+      
+      let query: string;
+      let params: any[];
+      
+      if (isSuperAdmin) {
+        // Super admin can promote anyone who isn't already an admin OR is an orphan admin
+        query = `
+          SELECT id, name, email, avatar_url, roles, parent_manager_id
+          FROM user_profiles
+          WHERE id != $1
+          AND email != 'navesarussi@gmail.com'
+          AND (
+            -- Not an admin yet
+            NOT ('admin' = ANY(roles) OR 'super_admin' = ANY(roles))
+            -- OR is an admin without a parent (orphan admin - can be reassigned)
+            OR (('admin' = ANY(roles) OR 'super_admin' = ANY(roles)) AND parent_manager_id IS NULL)
+          )
+          ORDER BY name
+        `;
+        params = [adminId];
+      } else {
+        // Regular admins can only promote users who:
+        // - Are not admins yet
+        // - Are not in their management chain above them
+        query = `
+          WITH RECURSIVE manager_chain AS (
+            -- Get all managers above requesting admin
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $1
+            
+            UNION ALL
+            
+            SELECT u.id, u.parent_manager_id, mc.depth + 1
+            FROM user_profiles u
+            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+            WHERE mc.depth < 100
+          )
+          SELECT u.id, u.name, u.email, u.avatar_url, u.roles, u.parent_manager_id
+          FROM user_profiles u
+          WHERE u.id != $1
+          AND u.email != 'navesarussi@gmail.com'
+          -- Not already an admin under someone else
+          AND NOT (
+            ('admin' = ANY(u.roles) OR 'super_admin' = ANY(u.roles))
+            AND u.parent_manager_id IS NOT NULL
+            AND u.parent_manager_id != $1
+          )
+          -- Not in management chain above
+          AND u.id NOT IN (SELECT id FROM manager_chain)
+          ORDER BY u.name
+        `;
+        params = [adminId];
+      }
+      
+      const { rows } = await this.pool.query(query, params);
+      
+      return { success: true, data: rows };
+      
+    } catch (error) {
+      console.error('Get eligible for promotion error:', error);
+      return { success: false, error: 'Failed to get eligible users' };
+    }
+  }
+
+  /**
+   * Get full admin hierarchy tree starting from super admin
+   * GET /api/users/hierarchy/tree
+   * Returns a nested tree structure of all managers
+   * NOTE: This route MUST be defined BEFORE :id/hierarchy to avoid route conflict
+   */
+  @Get('hierarchy/tree')
+  async getFullHierarchyTree() {
+    try {
+      // First, get the super admin (root of the tree)
+      const { rows: superAdminRows } = await this.pool.query(`
+        SELECT id, name, email, avatar_url, roles
+        FROM user_profiles
+        WHERE email = 'navesarussi@gmail.com'
+        LIMIT 1
+      `);
+
+      if (superAdminRows.length === 0) {
+        return { success: false, error: 'Super admin not found' };
+      }
+
+      const superAdmin = superAdminRows[0];
+
+      // Get all users with their hierarchy information
+      const { rows: allUsers } = await this.pool.query(`
+        WITH RECURSIVE hierarchy AS (
+          -- Base case: super admin (root)
+          SELECT 
+            id, name, email, avatar_url, parent_manager_id, roles,
+            0 as level,
+            ARRAY[id] as path
+          FROM user_profiles
+          WHERE email = 'navesarussi@gmail.com'
+          
+          UNION ALL
+          
+          -- Recursive: all subordinates
+          SELECT 
+            u.id, u.name, u.email, u.avatar_url, u.parent_manager_id, u.roles,
+            h.level + 1,
+            h.path || u.id
+          FROM user_profiles u
+          INNER JOIN hierarchy h ON u.parent_manager_id = h.id
+          WHERE h.level < 10  -- Max depth to prevent infinite loops
+        )
+        SELECT 
+          id::text as id, 
+          COALESCE(name, 'ללא שם') as name, 
+          email, 
+          avatar_url, 
+          parent_manager_id::text as parent_manager_id, 
+          roles,
+          level,
+          CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
+        FROM hierarchy
+        ORDER BY level, name
+      `);
+
+      // Build nested tree structure
+      const buildTree = (parentId: string | null, level: number): any[] => {
+        return allUsers
+          .filter(user => {
+            if (level === 0) {
+              return user.email === 'navesarussi@gmail.com';
+            }
+            return user.parent_manager_id === parentId;
+          })
+          .map(user => ({
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            avatar_url: user.avatar_url,
+            level: user.level,
+            isSuperAdmin: user.is_super_admin,
+            isAdmin: Array.isArray(user.roles) && user.roles.includes('admin'),
+            children: buildTree(user.id, level + 1)
+          }));
+      };
+
+      const tree = buildTree(null, 0);
+
+      console.log(`🌳 Built hierarchy tree with ${allUsers.length} users`);
+
+      return { 
+        success: true, 
+        data: tree,
+        totalCount: allUsers.length
+      };
+    } catch (error) {
+      console.error('Get full hierarchy tree error:', error);
+      return { success: false, error: 'Failed to get hierarchy tree' };
     }
   }
 
@@ -560,6 +1153,7 @@ export class UsersController {
   }
 
   @Put(':id')
+  @UseGuards(JwtAuthGuard)
   async updateUser(@Param('id') id: string, @Body() updateData: any) {
     const client = await this.pool.connect();
     try {
@@ -737,13 +1331,13 @@ export class UsersController {
 
     if (city) {
       paramCount++;
-      whereConditions += ` AND city ILIKE $${paramCount}`;
+      whereConditions += ` AND u.city ILIKE $${paramCount}`;
       params.push(`%${city}%`);
     }
 
     if (search) {
       paramCount++;
-      whereConditions += ` AND (name ILIKE $${paramCount} OR bio ILIKE $${paramCount} OR email ILIKE $${paramCount})`;
+      whereConditions += ` AND (u.name ILIKE $${paramCount} OR u.bio ILIKE $${paramCount} OR u.email ILIKE $${paramCount})`;
       params.push(`%${search}%`);
     }
 
@@ -766,26 +1360,34 @@ export class UsersController {
     }
 
     // Main query: Get users from user_profiles only (legacy users table no longer used)
+    // Includes manager details (name, email, avatar) via subquery
     const query = `
       SELECT 
-        id::text as id,
-        COALESCE(name, 'ללא שם') as name,
-        COALESCE(avatar_url, '') as avatar_url,
-        COALESCE(city, '') as city,
-        COALESCE(karma_points, 0) as karma_points,
-        COALESCE(last_active, updated_at) as last_active,
-        COALESCE(total_donations_amount, 0) as total_donations_amount,
-        COALESCE(total_volunteer_hours, 0) as total_volunteer_hours,
-        COALESCE(join_date, created_at) as join_date,
-        COALESCE(bio, '') as bio,
-        COALESCE(roles, ARRAY['user']::text[]) as roles,
-        email,
-        is_active,
-        created_at
-      FROM user_profiles
-      WHERE email IS NOT NULL AND email <> ''
+        u.id::text as id,
+        COALESCE(u.name, 'ללא שם') as name,
+        COALESCE(u.avatar_url, '') as avatar_url,
+        COALESCE(u.city, '') as city,
+        COALESCE(u.karma_points, 0) as karma_points,
+        COALESCE(u.last_active, u.updated_at) as last_active,
+        COALESCE(u.total_donations_amount, 0) as total_donations_amount,
+        COALESCE(u.total_volunteer_hours, 0) as total_volunteer_hours,
+        COALESCE(u.join_date, u.created_at) as join_date,
+        COALESCE(u.bio, '') as bio,
+        COALESCE(u.roles, ARRAY['user']::text[]) as roles,
+        u.email,
+        u.is_active,
+        u.created_at,
+        u.parent_manager_id::text as parent_manager_id,
+        (SELECT json_build_object(
+          'id', m.id::text,
+          'name', COALESCE(m.name, 'ללא שם'),
+          'email', m.email,
+          'avatar_url', COALESCE(m.avatar_url, '')
+        ) FROM user_profiles m WHERE m.id = u.parent_manager_id) as manager_details
+      FROM user_profiles u
+      WHERE u.email IS NOT NULL AND u.email <> ''
         ${whereConditions}
-      ORDER BY karma_points DESC, last_active DESC, join_date DESC
+      ORDER BY u.karma_points DESC, u.last_active DESC, u.join_date DESC
       ${limitClause}
       ${offsetClause}
     `;
@@ -911,6 +1513,7 @@ export class UsersController {
   }
 
   @Post(':id/follow')
+  @UseGuards(JwtAuthGuard)
   async followUser(@Param('id') userId: string, @Body() followData: any) {
     const client = await this.pool.connect();
     try {
@@ -967,6 +1570,7 @@ export class UsersController {
   }
 
   @Delete(':id/follow')
+  @UseGuards(JwtAuthGuard)
   async unfollowUser(@Param('id') userId: string, @Body() unfollowData: any) {
     const client = await this.pool.connect();
     try {
@@ -1174,8 +1778,21 @@ export class UsersController {
                     await client.query('COMMIT');
                     console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
 
+                    // Generate JWT tokens for the new user
+                    const tokenPair = await this.jwtService.createTokenPair({
+                      id: newUser[0].id,
+                      email: newUser[0].email,
+                      roles: newUser[0].roles || ['user'],
+                    });
+
                     return {
                       success: true,
+                      tokens: {
+                        accessToken: tokenPair.accessToken,
+                        refreshToken: tokenPair.refreshToken,
+                        expiresIn: tokenPair.expiresIn,
+                        refreshExpiresIn: tokenPair.refreshExpiresIn,
+                      },
                       user: {
                         id: newUser[0].id,
                         email: newUser[0].email,
@@ -1223,8 +1840,21 @@ export class UsersController {
                       await client.query('COMMIT');
                       console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
 
+                      // Generate JWT tokens for the new user
+                      const tokenPair = await this.jwtService.createTokenPair({
+                        id: newUser[0].id,
+                        email: newUser[0].email,
+                        roles: newUser[0].roles || ['user'],
+                      });
+
                       return {
                         success: true,
+                        tokens: {
+                          accessToken: tokenPair.accessToken,
+                          refreshToken: tokenPair.refreshToken,
+                          expiresIn: tokenPair.expiresIn,
+                          refreshExpiresIn: tokenPair.refreshExpiresIn,
+                        },
                         user: {
                           id: newUser[0].id,
                           email: newUser[0].email,
@@ -1324,8 +1954,21 @@ export class UsersController {
       if (user.firebase_uid) await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
       if (user.email) await this.redisCache.delete(`user_profile_${user.email}`);
 
+      // Generate JWT tokens for authenticated session
+      const tokenPair = await this.jwtService.createTokenPair({
+        id: user.id,
+        email: user.email,
+        roles: user.roles || ['user'],
+      });
+
       return {
         success: true,
+        tokens: {
+          accessToken: tokenPair.accessToken,
+          refreshToken: tokenPair.refreshToken,
+          expiresIn: tokenPair.expiresIn,
+          refreshExpiresIn: tokenPair.refreshExpiresIn,
+        },
         user: {
           id: user.id, // UUID - this is the primary identifier
           email: user.email,
