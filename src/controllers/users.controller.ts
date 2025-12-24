@@ -24,6 +24,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtService } from '../auth/jwt.service';
 import * as argon2 from 'argon2';
 
 @Controller('api/users')
@@ -36,6 +37,7 @@ export class UsersController {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
+    private readonly jwtService: JwtService,
   ) { }
 
   /**
@@ -1776,8 +1778,21 @@ export class UsersController {
                     await client.query('COMMIT');
                     console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
 
+                    // Generate JWT tokens for the new user
+                    const tokenPair = await this.jwtService.createTokenPair({
+                      id: newUser[0].id,
+                      email: newUser[0].email,
+                      roles: newUser[0].roles || ['user'],
+                    });
+
                     return {
                       success: true,
+                      tokens: {
+                        accessToken: tokenPair.accessToken,
+                        refreshToken: tokenPair.refreshToken,
+                        expiresIn: tokenPair.expiresIn,
+                        refreshExpiresIn: tokenPair.refreshExpiresIn,
+                      },
                       user: {
                         id: newUser[0].id,
                         email: newUser[0].email,
@@ -1825,8 +1840,21 @@ export class UsersController {
                       await client.query('COMMIT');
                       console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
 
+                      // Generate JWT tokens for the new user
+                      const tokenPair = await this.jwtService.createTokenPair({
+                        id: newUser[0].id,
+                        email: newUser[0].email,
+                        roles: newUser[0].roles || ['user'],
+                      });
+
                       return {
                         success: true,
+                        tokens: {
+                          accessToken: tokenPair.accessToken,
+                          refreshToken: tokenPair.refreshToken,
+                          expiresIn: tokenPair.expiresIn,
+                          refreshExpiresIn: tokenPair.refreshExpiresIn,
+                        },
                         user: {
                           id: newUser[0].id,
                           email: newUser[0].email,
@@ -1926,8 +1954,21 @@ export class UsersController {
       if (user.firebase_uid) await this.redisCache.delete(`user_profile_${user.firebase_uid}`);
       if (user.email) await this.redisCache.delete(`user_profile_${user.email}`);
 
+      // Generate JWT tokens for authenticated session
+      const tokenPair = await this.jwtService.createTokenPair({
+        id: user.id,
+        email: user.email,
+        roles: user.roles || ['user'],
+      });
+
       return {
         success: true,
+        tokens: {
+          accessToken: tokenPair.accessToken,
+          refreshToken: tokenPair.refreshToken,
+          expiresIn: tokenPair.expiresIn,
+          refreshExpiresIn: tokenPair.refreshExpiresIn,
+        },
         user: {
           id: user.id, // UUID - this is the primary identifier
           email: user.email,

@@ -3,10 +3,13 @@
 // - Provides: Token extraction, validation, user context injection
 // - Security: Validates JWT tokens, handles expired/invalid tokens, rate limiting integration
 
-import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, Logger } from '@nestjs/common';
+import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, Logger, Inject } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtService, SessionTokenPayload } from './jwt.service';
 import { RateLimitService } from './rate-limit.service';
+import { FirebaseAdminService } from './firebase-admin.service';
+import { Pool } from 'pg';
+import { PG_POOL } from '../database/database.module';
 
 // Extend Express Request to include user data
 declare global {
@@ -24,6 +27,8 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly rateLimitService: RateLimitService,
+    private readonly firebaseAdmin: FirebaseAdminService,
+    @Inject(PG_POOL) private readonly pool: Pool,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -64,12 +69,19 @@ export class JwtAuthGuard implements CanActivate {
         throw new UnauthorizedException('Rate limit exceeded');
       }
 
-      // Verify token
-      const payload = await this.jwtService.verifyToken(token);
-      
-      // Ensure it's an access token
-      if (payload.type !== 'access') {
-        throw new UnauthorizedException('Invalid token type');
+      // Try to verify as JWT first, if fails try Firebase token
+      let payload: SessionTokenPayload;
+      try {
+        payload = await this.jwtService.verifyToken(token);
+        
+        // Ensure it's an access token
+        if (payload.type !== 'access') {
+          throw new UnauthorizedException('Invalid token type');
+        }
+      } catch (jwtError) {
+        // If JWT verification failed, try Firebase token
+        this.logger.debug('JWT verification failed, trying Firebase token');
+        payload = await this.verifyFirebaseToken(token);
       }
 
       // Attach user data to request
@@ -104,6 +116,49 @@ export class JwtAuthGuard implements CanActivate {
       });
 
       throw new UnauthorizedException('Authentication failed');
+    }
+  }
+
+  private async verifyFirebaseToken(token: string): Promise<SessionTokenPayload> {
+    try {
+      // Verify Firebase ID token
+      const decodedToken = await this.firebaseAdmin.verifyIdToken(token);
+      
+      // Get user from database using firebase_uid
+      const result = await this.pool.query(
+        `SELECT id, email, roles FROM user_profiles WHERE firebase_uid = $1`,
+        [decodedToken.uid]
+      );
+
+      if (result.rows.length === 0) {
+        throw new UnauthorizedException('User not found in database');
+      }
+
+      const user = result.rows[0];
+
+      // Create session payload compatible with JWT payload
+      const payload: SessionTokenPayload = {
+        userId: user.id,
+        email: user.email || decodedToken.email,
+        sessionId: `firebase_${decodedToken.uid}`,
+        roles: user.roles || ['user'],
+        iat: Math.floor(Date.now() / 1000),
+        exp: decodedToken.exp,
+        type: 'access',
+      };
+
+      this.logger.debug('Firebase token verified successfully', {
+        userId: payload.userId,
+        email: payload.email,
+        firebaseUid: decodedToken.uid
+      });
+
+      return payload;
+    } catch (error) {
+      this.logger.warn('Firebase token verification failed', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw new UnauthorizedException('Invalid Firebase token');
     }
   }
 
