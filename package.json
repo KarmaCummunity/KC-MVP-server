@@ -1,6 +1,6 @@
 {
   "name": "kc-mvp-server",
-  "version": "2.3.6",
+  "version": "2.4.1",
   "description": "Karma Community MVP Server (NestJS + Postgres + Redis)",
   "private": true,
   "license": "MIT",
@@ -23,6 +23,8 @@
     "data:export": "ts-node -r tsconfig-paths/register src/scripts/export-data.ts",
     "data:anonymize": "ts-node -r tsconfig-paths/register src/scripts/anonymize-data.ts",
     "data:import": "ts-node -r tsconfig-paths/register src/scripts/import-data.ts",
+    "check:env": "ts-node -r tsconfig-paths/register src/scripts/check-environment.ts",
+    "verify:separation": "ts-node -r tsconfig-paths/register src/scripts/verify-separation.ts",
     "reset:db": "ts-node -r tsconfig-paths/register scripts/reset-db.ts",
     "reset:db:full": "./scripts/reset-db-full.sh",
     "docker:up": "docker compose up -d",
