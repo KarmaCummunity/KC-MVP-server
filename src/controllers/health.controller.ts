@@ -19,6 +19,17 @@ export class HealthController {
     };
   }
 
+  @Get('health')
+  getHealth() {
+    // Simple health check that doesn't depend on Redis
+    // This is faster and more reliable for Railway health checks
+    return {
+      status: 'OK',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   @Get('health/redis')
   async getRedisHealth() {
     try {
