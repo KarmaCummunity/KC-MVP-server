@@ -21,6 +21,14 @@
 // TODO: Configure proper timeouts and request size limits
 // TODO: Add CSRF protection for state-changing operations
 
+// IMMEDIATE LOG - before any imports that might fail
+console.log('========================================');
+console.log('🚀 STARTING KC-MVP-SERVER');
+console.log('📍 Node version:', process.version);
+console.log('📍 Platform:', process.platform);
+console.log('📍 CWD:', process.cwd());
+console.log('========================================');
+
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -168,11 +176,14 @@ function validateEnvironment(): void {
  * 6. Starts listening on the configured port
  */
 async function bootstrap(): Promise<void> {
+  console.log('🔥 bootstrap() function called');
   const logger = new Logger('Bootstrap');
   
   try {
+    console.log('📝 Loading .env file...');
     // Load environment variables from .env file
     dotenv.config();
+    console.log('✅ .env loaded');
     
     // Validate critical environment variables
     validateEnvironment();
@@ -367,8 +378,10 @@ async function bootstrap(): Promise<void> {
 }
 
 // Start the application
+console.log('🎬 Calling bootstrap()...');
 bootstrap().catch(error => {
   console.error('❌ Unhandled bootstrap error:', error);
+  console.error('Stack:', error?.stack);
   process.exit(1);
 });
 
