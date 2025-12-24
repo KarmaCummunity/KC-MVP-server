@@ -609,13 +609,20 @@ BEGIN
         ALTER TABLE post_likes DROP CONSTRAINT post_likes_user_id_fkey;
     END IF;
     
-    -- Add constraints only if target tables exist
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'posts') THEN
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'id'
+    ) THEN
         ALTER TABLE post_likes ADD CONSTRAINT post_likes_post_id_fkey 
             FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
     END IF;
     
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
         ALTER TABLE post_likes ADD CONSTRAINT post_likes_user_id_fkey 
             FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
     END IF;
@@ -655,13 +662,20 @@ BEGIN
         ALTER TABLE post_comments DROP CONSTRAINT post_comments_user_id_fkey;
     END IF;
     
-    -- Add constraints only if target tables exist
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'posts') THEN
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'id'
+    ) THEN
         ALTER TABLE post_comments ADD CONSTRAINT post_comments_post_id_fkey 
             FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
     END IF;
     
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
         ALTER TABLE post_comments ADD CONSTRAINT post_comments_user_id_fkey 
             FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
     END IF;
@@ -706,13 +720,20 @@ BEGIN
         ALTER TABLE comment_likes DROP CONSTRAINT comment_likes_user_id_fkey;
     END IF;
     
-    -- Add constraints only if target tables exist
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'post_comments') THEN
+    -- Add constraints only if target tables AND columns exist
+    -- This prevents errors when old tables exist with different structure
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'post_comments' AND column_name = 'id'
+    ) THEN
         ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_comment_id_fkey 
             FOREIGN KEY (comment_id) REFERENCES post_comments(id) ON DELETE CASCADE;
     END IF;
     
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'id'
+    ) THEN
         ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_user_id_fkey 
             FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
     END IF;
