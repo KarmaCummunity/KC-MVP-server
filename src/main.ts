@@ -41,6 +41,11 @@ import * as bodyParser from 'body-parser';
  * - DATABASE_URL: PostgreSQL connection string
  * - REDIS_URL: Redis connection string
  * - JWT_SECRET: Secret key for JWT token signing (minimum 32 characters)
+ * - ENVIRONMENT: development or production
+ * 
+ * Also validates environment separation to prevent critical errors like:
+ * - Connecting dev server to production database
+ * - Using production JWT secret in development
  * 
  * If any required variable is missing, the process exits with error code 1.
  */
@@ -94,6 +99,58 @@ function validateEnvironment(): void {
       logger.error('   node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
     }
     process.exit(1);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════
+  // ENVIRONMENT SEPARATION VALIDATION
+  // ═══════════════════════════════════════════════════════════════
+  // Validate that environment configuration matches the database
+  // This prevents critical errors like connecting dev to prod DB
+  
+  const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'unknown';
+  const databaseUrl = process.env.DATABASE_URL || '';
+  const redisUrl = process.env.REDIS_URL || '';
+  
+  logger.log(`📍 Environment: ${environment.toUpperCase()} ${environment === 'development' ? '🟢' : environment === 'production' ? '🔴' : '⚪'}`);
+  
+  // Check DATABASE_URL matches environment
+  if (environment === 'development') {
+    // DEV should use password: mmWLXgvXF... or host: postgres-a3d6beef
+    if (databaseUrl.includes('RHkhivARk')) {
+      logger.error('🚨 CRITICAL: DATABASE_URL appears to be PRODUCTION but ENVIRONMENT is development!');
+      logger.error('   This would connect your dev server to the production database!');
+      logger.error('   Fix: Update DATABASE_URL in Railway to use the development Postgres');
+      process.exit(1);
+    } else if (databaseUrl.includes('mmWLXgvXF') || databaseUrl.includes('postgres-a3d6beef')) {
+      logger.log('✅ Database: Development (verified by connection string)');
+    } else {
+      logger.warn('⚠️  Cannot verify database environment from connection string');
+    }
+  } else if (environment === 'production') {
+    // PROD should use password: RHkhivARk...
+    if (databaseUrl.includes('mmWLXgvXF') || databaseUrl.includes('postgres-a3d6beef')) {
+      logger.error('🚨 CRITICAL: DATABASE_URL appears to be DEVELOPMENT but ENVIRONMENT is production!');
+      logger.error('   This would connect your prod server to the development database!');
+      logger.error('   Fix: Update DATABASE_URL in Railway to use the production Postgres');
+      process.exit(1);
+    } else if (databaseUrl.includes('RHkhivARk')) {
+      logger.log('✅ Database: Production (verified by connection string)');
+    } else {
+      logger.warn('⚠️  Cannot verify database environment from connection string');
+    }
+  } else {
+    logger.warn(`⚠️  ENVIRONMENT not set (currently: ${environment}). Set to 'development' or 'production'`);
+  }
+  
+  // Check if Redis is shared (warning only, not critical)
+  if (redisUrl.includes('deQMolmzgWZsqeAkiEpZPFvejfGjenEm')) {
+    logger.warn('⚠️  Redis appears to be SHARED between environments!');
+    logger.warn('   Recommendation: Create separate Redis instances for dev and prod');
+    logger.warn('   This prevents cache pollution and session mixing');
+  } else if (environment === 'development' && redisUrl.includes('ggCVffISJOmdiIHAXBSQpsQCPfaFbaOR')) {
+    logger.log('✅ Redis: Development (separate instance)');
+  } else if (environment === 'production' && redisUrl.includes('deQMolmzgWZsqeAkiEpZPFvejfGjenEm')) {
+    logger.log('✅ Redis: Production');
   }
   
   logger.log('✅ Environment validation passed');
@@ -189,7 +246,13 @@ async function bootstrap(): Promise<void> {
     const isProduction = environment === 'production';
     
     // Configure CORS (Cross-Origin Resource Sharing)
-    const corsOrigin = process.env.CORS_ORIGIN;
+    let corsOrigin = process.env.CORS_ORIGIN;
+    
+    // Remove surrounding quotes if present (Railway sometimes includes them)
+    if (corsOrigin && corsOrigin.startsWith('"') && corsOrigin.endsWith('"')) {
+      corsOrigin = corsOrigin.slice(1, -1);
+      logger.log('🔧 Removed surrounding quotes from CORS_ORIGIN');
+    }
     
     if (!corsOrigin) {
       logger.warn('⚠️  WARNING: CORS_ORIGIN not set! Using default origins based on environment.');
