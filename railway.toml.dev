@@ -14,8 +14,9 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "node dist/main.js"
-healthcheckPath = "/health"
-healthcheckTimeout = 300
+# Temporarily disable health check to debug
+# healthcheckPath = "/health"
+# healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
