@@ -199,9 +199,16 @@ export class DatabaseInit implements OnModuleInit {
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
 
-      for (const statement of statements) {
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
         if (statement.trim()) {
-          await client.query(statement.trim());
+          try {
+            await client.query(statement.trim());
+          } catch (err: any) {
+            console.error(`❌ Failed at statement #${i + 1} of ${statements.length}:`);
+            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            throw err;
+          }
         }
       }
 
@@ -969,9 +976,16 @@ export class DatabaseInit implements OnModuleInit {
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
 
-      for (const statement of statements) {
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
         if (statement.trim()) {
-          await client.query(statement.trim());
+          try {
+            await client.query(statement.trim());
+          } catch (err: any) {
+            console.error(`❌ Failed at CHALLENGES statement #${i + 1} of ${statements.length}:`);
+            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            throw err;
+          }
         }
       }
 

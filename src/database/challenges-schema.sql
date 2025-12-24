@@ -94,10 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_record_breaks_challenge_id ON challenge_record_br
 CREATE INDEX IF NOT EXISTS idx_record_breaks_timestamp ON challenge_record_breaks(timestamp DESC);
 
 -- Comments for documentation
-COMMENT ON TABLE challenges IS 'User challenges/timers for tracking personal goals';
-COMMENT ON TABLE deleted_challenges IS 'Soft-deleted challenges kept for history';
-COMMENT ON TABLE challenge_reset_logs IS 'Log of all challenge resets with mood and reason';
-COMMENT ON TABLE challenge_record_breaks IS 'Log of personal record breaks';
-COMMENT ON TABLE challenge_global_stats IS 'Global statistics per user across all challenges';
-
-
+-- COMMENT ON TABLE challenges IS 'User challenges/timers for tracking personal goals';
+-- COMMENT ON TABLE deleted_challenges IS 'Soft-deleted challenges kept for history';
+-- COMMENT ON TABLE challenge_reset_logs IS 'Log of all challenge resets with mood and reason';
+-- COMMENT ON TABLE challenge_record_breaks IS 'Log of personal record breaks';
+-- COMMENT ON TABLE challenge_global_stats IS 'Global statistics per user across all challenges';
