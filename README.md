@@ -2,17 +2,34 @@
 
 שרת NestJS לאפליקציית Karma Community עם Postgres ו-Redis, ו־REST גנרי תואם ל־`DatabaseService` בפרונט.
 
-**גרסה נוכחית:** 1.7.5  
-**עדכון אחרון:** 2025-11-23 - תיקון שמירת נתוני ביקורים באתר
+**גרסה נוכחית:** 2.3.6  
+**עדכון אחרון:** 2025-12-24 - הפרדת סביבות Development ו-Production
 
-## 🆕 מה חדש בגרסה 1.7.5
+## 🆕 מה חדש בגרסה 2.3.6
 
-- ✅ **תיקון חשוב:** נתוני הביקורים באתר (ושאר הסטטיסטיקות) נשמרים כעת בצורה קבועה בין עדכוני השרת
-- ✅ הוספנו `site_visits` לסטטיסטיקות ההתחלתיות
-- ✅ לוגים משופרים להצגת שמירת/יצירת נתונים
-- ✅ תיעוד מפורט על שמירת נתונים ב-Railway
+- ✅ **הפרדת סביבות מוחלטת:** Development ו-Production מופרדים לחלוטין
+- ✅ **בדיקות אוטומטיות:** סקריפטים לבדיקת משתני סביבה והפרדה
+- ✅ **אבטחה משופרת:** בדיקה בעת startup שמונעת חיבור של dev ל-prod DB
+- ✅ **תיעוד מקיף:** מדריכים מפורטים להגדרת Railway והעתקת DB
+- ✅ **GitHub Actions:** בדיקות אוטומטיות לפני כל deploy
 
-**ראה:** `CHANGELOG.md`, `FIX_SUMMARY.md`, `RAILWAY_DATA_PERSISTENCE.md`
+**ראה:** `RAILWAY_SETUP_GUIDE.md`, `DB_COPY_GUIDE.md`, `ENVIRONMENT_SEPARATION.md`
+
+## 🌍 סביבות
+
+### Production (main)
+- **Domain**: `karma-community-kc.com`
+- **Branch**: `main`
+- **Database**: Postgres נפרד (ID: 5f1b9d5d)
+- **Redis**: Redis נפרד
+- **Purpose**: משתמשים אמיתיים, נתונים אמיתיים
+
+### Development (dev)
+- **Domain**: `dev.karma-community-kc.com`
+- **Branch**: `dev`
+- **Database**: Postgres נפרד (ID: f92654e1)
+- **Redis**: Redis נפרד (מומלץ)
+- **Purpose**: בדיקות, פיתוח, נתונים מאנונימיזציים
 
 ## 🚀 הפעלה מקומית
 
@@ -66,7 +83,7 @@ JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
 
 ## 🚀 פריסה ב-Railway
 
-הפרויקט מוגדר לפריסה אוטומטית ב-Railway באמצעות קובץ `railway.json`.
+הפרויקט מוגדר לפריסה אוטומטית ב-Railway עם **הפרדה מוחלטת** בין סביבות.
 
 ### הגדרות הפריסה:
 - **Runtime**: V2 (גרסה מתקדמת ומהירה)
@@ -76,18 +93,36 @@ JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
 - **Restart Policy**: הפעלה מחדש אוטומטית במקרה של כשל
 - **Health Check**: בדיקת בריאות אוטומטית
 
-### פריסה:
-1. התחבר ל-Railway
-2. צור פרויקט חדש או התחבר לפרויקט קיים
-3. Railway יקרא את `railway.json` ויפרוס אוטומטית
-4. **חובה: הגדר משתני סביבה ב-Railway Dashboard:**
-   - כנס ל-Service של ה-Backend
-   - לחץ על "Variables" או "Environment Variables"
-   - הוסף את המשתנים הבאים:
-     - `JWT_SECRET` = `495e8b4123c87ffdc9623ae0db9d8cf2522377627aec8f08051039419cf6ad60` (או צור חדש: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
-     - `DATABASE_URL` (נוצר אוטומטית אם מחובר ל-Postgres Plugin)
-     - `REDIS_URL` (אם יש Redis Plugin)
-     - `GOOGLE_CLIENT_ID` (או `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`)
-5. האפליקציה תהיה זמינה ב-URL שתקבל
+### פריסה - Development:
+1. ב-Railway, בחר branch: `dev`
+2. ודא שמחובר ל-Postgres-dev ו-Redis-dev
+3. הגדר משתני סביבה (ראה `RAILWAY_SETUP_GUIDE.md`):
+   ```
+   ENVIRONMENT=development
+   NODE_ENV=development
+   CORS_ORIGIN=https://dev.karma-community-kc.com,http://localhost:19006,...
+   JWT_SECRET=<חדש לdev>
+   ```
+4. Deploy אוטומטי מ-branch `dev`
 
-**⚠️ חשוב:** משתני סביבה רגישים כמו `JWT_SECRET` **חייבים** להיות מוגדרים ב-Railway Dashboard, לא רק בקבצי הקונפיגורציה!
+### פריסה - Production:
+1. ב-Railway, בחר branch: `main`
+2. ודא שמחובר ל-Postgres-production ו-Redis-production
+3. הגדר משתני סביבה:
+   ```
+   ENVIRONMENT=production
+   NODE_ENV=production
+   CORS_ORIGIN=https://karma-community-kc.com,https://www.karma-community-kc.com
+   JWT_SECRET=<הקיים של production - אל תשנה!>
+   ```
+4. Deploy אוטומטי מ-branch `main`
+
+**⚠️ חשוב:** 
+- אל תשתמש באותו `JWT_SECRET` בשתי הסביבות!
+- אל תחבר dev ל-production database!
+- הרץ `npm run check:env` לפני deploy
+
+**📚 מדריכים מפורטים:**
+- `RAILWAY_SETUP_GUIDE.md` - הגדרת Railway מאפס
+- `DB_COPY_GUIDE.md` - העתקת נתונים בין סביבות
+- `ENVIRONMENT_SEPARATION.md` - תיעוד מלא על הפרדת סביבות
