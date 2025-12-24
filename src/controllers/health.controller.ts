@@ -8,7 +8,7 @@ import Redis from 'ioredis';
 
 @Controller('/')
 export class HealthController {
-  constructor(@Inject(REDIS) private readonly redis: Redis) {}
+  constructor(@Inject(REDIS) private readonly redis: Redis | null) {}
 
   @Get()
   getRoot() {
@@ -32,6 +32,10 @@ export class HealthController {
 
   @Get('health/redis')
   async getRedisHealth() {
+    if (!this.redis) {
+      return { ok: false, error: 'Redis not configured' };
+    }
+    
     try {
       const pong = await this.redis.ping('health');
       return { ok: true, ping: pong };
