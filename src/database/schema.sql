@@ -475,6 +475,21 @@ CREATE TABLE IF NOT EXISTS posts (
 -- Ensure author_id and task_id columns exist and have foreign key constraints
 DO $$ 
 BEGIN
+    -- Drop existing foreign key constraints if they exist (from old schema)
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
+    ) THEN
+        ALTER TABLE posts DROP CONSTRAINT posts_author_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+    ) THEN
+        ALTER TABLE posts DROP CONSTRAINT posts_task_id_fkey;
+    END IF;
+    
     -- Add author_id if missing
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -489,14 +504,9 @@ BEGIN
         END IF;
     END IF;
     
-    -- Add foreign key constraint for author_id if it doesn't exist
+    -- Add foreign key constraint for author_id
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM information_schema.table_constraints 
-            WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
-        ) THEN
-            ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
-        END IF;
+        ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
     END IF;
     
     -- Only set NOT NULL if all rows have author_id
@@ -512,14 +522,9 @@ BEGIN
         ALTER TABLE posts ADD COLUMN task_id UUID;
     END IF;
     
-    -- Add foreign key constraint for task_id if it doesn't exist
+    -- Add foreign key constraint for task_id
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
-        IF NOT EXISTS (
-            SELECT 1 FROM information_schema.table_constraints 
-            WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
-        ) THEN
-            ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
-        END IF;
+        ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
     END IF;
     
     -- Add post_type if missing
