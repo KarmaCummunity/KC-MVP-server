@@ -7,7 +7,8 @@
 FROM node:20
 WORKDIR /app
 
-ENV NODE_ENV=production
+# NODE_ENV will be set by Railway environment variables
+# Don't hardcode it here to allow dev/prod separation
 LABEL Name="kc-mvp-server" Version="1.1.0"
 
 COPY package*.json ./

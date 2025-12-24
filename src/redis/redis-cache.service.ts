@@ -8,18 +8,27 @@ import { REDIS } from './redis.module';
 
 @Injectable()
 export class RedisCacheService {
-  constructor(@Inject(REDIS) private readonly redis: Redis) {}
+  constructor(@Inject(REDIS) private readonly redis: Redis | null) {}
+
+  /**
+   * Check if Redis is available
+   */
+  private isRedisAvailable(): boolean {
+    return this.redis !== null && this.redis.status === 'ready';
+  }
 
   /**
    * Store data in Redis with optional TTL (Time To Live)
    */
   async set(key: string, value: any, ttlSeconds?: number): Promise<void> {
+    if (!this.isRedisAvailable()) return;
+    
     const serializedValue = JSON.stringify(value);
     
     if (ttlSeconds) {
-      await this.redis.setex(key, ttlSeconds, serializedValue);
+      await this.redis!.setex(key, ttlSeconds, serializedValue);
     } else {
-      await this.redis.set(key, serializedValue);
+      await this.redis!.set(key, serializedValue);
     }
   }
 
@@ -27,7 +36,9 @@ export class RedisCacheService {
    * Get data from Redis
    */
   async get<T = any>(key: string): Promise<T | null> {
-    const value = await this.redis.get(key);
+    if (!this.isRedisAvailable()) return null;
+    
+    const value = await this.redis!.get(key);
     
     if (!value) {
       return null;
@@ -45,7 +56,8 @@ export class RedisCacheService {
    * Delete a key from Redis
    */
   async delete(key: string): Promise<boolean> {
-    const result = await this.redis.del(key);
+    if (!this.isRedisAvailable()) return false;
+    const result = await this.redis!.del(key);
     return result > 0;
   }
 
@@ -53,7 +65,8 @@ export class RedisCacheService {
    * Check if key exists
    */
   async exists(key: string): Promise<boolean> {
-    const result = await this.redis.exists(key);
+    if (!this.isRedisAvailable()) return false;
+    const result = await this.redis!.exists(key);
     return result === 1;
   }
 
@@ -61,7 +74,8 @@ export class RedisCacheService {
    * Get all keys matching a pattern
    */
   async getKeys(pattern: string = '*'): Promise<string[]> {
-    return await this.redis.keys(pattern);
+    if (!this.isRedisAvailable()) return [];
+    return await this.redis!.keys(pattern);
   }
 
   /**
@@ -75,10 +89,11 @@ export class RedisCacheService {
    * Increment a numeric value
    */
   async increment(key: string, amount: number = 1): Promise<number> {
+    if (!this.isRedisAvailable()) return 0;
     if (amount === 1) {
-      return await this.redis.incr(key);
+      return await this.redis!.incr(key);
     } else {
-      return await this.redis.incrby(key, amount);
+      return await this.redis!.incrby(key, amount);
     }
   }
 
@@ -86,11 +101,19 @@ export class RedisCacheService {
    * Get Redis info for debugging
    */
   async getInfo(): Promise<any> {
-    const info = await this.redis.info();
-    const keyCount = await this.redis.dbsize();
+    if (!this.isRedisAvailable()) {
+      return {
+        connected: false,
+        keyCount: 0,
+        info: 'Redis not configured',
+      };
+    }
+    
+    const info = await this.redis!.info();
+    const keyCount = await this.redis!.dbsize();
     
     return {
-      connected: this.redis.status === 'ready',
+      connected: this.redis!.status === 'ready',
       keyCount,
       info: info.split('\r\n').slice(0, 10).join('\n'), // First 10 lines
     };
@@ -108,9 +131,9 @@ export class RedisCacheService {
    * ]);
    */
   async setMultiple(entries: Array<{ key: string; value: any; ttl?: number }>): Promise<void> {
-    if (entries.length === 0) return;
+    if (!this.isRedisAvailable() || entries.length === 0) return;
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.redis!.pipeline();
     
     for (const entry of entries) {
       const serializedValue = JSON.stringify(entry.value);
@@ -135,9 +158,9 @@ export class RedisCacheService {
    * const user1 = results.get('user:1'); // User data or null
    */
   async getMultiple<T = any>(keys: string[]): Promise<Map<string, T | null>> {
-    if (keys.length === 0) return new Map();
+    if (!this.isRedisAvailable() || keys.length === 0) return new Map();
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.redis!.pipeline();
     keys.forEach(key => pipeline.get(key));
     
     const results = await pipeline.exec();
@@ -174,12 +197,14 @@ export class RedisCacheService {
    * const deletedCount = await redisCache.invalidatePattern('user_stats_*');
    */
   async invalidatePattern(pattern: string): Promise<number> {
+    if (!this.isRedisAvailable()) return 0;
+    
     try {
       const keys = await this.getKeys(pattern);
       if (keys.length === 0) return 0;
 
       // Use pipeline for better performance
-      const pipeline = this.redis.pipeline();
+      const pipeline = this.redis!.pipeline();
       keys.forEach(key => pipeline.del(key));
       await pipeline.exec();
 

@@ -15,6 +15,20 @@ export const REDIS = 'REDIS';
     {
       provide: REDIS,
       useFactory: () => {
+        // Check if Redis is configured - if not, return null (optional Redis)
+        const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL || process.env.UPSTASH_REDIS_URL;
+        const internalHost = process.env.REDIS_HOST || process.env.REDISHOST || process.env.UPSTASH_REDIS_HOST;
+        const internalPort = process.env.REDIS_PORT || process.env.REDISPORT || process.env.UPSTASH_REDIS_PORT;
+
+        // If no Redis configuration is provided, return null (Redis is optional)
+        if (!redisUrl && (!internalHost || !internalPort)) {
+          // eslint-disable-next-line no-console
+          console.warn('[redis] ⚠️  No Redis configuration found - running without Redis cache');
+          // eslint-disable-next-line no-console
+          console.warn('[redis] 💡 To enable Redis, set REDIS_URL environment variable');
+          return null;
+        }
+
         // Railway Redis may expose rediss:// or REDIS_TLS=true
         const tlsEnabledEnv = String(process.env.REDIS_TLS || process.env.REDIS_SSL || '').toLowerCase() === 'true';
 
@@ -34,7 +48,6 @@ export const REDIS = 'REDIS';
         } as const;
 
         // ALWAYS prefer a single connection URL when available (most reliable)
-        const redisUrl = process.env.REDIS_URL || process.env.REDIS_PUBLIC_URL || process.env.UPSTASH_REDIS_URL;
         if (redisUrl) {
           let enableTls = tlsEnabledEnv;
           try {
@@ -53,16 +66,9 @@ export const REDIS = 'REDIS';
           return client;
         }
 
-        // Fallback to host/port configuration (less reliable, especially with Railway internal DNS)
-        const internalHost = process.env.REDIS_HOST || process.env.REDISHOST || process.env.UPSTASH_REDIS_HOST;
-        const internalPort = process.env.REDIS_PORT || process.env.REDISPORT || process.env.UPSTASH_REDIS_PORT;
-
-        if (!internalHost || !internalPort) {
-          throw new Error('Missing Redis connection environment variables (REDIS_URL or REDIS_HOST/REDIS_PORT)');
-        }
-
+        // Fallback to host/port configuration
         const client = new Redis({
-          host: internalHost,
+          host: internalHost!,
           port: Number(internalPort),
           tls: tlsEnabledEnv ? {} : undefined,
           ...commonOptions,
