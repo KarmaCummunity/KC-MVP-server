@@ -30,7 +30,7 @@ console.log('📍 CWD:', process.cwd());
 console.log('========================================');
 
 // #region agent log
-fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:31',message:'Server startup initiated',data:{nodeVersion:process.version,platform:process.platform,cwd:process.cwd(),port:process.env.PORT,hasDbUrl:!!process.env.DATABASE_URL,hasRedisUrl:!!process.env.REDIS_URL,hasJwtSecret:!!process.env.JWT_SECRET,hasGoogleClientId:!!(process.env.GOOGLE_CLIENT_ID||process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID)},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'H1-H4'})}).catch(()=>{});
+console.log('[DEBUG-H1-H4] Server startup initiated:', JSON.stringify({nodeVersion:process.version,platform:process.platform,cwd:process.cwd(),port:process.env.PORT,hasDbUrl:!!process.env.DATABASE_URL,hasRedisUrl:!!process.env.REDIS_URL,hasJwtSecret:!!process.env.JWT_SECRET,hasGoogleClientId:!!(process.env.GOOGLE_CLIENT_ID||process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID)}));
 // #endregion
 
 import 'reflect-metadata';
@@ -92,7 +92,7 @@ function validateEnvironment(): void {
   
   if (missing.length > 0) {
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:97',message:'Missing environment variables - server will exit',data:{missing:missing,allEnvKeys:Object.keys(process.env)},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'H1'})}).catch(()=>{});
+    console.log('[DEBUG-H1] Missing environment variables - server will exit:', JSON.stringify({missing:missing}));
     // #endregion
     logger.error(`❌ Missing REQUIRED environment variables: ${missing.join(', ')}`);
     logger.error('💡 Set these variables in your .env file or environment');
@@ -196,13 +196,13 @@ async function bootstrap(): Promise<void> {
     validateEnvironment();
     
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:197',message:'Environment validation passed',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'H1'})}).catch(()=>{});
+    console.log('[DEBUG-H1] Environment validation passed');
     // #endregion
     
     logger.log('🚀 Starting Karma Community Server...');
     
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:202',message:'Creating NestJS app',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'H2-H3'})}).catch(()=>{});
+    console.log('[DEBUG-H2-H3] Creating NestJS app...');
     // #endregion
     
     // Create NestJS application instance with Express adapter
@@ -213,7 +213,7 @@ async function bootstrap(): Promise<void> {
     });
     
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:213',message:'NestJS app created successfully',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'H2-H3'})}).catch(()=>{});
+    console.log('[DEBUG-H2-H3] NestJS app created successfully');
     // #endregion
     
     // Configure body parser with 50MB limit for base64 image uploads
@@ -386,14 +386,14 @@ async function bootstrap(): Promise<void> {
     }
     
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:388',message:'Server startup completed successfully',data:{port:port,environment:environment},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'ALL'})}).catch(()=>{});
+    console.log('[DEBUG-ALL] Server startup completed successfully:', JSON.stringify({port:port,environment:environment}));
     // #endregion
     
     logger.log('═══════════════════════════════════════════════════');
     
   } catch (error) {
     // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/d972b032-7acf-44cf-988d-02bf836f69e8',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'main.ts:397',message:'FATAL: Server startup failed',data:{errorMessage:error instanceof Error?error.message:'unknown',errorStack:error instanceof Error?error.stack:'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'railway-debug',hypothesisId:'ALL'})}).catch(()=>{});
+    console.log('[DEBUG-ALL-FATAL] Server startup failed:', JSON.stringify({errorMessage:error instanceof Error?error.message:'unknown',errorStack:error instanceof Error?error.stack:'none'}));
     // #endregion
     
     // Handle startup errors gracefully
