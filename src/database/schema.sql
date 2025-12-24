@@ -459,8 +459,8 @@ CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECU
 -- Posts table for user posts and task-related posts
 CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+    author_id UUID NOT NULL, -- Foreign key constraint added below in DO block
+    task_id UUID, -- Foreign key constraint added below in DO block
     title VARCHAR(255) NOT NULL,
     description TEXT,
     images TEXT[],
@@ -472,7 +472,7 @@ CREATE TABLE IF NOT EXISTS posts (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Ensure author_id and task_id columns exist (for existing tables that might not have them)
+-- Ensure author_id and task_id columns exist and have foreign key constraints
 DO $$ 
 BEGIN
     -- Add author_id if missing
@@ -487,19 +487,21 @@ BEGIN
         IF EXISTS (SELECT 1 FROM user_profiles LIMIT 1) THEN
             UPDATE posts SET author_id = (SELECT id FROM user_profiles LIMIT 1) WHERE author_id IS NULL;
         END IF;
-        -- Add foreign key constraint only if user_profiles exists and constraint doesn't exist
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
-            ) THEN
-                ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
-            END IF;
+    END IF;
+    
+    -- Add foreign key constraint for author_id if it doesn't exist
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints 
+            WHERE constraint_name = 'posts_author_id_fkey' AND table_name = 'posts'
+        ) THEN
+            ALTER TABLE posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
         END IF;
-        -- Only set NOT NULL if all rows have author_id
-        IF NOT EXISTS (SELECT 1 FROM posts WHERE author_id IS NULL) THEN
-            ALTER TABLE posts ALTER COLUMN author_id SET NOT NULL;
-        END IF;
+    END IF;
+    
+    -- Only set NOT NULL if all rows have author_id
+    IF NOT EXISTS (SELECT 1 FROM posts WHERE author_id IS NULL) THEN
+        ALTER TABLE posts ALTER COLUMN author_id SET NOT NULL;
     END IF;
     
     -- Add task_id if missing
@@ -508,14 +510,15 @@ BEGIN
         WHERE table_name = 'posts' AND column_name = 'task_id'
     ) THEN
         ALTER TABLE posts ADD COLUMN task_id UUID;
-        -- Add foreign key constraint only if tasks table exists and constraint doesn't exist
-        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.table_constraints 
-                WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
-            ) THEN
-                ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
-            END IF;
+    END IF;
+    
+    -- Add foreign key constraint for task_id if it doesn't exist
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints 
+            WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+        ) THEN
+            ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
         END IF;
     END IF;
     
