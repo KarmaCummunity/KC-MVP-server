@@ -1,5 +1,69 @@
 # Changelog
 
+## [2.5.0] - 2025-12-24
+
+### Added
+- **סקריפט אוטומטי להעתקת דאטה מ-Production ל-Development**
+  - `scripts/copy-prod-to-dev.sh` - סקריפט ראשי שמבצע את כל התהליך אוטומטית
+  - `scripts/setup-db-urls.sh` - סקריפט אינטראקטיבי להגדרת URLs של מסדי הנתונים
+  - `src/scripts/verify-import.ts` - סקריפט אימות מפורט
+  - הוספת npm scripts: `data:copy-prod-to-dev`, `data:setup-urls`, `data:verify`
+  - תיעוד מפורט ב-`COPY_DATA_QUICK_START.md`
+
+### Features
+1. **ייצוא אוטומטי** - מייצא את כל הטבלאות מ-production (49 טבלאות)
+2. **אנונימיזציה** - מסווה מיילים וטלפונים אוטומטית
+3. **גיבוי** - שומר גיבוי של development לפני החלפה
+4. **ייבוא חכם** - מייבא את הדאטה עם טיפול בשגיאות per-row
+5. **אימות** - מאמת שהכל עבד ומציג סטטיסטיקות מפורטות
+
+### Improvements
+- **תיקון סקריפט ייבוא:**
+  - בדיקה אם טבלה קיימת לפני TRUNCATE
+  - טיפול בשגיאות per-row במקום להיכשל על השורה הראשונה
+  - דיווח מפורט על שורות שדולגו (UUID vs Firebase UID mismatches)
+  
+### Safety Features
+- בדיקת כיוון - מוודא שמעתיקים prod→dev ולא להפך
+- זיהוי שרתים - מזהה אם ה-URLs מתחלפים (ballast vs caboose)
+- אישור משתמש - מבקש אישור מפורש לפני התחלה
+- גיבוי אוטומטי - שומר את development לפני החלפה
+- אנונימיזציה - מגן על פרטיות המשתמשים
+
+### Test Results
+✅ **הרצה מוצלחת ראשונה:**
+- 1,797 שורות הועתקו בהצלחה
+- 33 משתמשים, 1,583 סטטיסטיקות קהילה, 14 תרומות, 18 נסיעות
+- אנונימיזציה עבדה מעולה
+- גיבוי נוצר (336KB)
+- תוצאות מפורטות ב-`DATA_COPY_SUCCESS.md`
+
+### Usage
+```bash
+# הגדרת URLs (פעם ראשונה)
+source ./scripts/setup-db-urls.sh
+
+# העתקה מלאה
+./scripts/copy-prod-to-dev.sh
+
+# או דרך npm
+npm run data:copy-prod-to-dev
+
+# אימות בלבד
+npm run data:verify
+```
+
+### Options
+- `--skip-backup` - דילוג על גיבוי של development
+- `--skip-anonymize` - דילוג על אנונימיזציה (לא מומלץ!)
+
+### Known Issues
+- חלק מהשורות דולגו בגלל UUID vs Firebase UID mismatches
+- טבלאות legacy (`users`, `chats`, `messages`) לא קיימות ב-development
+- פתרון: הסקריפט מדלג על שורות בעייתיות ומדווח עליהן
+
+---
+
 ## [1.7.7] - 2025-12-24
 
 ### Fixed
