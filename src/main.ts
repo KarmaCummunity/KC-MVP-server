@@ -55,7 +55,7 @@ function validateEnvironment(): void {
   const required = [
     { key: 'GOOGLE_CLIENT_ID', fallback: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID' },
     { key: 'DATABASE_URL', fallback: null },
-    { key: 'REDIS_URL', fallback: null },
+    // REDIS_URL is now optional - removed from required list
     { key: 'JWT_SECRET', fallback: null, minLength: 32 }
   ];
   
