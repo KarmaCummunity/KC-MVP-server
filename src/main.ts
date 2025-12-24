@@ -199,21 +199,12 @@ async function bootstrap(): Promise<void> {
     // ═══════════════════════════════════════════════════════════════
     // Helmet helps secure Express apps by setting various HTTP headers
     // Protects against: XSS, clickjacking, MITM attacks, and more
+    // 
+    // NOTE: CSP is disabled to prevent "upstream sent too big header" error in Railway proxy
+    // Railway's nginx proxy has limited buffer size for headers
     app.use(helmet({
-      // Content Security Policy - prevents XSS attacks
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for compatibility
-          scriptSrc: ["'self'"],
-          imgSrc: ["'self'", "data:", "https:"], // Allow external images
-          connectSrc: ["'self'"], // API calls only to same origin
-          fontSrc: ["'self'"],
-          objectSrc: ["'none'"],
-          mediaSrc: ["'self'"],
-          frameSrc: ["'none'"], // Prevent embedding in iframes (clickjacking)
-        },
-      },
+      // Disable CSP to reduce header size (Railway proxy limitation)
+      contentSecurityPolicy: false,
       // HTTP Strict Transport Security - forces HTTPS
       hsts: {
         maxAge: 31536000, // 1 year in seconds
