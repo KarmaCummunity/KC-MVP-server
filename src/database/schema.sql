@@ -585,11 +585,41 @@ CREATE TRIGGER update_posts_updated_at
 -- Post Likes table - tracks which users liked which posts
 CREATE TABLE IF NOT EXISTS post_likes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    post_id UUID NOT NULL,
+    user_id UUID NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(post_id, user_id) -- Each user can only like a post once
 );
+
+-- Add foreign key constraints for post_likes
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_likes_post_id_fkey' AND table_name = 'post_likes'
+    ) THEN
+        ALTER TABLE post_likes DROP CONSTRAINT post_likes_post_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_likes_user_id_fkey' AND table_name = 'post_likes'
+    ) THEN
+        ALTER TABLE post_likes DROP CONSTRAINT post_likes_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables exist
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'posts') THEN
+        ALTER TABLE post_likes ADD CONSTRAINT post_likes_post_id_fkey 
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+        ALTER TABLE post_likes ADD CONSTRAINT post_likes_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- Indexes for post_likes
 CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);
@@ -599,13 +629,43 @@ CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DE
 -- Post Comments table - stores all comments on posts
 CREATE TABLE IF NOT EXISTS post_comments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    post_id UUID NOT NULL,
+    user_id UUID NOT NULL,
     text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
     likes_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Add foreign key constraints for post_comments
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_comments_post_id_fkey' AND table_name = 'post_comments'
+    ) THEN
+        ALTER TABLE post_comments DROP CONSTRAINT post_comments_post_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'post_comments_user_id_fkey' AND table_name = 'post_comments'
+    ) THEN
+        ALTER TABLE post_comments DROP CONSTRAINT post_comments_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables exist
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'posts') THEN
+        ALTER TABLE post_comments ADD CONSTRAINT post_comments_post_id_fkey 
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+        ALTER TABLE post_comments ADD CONSTRAINT post_comments_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- Indexes for post_comments
 CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
@@ -622,11 +682,41 @@ CREATE TRIGGER update_post_comments_updated_at
 -- Comment Likes table - tracks which users liked which comments
 CREATE TABLE IF NOT EXISTS comment_likes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    comment_id UUID NOT NULL,
+    user_id UUID NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(comment_id, user_id) -- Each user can only like a comment once
 );
+
+-- Add foreign key constraints for comment_likes
+DO $$ 
+BEGIN
+    -- Drop existing constraints if they exist
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'comment_likes_comment_id_fkey' AND table_name = 'comment_likes'
+    ) THEN
+        ALTER TABLE comment_likes DROP CONSTRAINT comment_likes_comment_id_fkey;
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'comment_likes_user_id_fkey' AND table_name = 'comment_likes'
+    ) THEN
+        ALTER TABLE comment_likes DROP CONSTRAINT comment_likes_user_id_fkey;
+    END IF;
+    
+    -- Add constraints only if target tables exist
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'post_comments') THEN
+        ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_comment_id_fkey 
+            FOREIGN KEY (comment_id) REFERENCES post_comments(id) ON DELETE CASCADE;
+    END IF;
+    
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_profiles') THEN
+        ALTER TABLE comment_likes ADD CONSTRAINT comment_likes_user_id_fkey 
+            FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- Indexes for comment_likes
 CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
