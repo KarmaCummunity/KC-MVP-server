@@ -42,111 +42,155 @@ export class StatsController {
     @Query('period') period?: string,
     @Query('forceRefresh') forceRefresh?: string
   ) {
-    // TODO: Add comprehensive input validation for city and period parameters
-    // TODO: Implement proper DTO for query parameters with validation
-    // TODO: Add proper cache key generation utility to prevent key collisions
-    // TODO: Add comprehensive error handling for cache operations
-    const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
+    try {
+      // TODO: Add comprehensive input validation for city and period parameters
+      // TODO: Implement proper DTO for query parameters with validation
+      // TODO: Add proper cache key generation utility to prevent key collisions
+      // TODO: Add comprehensive error handling for cache operations
+      const cacheKey = `community_stats_${city || 'global'}_${period || 'current'}`;
 
-    // Only use cache if forceRefresh is not true
-    // שינוי: תמיכה ב-forceRefresh לדילוג על cache וטעינה מחדש מהמסד נתונים
-    // Change: Support for forceRefresh to skip cache and reload from database
-    if (forceRefresh !== 'true') {
-      const cached = await this.redisCache.get(cacheKey);
+      // Only use cache if forceRefresh is not true
+      // שינוי: תמיכה ב-forceRefresh לדילוג על cache וטעינה מחדש מהמסד נתונים
+      // Change: Support for forceRefresh to skip cache and reload from database
+      if (forceRefresh !== 'true') {
+        try {
+          const cached = await this.redisCache.get(cacheKey);
 
-      if (cached) {
-        return { success: true, data: cached };
+          if (cached) {
+            return { success: true, data: cached };
+          }
+        } catch (cacheError) {
+          // Log cache error but continue to fetch from database
+          console.warn('Cache get error, continuing to database:', cacheError);
+        }
+      } else {
+        // Clear cache when force refresh is requested
+        // ניקוי cache כאשר מתבקש force refresh
+        try {
+          await this.redisCache.delete(cacheKey);
+        } catch (cacheError) {
+          // Log cache error but continue
+          console.warn('Cache delete error:', cacheError);
+        }
       }
-    } else {
-      // Clear cache when force refresh is requested
-      // ניקוי cache כאשר מתבקש force refresh
-      await this.redisCache.delete(cacheKey);
-    }
 
-    let dateFilter = '';
-    if (period === 'week') {
-      dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '7 days'";
-    } else if (period === 'month') {
-      dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '30 days'";
-    } else if (period === 'year') {
-      dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '365 days'";
-    }
+      let dateFilter = '';
+      if (period === 'week') {
+        dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '7 days'";
+      } else if (period === 'month') {
+        dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '30 days'";
+      } else if (period === 'year') {
+        dateFilter = "AND date_period >= CURRENT_DATE - INTERVAL '365 days'";
+      }
 
-    let query = `
-      SELECT 
-        stat_type,
-        SUM(stat_value) as total_value,
-        COUNT(DISTINCT date_period) as days_tracked
-      FROM community_stats 
-      WHERE 1=1
-    `;
+      let query = `
+        SELECT 
+          stat_type,
+          SUM(stat_value) as total_value,
+          COUNT(DISTINCT date_period) as days_tracked
+        FROM community_stats 
+        WHERE 1=1
+      `;
 
-    const params: any[] = [];
-    if (city) {
-      query += ` AND city = $1`;
-      params.push(city);
-    } else {
-      query += ` AND city IS NULL`;
-    }
+      const params: any[] = [];
+      if (city) {
+        query += ` AND city = $1`;
+        params.push(city);
+      } else {
+        query += ` AND city IS NULL`;
+      }
 
-    query += dateFilter;
-    query += ` GROUP BY stat_type ORDER BY stat_type`;
+      query += dateFilter;
+      query += ` GROUP BY stat_type ORDER BY stat_type`;
 
-    const { rows } = await this.pool.query(query, params);
+      const { rows } = await this.pool.query(query, params);
 
-    // Format response
-    // שינוי: פורמט תגובה עם מבנה value object לתמיכה במיפוי בצד הלקוח
-    // Change: Response format with value object structure for client-side mapping support
-    // TODO: Replace 'any' type with proper statistics response interface
-    // TODO: Add proper data validation and error handling
-    // TODO: Implement proper data transformation utilities
-    const stats: any = {};
-    rows.forEach(row => {
-      stats[row.stat_type] = {
-        value: parseInt(row.total_value), // TODO: Add proper number parsing with validation
-        days_tracked: parseInt(row.days_tracked) // TODO: Add proper number parsing with validation
+      // Format response
+      // שינוי: פורמט תגובה עם מבנה value object לתמיכה במיפוי בצד הלקוח
+      // Change: Response format with value object structure for client-side mapping support
+      // TODO: Replace 'any' type with proper statistics response interface
+      // TODO: Add proper data validation and error handling
+      // TODO: Implement proper data transformation utilities
+      const stats: any = {};
+      rows.forEach(row => {
+        stats[row.stat_type] = {
+          value: parseInt(row.total_value) || 0, // TODO: Add proper number parsing with validation
+          days_tracked: parseInt(row.days_tracked) || 0 // TODO: Add proper number parsing with validation
+        };
+      });
+
+      // Add computed stats
+      // הוספת סטטיסטיקות מחושבות (unique_donors, total_money_donated, וכו')
+      // Adding computed stats (unique_donors, total_money_donated, etc.)
+      await this.addComputedStats(stats, city);
+
+      try {
+        await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
+      } catch (cacheError) {
+        // Log cache error but still return the stats
+        console.warn('Cache set error:', cacheError);
+      }
+
+      return { success: true, data: stats };
+    } catch (error) {
+      console.error('Error in getCommunityStats:', error);
+      // Return a meaningful error response
+      return {
+        success: false,
+        error: 'Failed to fetch community stats',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        data: {} // Return empty stats to prevent client-side crashes
       };
-    });
-
-    // Add computed stats
-    // הוספת סטטיסטיקות מחושבות (unique_donors, total_money_donated, וכו')
-    // Adding computed stats (unique_donors, total_money_donated, etc.)
-    await this.addComputedStats(stats, city);
-
-    await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
-    return { success: true, data: stats };
+    }
   }
 
   @Get('community/version')
   // Lightweight endpoint to check if stats have changed
   // נקודת קצה קלת משקל לבדיקה אם הסטטיסטיקות השתנו
   async getCommunityStatsVersion(@Query('city') city?: string) {
-    const cacheKey = `community_stats_version_${city || 'global'}`;
+    try {
+      const cacheKey = `community_stats_version_${city || 'global'}`;
 
-    // Check cache first (1 minute TTL for version check)
-    const cached = await this.redisCache.get(cacheKey);
-    if (cached) {
-      return { success: true, version: cached };
+      // Check cache first (1 minute TTL for version check)
+      try {
+        const cached = await this.redisCache.get(cacheKey);
+        if (cached) {
+          return { success: true, version: cached };
+        }
+      } catch (cacheError) {
+        console.warn('Cache get error in version check:', cacheError);
+      }
+
+      // Get the latest update timestamp from community_stats
+      const query = `
+        SELECT MAX(updated_at) as last_update
+        FROM community_stats
+        ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
+      `;
+
+      const params = city ? [city] : [];
+      const { rows } = await this.pool.query(query, params);
+
+      // Create version hash from timestamp
+      const lastUpdate = rows[0]?.last_update || new Date();
+      const version = new Date(lastUpdate).getTime().toString();
+
+      // Cache for 1 minute
+      try {
+        await this.redisCache.set(cacheKey, version, 60);
+      } catch (cacheError) {
+        console.warn('Cache set error in version check:', cacheError);
+      }
+
+      return { success: true, version };
+    } catch (error) {
+      console.error('Error in getCommunityStatsVersion:', error);
+      return {
+        success: false,
+        error: 'Failed to fetch stats version',
+        version: Date.now().toString() // Return current timestamp as fallback
+      };
     }
-
-    // Get the latest update timestamp from community_stats
-    const query = `
-      SELECT MAX(updated_at) as last_update
-      FROM community_stats
-      ${city ? 'WHERE city = $1' : 'WHERE city IS NULL'}
-    `;
-
-    const params = city ? [city] : [];
-    const { rows } = await this.pool.query(query, params);
-
-    // Create version hash from timestamp
-    const lastUpdate = rows[0]?.last_update || new Date();
-    const version = new Date(lastUpdate).getTime().toString();
-
-    // Cache for 1 minute
-    await this.redisCache.set(cacheKey, version, 60);
-
-    return { success: true, version };
   }
 
   @Get('community/trends')
@@ -737,36 +781,42 @@ export class StatsController {
    * @param city - Optional city filter for location-based stats
    */
   private async addComputedStats(stats: any, city?: string) {
-    const params = city ? [city] : [];
-    const userCityCondition = city ? 'AND city = $1' : '';
-    const donationCityCondition = city ? 'AND (d.location->>\'city\' = $1)' : '';
-    const rideCityCondition = city ? 'AND (from_location->>\'city\' = $1)' : '';
-    const eventCityCondition = city ? 'AND (location->>\'city\' = $1)' : '';
+    try {
+      const params = city ? [city] : [];
+      const userCityCondition = city ? 'AND city = $1' : '';
+      const donationCityCondition = city ? 'AND (d.location->>\'city\' = $1)' : '';
+      const rideCityCondition = city ? 'AND (from_location->>\'city\' = $1)' : '';
+      const eventCityCondition = city ? 'AND (location->>\'city\' = $1)' : '';
 
-    // Generate cache keys for individual queries based on city filter
-    const cityKey = city || 'global';
-    const cacheKeys = {
-      userMetrics: `computed_stats_users_${cityKey}`,
-      donationMetrics: `computed_stats_donations_${cityKey}`,
-      rideMetrics: `computed_stats_rides_${cityKey}`,
-      eventMetrics: `computed_stats_events_${cityKey}`,
-      activityMetrics: `computed_stats_activities_${cityKey}`,
-      chatMetrics: `computed_stats_chat_${cityKey}`,
-      siteVisitsMetrics: `computed_stats_site_visits_${cityKey}`,
-      taskMetrics: `computed_stats_tasks_${cityKey}`,
-    };
+      // Generate cache keys for individual queries based on city filter
+      const cityKey = city || 'global';
+      const cacheKeys = {
+        userMetrics: `computed_stats_users_${cityKey}`,
+        donationMetrics: `computed_stats_donations_${cityKey}`,
+        rideMetrics: `computed_stats_rides_${cityKey}`,
+        eventMetrics: `computed_stats_events_${cityKey}`,
+        activityMetrics: `computed_stats_activities_${cityKey}`,
+        chatMetrics: `computed_stats_chat_${cityKey}`,
+        siteVisitsMetrics: `computed_stats_site_visits_${cityKey}`,
+        taskMetrics: `computed_stats_tasks_${cityKey}`,
+      };
 
-    // Try to get all cached metrics at once
-    const cachedMetrics = await this.redisCache.getMultiple([
-      cacheKeys.userMetrics,
-      cacheKeys.donationMetrics,
-      cacheKeys.rideMetrics,
-      cacheKeys.eventMetrics,
-      cacheKeys.activityMetrics,
-      cacheKeys.chatMetrics,
-      cacheKeys.siteVisitsMetrics,
-      cacheKeys.taskMetrics,
-    ]);
+      // Try to get all cached metrics at once
+      let cachedMetrics = new Map();
+      try {
+        cachedMetrics = await this.redisCache.getMultiple([
+          cacheKeys.userMetrics,
+          cacheKeys.donationMetrics,
+          cacheKeys.rideMetrics,
+          cacheKeys.eventMetrics,
+          cacheKeys.activityMetrics,
+          cacheKeys.chatMetrics,
+          cacheKeys.siteVisitsMetrics,
+          cacheKeys.taskMetrics,
+        ]);
+      } catch (cacheError) {
+        console.warn('Cache getMultiple error, continuing without cache:', cacheError);
+      }
 
     // Helper function to get cached or execute query
     const getCachedOrQuery = async (cacheKey: string, queryFn: () => Promise<any>, ttl: number = 10 * 60) => {
@@ -1018,6 +1068,70 @@ export class StatsController {
         value: (stats.money_donations?.value || 0) + (stats.volunteer_hours?.value || 0) + (stats.total_rides?.value || 0),
         days_tracked: 1
       };
+    }
+    } catch (error) {
+      console.error('Error in addComputedStats:', error);
+      // Set default values for all computed stats to prevent undefined errors
+      const defaultStats = {
+        total_users: { value: 0, days_tracked: 1 },
+        active_members: { value: 0, days_tracked: 1 },
+        daily_active_users: { value: 0, days_tracked: 1 },
+        weekly_active_users: { value: 0, days_tracked: 1 },
+        new_users_this_week: { value: 0, days_tracked: 1 },
+        new_users_this_month: { value: 0, days_tracked: 1 },
+        total_organizations: { value: 0, days_tracked: 1 },
+        cities_with_users: { value: 0, days_tracked: 1 },
+        total_donations: { value: 0, days_tracked: 1 },
+        donations_this_week: { value: 0, days_tracked: 1 },
+        donations_this_month: { value: 0, days_tracked: 1 },
+        active_donations: { value: 0, days_tracked: 1 },
+        completed_donations: { value: 0, days_tracked: 1 },
+        money_donations: { value: 0, days_tracked: 1 },
+        item_donations: { value: 0, days_tracked: 1 },
+        service_donations: { value: 0, days_tracked: 1 },
+        volunteer_hours: { value: 0, days_tracked: 1 },
+        total_money_donated: { value: 0, days_tracked: 1 },
+        recurring_donations_amount: { value: 0, days_tracked: 1 },
+        unique_donors: { value: 0, days_tracked: 1 },
+        total_rides: { value: 0, days_tracked: 1 },
+        rides_this_week: { value: 0, days_tracked: 1 },
+        rides_this_month: { value: 0, days_tracked: 1 },
+        active_rides: { value: 0, days_tracked: 1 },
+        completed_rides: { value: 0, days_tracked: 1 },
+        total_seats_offered: { value: 0, days_tracked: 1 },
+        unique_drivers: { value: 0, days_tracked: 1 },
+        total_events: { value: 0, days_tracked: 1 },
+        events_this_week: { value: 0, days_tracked: 1 },
+        events_this_month: { value: 0, days_tracked: 1 },
+        active_events: { value: 0, days_tracked: 1 },
+        completed_events: { value: 0, days_tracked: 1 },
+        total_event_attendees: { value: 0, days_tracked: 1 },
+        virtual_events: { value: 0, days_tracked: 1 },
+        total_activities: { value: 0, days_tracked: 1 },
+        activities_today: { value: 0, days_tracked: 1 },
+        activities_this_week: { value: 0, days_tracked: 1 },
+        total_logins: { value: 0, days_tracked: 1 },
+        donation_activities: { value: 0, days_tracked: 1 },
+        chat_activities: { value: 0, days_tracked: 1 },
+        active_users_tracked: { value: 0, days_tracked: 1 },
+        total_messages: { value: 0, days_tracked: 1 },
+        total_conversations: { value: 0, days_tracked: 1 },
+        messages_this_week: { value: 0, days_tracked: 1 },
+        group_conversations: { value: 0, days_tracked: 1 },
+        direct_conversations: { value: 0, days_tracked: 1 },
+        site_visits: { value: 0, days_tracked: 1 },
+        total_tasks: { value: 0, days_tracked: 1 },
+        completed_tasks: { value: 0, days_tracked: 1 },
+        open_tasks: { value: 0, days_tracked: 1 },
+        in_progress_tasks: { value: 0, days_tracked: 1 },
+        completed_tasks_this_week: { value: 0, days_tracked: 1 },
+        completed_tasks_this_month: { value: 0, days_tracked: 1 },
+        avg_donation_amount: { value: 0, days_tracked: 1 },
+        avg_seats_per_ride: { value: 0, days_tracked: 1 },
+        user_engagement_rate: { value: 0, days_tracked: 1 },
+        total_contributions: { value: 0, days_tracked: 1 },
+      };
+      Object.assign(stats, defaultStats);
     }
   }
 
