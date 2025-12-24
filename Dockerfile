@@ -29,5 +29,6 @@ RUN mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ || tr
 # Expose is optional for Railway, but helps locally
 EXPOSE 3001
 
-CMD ["node", "dist/main.js"]
+# Use shell form to enable logging
+CMD ["sh", "-c", "echo '🚀 Container starting...' && echo '📍 Node version:' $(node --version) && echo '📁 Working directory:' $(pwd) && echo '🎬 Starting application...' && exec node dist/main.js"]
 
