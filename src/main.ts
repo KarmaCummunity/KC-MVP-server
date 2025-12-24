@@ -266,6 +266,14 @@ async function bootstrap(): Promise<void> {
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Auth-Token', 'Origin', 'Accept'],
       preflightContinue: false,
       optionsSuccessStatus: 204,
+      exposedHeaders: ['Cross-Origin-Opener-Policy', 'Cross-Origin-Embedder-Policy'],
+    });
+    
+    // Add Cross-Origin-Opener-Policy header for Google OAuth
+    app.use((req: any, res: any, next: any) => {
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+      next();
     });
     
     logger.log(`🌐 CORS enabled for ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'} environment`);
