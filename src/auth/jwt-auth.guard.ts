@@ -35,6 +35,62 @@ export class JwtAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const response = context.switchToHttp().getResponse();
     
+    // DEVELOPMENT BYPASS: Allow requests without authentication in local development
+    const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ENVIRONMENT === 'development';
+    const bypassAuth = process.env.BYPASS_AUTH === 'true';
+    
+    if (isDevelopment || bypassAuth) {
+      this.logger.debug('🔓 Development mode: Bypassing authentication', {
+        path: request.path,
+        method: request.method,
+        isDevelopment,
+        bypassAuth
+      });
+      
+      // In development, try to get the super admin from the database
+      try {
+        const { rows } = await this.pool.query(
+          `SELECT id, email, roles FROM user_profiles WHERE email = 'navesarussi@gmail.com' LIMIT 1`
+        );
+        
+        if (rows.length > 0) {
+          const superAdmin = rows[0];
+          request.user = {
+            userId: superAdmin.id,
+            email: superAdmin.email,
+            roles: superAdmin.roles || ['user', 'admin', 'super_admin'],
+            type: 'access',
+            sessionId: 'dev-session-id',
+            iat: Math.floor(Date.now() / 1000),
+            exp: Math.floor(Date.now() / 1000) + 86400 // 24 hours from now
+          };
+          
+          this.logger.debug('🔓 Using super admin from database', {
+            userId: superAdmin.id,
+            email: superAdmin.email,
+            roles: superAdmin.roles
+          });
+          
+          return true;
+        }
+      } catch (dbError) {
+        this.logger.warn('Failed to fetch super admin from database, using fallback', dbError);
+      }
+      
+      // Fallback: Create a generic mock admin user for development
+      request.user = {
+        userId: 'dev-user-id',
+        email: 'navesarussi@gmail.com',
+        roles: ['user', 'admin', 'super_admin'],
+        type: 'access',
+        sessionId: 'dev-session-id',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 86400 // 24 hours from now
+      };
+      
+      return true;
+    }
+    
     try {
       // Extract token from request
       const token = this.extractTokenFromHeader(request);

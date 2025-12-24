@@ -73,9 +73,12 @@ export class UsersController {
    */
   @Post(':id/set-manager')
   @UseGuards(JwtAuthGuard)
-  async setManager(@Param('id') id: string, @Body() body: { managerId: string | null, requestingUserId?: string }) {
+  async setManager(@Param('id') id: string, @Body() body: { managerId: string | null | undefined, requestingUserId?: string }) {
     try {
       const { managerId, requestingUserId } = body;
+      
+      console.log(`[setManager] Setting manager for user ${id}: managerId=${managerId} (type: ${typeof managerId}), requestingUserId=${requestingUserId}`);
+      console.log(`[setManager] Full body:`, JSON.stringify(body));
       
       // Permission check: only admin or super admin can change manager assignments
       if (requestingUserId) {
@@ -91,78 +94,120 @@ export class UsersController {
                           isSuperAdmin;
           
           if (!isAdmin) {
+            console.log(`[setManager] Permission denied for user ${requestingUserId}`);
             return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
           }
         }
       }
 
+      // If managerId is null or undefined, we're removing the manager assignment
+      if (managerId === null || managerId === undefined || managerId === 'null' || managerId === '') {
+        // Check current state
+        const { rows: currentUser } = await this.pool.query(
+          'SELECT parent_manager_id FROM user_profiles WHERE id = $1',
+          [id]
+        );
+        
+        if (currentUser.length === 0) {
+          console.log(`[setManager] User not found: ${id}`);
+          return { success: false, error: 'User not found' };
+        }
+        
+        const currentManagerId = currentUser[0].parent_manager_id;
+        console.log(`[setManager] Removing manager assignment for user ${id}, current manager: ${currentManagerId}`);
+        
+        // Update to remove manager
+        await this.pool.query(`
+          UPDATE user_profiles 
+          SET parent_manager_id = NULL, updated_at = NOW()
+          WHERE id = $1
+        `, [id]);
+
+        // Invalidate caches to ensure fresh data
+        await this.redisCache.delete(`user_profile_${id}`);
+        await this.redisCache.invalidatePattern('users_list*');
+        console.log(`[setManager] Invalidated cache for user ${id} and all user lists`);
+
+        console.log(`✅ Manager removed: ${id} no longer reports to anyone`);
+        return { success: true, message: 'שיוך מנהל הוסר בהצלחה' };
+      }
+
       // Prevent validation loop (user cannot be their own manager)
-      if (managerId && managerId === id) {
+      if (managerId === id) {
         return { success: false, error: 'User cannot be their own manager' };
       }
 
       // Check if manager exists
-      if (managerId) {
-        const checkManager = await this.pool.query('SELECT id FROM user_profiles WHERE id = $1', [managerId]);
-        if (checkManager.rows.length === 0) {
-          return { success: false, error: 'Manager not found' };
-        }
-
-        // Full cycle detection using recursive CTE
-        // Check if 'id' (subordinate) appears anywhere in managerId's hierarchy chain
-        const { rows: cycleCheck } = await this.pool.query(`
-          WITH RECURSIVE manager_chain AS (
-            -- Base case: start from the proposed manager
-            SELECT id, parent_manager_id, 1 as depth
-            FROM user_profiles
-            WHERE id = $1
-            
-            UNION ALL
-            
-            -- Recursive: go up the chain
-            SELECT u.id, u.parent_manager_id, mc.depth + 1
-            FROM user_profiles u
-            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
-            WHERE mc.depth < 100
-          )
-          SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
-        `, [managerId, id]);
-
-        if (cycleCheck.length > 0) {
-          return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
-        }
-
-        // Check reverse direction - if manager is subordinate of user
-        const { rows: reverseCheck } = await this.pool.query(`
-          WITH RECURSIVE subordinate_tree AS (
-            -- Base case: direct subordinates of user
-            SELECT id, parent_manager_id, 1 as depth
-            FROM user_profiles
-            WHERE parent_manager_id = $2
-            
-            UNION ALL
-            
-            -- Recursive: subordinates of subordinates
-            SELECT u.id, u.parent_manager_id, st.depth + 1
-            FROM user_profiles u
-            INNER JOIN subordinate_tree st ON u.parent_manager_id = st.id
-            WHERE st.depth < 100
-          )
-          SELECT 1 FROM subordinate_tree WHERE id = $1 LIMIT 1
-        `, [managerId, id]);
-
-        if (reverseCheck.length > 0) {
-          return { success: false, error: 'Cannot assign - the proposed manager is currently your subordinate' };
-        }
+      const checkManager = await this.pool.query('SELECT id FROM user_profiles WHERE id = $1', [managerId]);
+      if (checkManager.rows.length === 0) {
+        return { success: false, error: 'Manager not found' };
       }
 
+      // Full cycle detection using recursive CTE
+      // Check if 'id' (subordinate) appears anywhere in managerId's hierarchy chain
+      const { rows: cycleCheck } = await this.pool.query(`
+        WITH RECURSIVE manager_chain AS (
+          -- Base case: start from the proposed manager
+          SELECT id, parent_manager_id, 1 as depth
+          FROM user_profiles
+          WHERE id = $1
+          
+          UNION ALL
+          
+          -- Recursive: go up the chain
+          SELECT u.id, u.parent_manager_id, mc.depth + 1
+          FROM user_profiles u
+          INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+          WHERE mc.depth < 100
+        )
+        SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
+      `, [managerId, id]);
+
+      if (cycleCheck.length > 0) {
+        return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
+      }
+
+      // Check reverse direction - if manager is subordinate of user
+      const { rows: reverseCheck } = await this.pool.query(`
+        WITH RECURSIVE subordinate_tree AS (
+          -- Base case: direct subordinates of user
+          SELECT id, parent_manager_id, 1 as depth
+          FROM user_profiles
+          WHERE parent_manager_id = $2
+          
+          UNION ALL
+          
+          -- Recursive: subordinates of subordinates
+          SELECT u.id, u.parent_manager_id, st.depth + 1
+          FROM user_profiles u
+          INNER JOIN subordinate_tree st ON u.parent_manager_id = st.id
+          WHERE st.depth < 100
+        )
+        SELECT 1 FROM subordinate_tree WHERE id = $1 LIMIT 1
+      `, [managerId, id]);
+
+      if (reverseCheck.length > 0) {
+        return { success: false, error: 'Cannot assign - the proposed manager is currently your subordinate' };
+      }
+
+      console.log(`[setManager] 📝 Before UPDATE: user=${id}, new parent_manager_id=${managerId}`);
+      
+      // Update to set manager
       await this.pool.query(`
         UPDATE user_profiles 
         SET parent_manager_id = $1, updated_at = NOW()
         WHERE id = $2
       `, [managerId, id]);
 
-      console.log(`✅ Manager set: ${id} now reports to ${managerId || 'no one'}`);
+      // Invalidate caches to ensure fresh data
+      await this.redisCache.delete(`user_profile_${id}`);
+      await this.redisCache.delete(`user_profile_${managerId}`);
+      await this.redisCache.invalidatePattern('users_list*');
+      console.log(`[setManager] ♻️ Invalidated cache for users ${id} and ${managerId} and all user lists`);
+
+      console.log(`✅ Manager set: ${id} now reports to ${managerId}`);
+      console.log(`[setManager] 📊 Updated: parent_manager_id=${managerId}`);
+      
       return { success: true, message: 'Manager updated successfully' };
     } catch (error) {
       console.error('Set manager error:', error);
@@ -358,6 +403,8 @@ export class UsersController {
     try {
       const { requestingAdminId } = body;
       
+      console.log(`[promoteToAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
+      
       if (!requestingAdminId) {
         return { success: false, error: 'requestingAdminId is required' };
       }
@@ -370,8 +417,15 @@ export class UsersController {
         [requestingAdminId]
       );
       
+      console.log(`[promoteToAdmin] 🔍 Requesting user lookup:`, {
+        requestingAdminId,
+        found: requestingUser.length > 0,
+        user: requestingUser[0] || null
+      });
+      
       if (requestingUser.length === 0) {
         await client.query('ROLLBACK');
+        console.log(`[promoteToAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
         return { success: false, error: 'Requesting user not found' };
       }
       
@@ -380,8 +434,16 @@ export class UsersController {
                       (requestingUser[0].roles || []).includes('super_admin') ||
                       isSuperAdmin;
       
+      console.log(`[promoteToAdmin] 🔐 Authorization check:`, {
+        email: requestingUser[0].email,
+        roles: requestingUser[0].roles,
+        isSuperAdmin,
+        isAdmin
+      });
+      
       if (!isAdmin) {
         await client.query('ROLLBACK');
+        console.log(`[promoteToAdmin] ❌ Authorization denied - not an admin`);
         return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
       }
       
@@ -454,7 +516,15 @@ export class UsersController {
       
       await client.query('COMMIT');
       
+      // Invalidate caches to ensure fresh data on next request
+      await this.redisCache.delete(`user_profile_${targetUserId}`);
+      await this.redisCache.delete(`user_profile_${requestingAdminId}`);
+      await this.redisCache.invalidatePattern('users_list*');
+      console.log(`[promoteToAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+      
       console.log(`✅ User ${targetUserId} promoted to admin under ${requestingAdminId}`);
+      console.log(`[promoteToAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
+      
       return { 
         success: true, 
         message: `${targetUser[0].name || targetUser[0].email} הפך למנהל תחתיך` 
@@ -486,6 +556,8 @@ export class UsersController {
     try {
       const { requestingAdminId } = body;
       
+      console.log(`[demoteAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
+      
       if (!requestingAdminId) {
         return { success: false, error: 'requestingAdminId is required' };
       }
@@ -498,8 +570,15 @@ export class UsersController {
         [requestingAdminId]
       );
       
+      console.log(`[demoteAdmin] 🔍 Requesting user lookup:`, {
+        requestingAdminId,
+        found: requestingUser.length > 0,
+        user: requestingUser[0] || null
+      });
+      
       if (requestingUser.length === 0) {
         await client.query('ROLLBACK');
+        console.log(`[demoteAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
         return { success: false, error: 'Requesting user not found' };
       }
       
@@ -508,8 +587,16 @@ export class UsersController {
                       (requestingUser[0].roles || []).includes('super_admin') ||
                       isSuperAdmin;
       
+      console.log(`[demoteAdmin] 🔐 Authorization check:`, {
+        email: requestingUser[0].email,
+        roles: requestingUser[0].roles,
+        isSuperAdmin,
+        isAdmin
+      });
+      
       if (!isAdmin) {
         await client.query('ROLLBACK');
+        console.log(`[demoteAdmin] ❌ Authorization denied - not an admin`);
         return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
       }
       
@@ -555,6 +642,8 @@ export class UsersController {
       const currentRoles = targetUser[0].roles || [];
       const newRoles = currentRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
       
+      console.log(`[demoteAdmin] 📝 Before UPDATE: target=${targetUserId}, currentRoles=${JSON.stringify(currentRoles)}, parent_manager_id=${targetUser[0].parent_manager_id}`);
+      
       // Also clear parent_manager_id since they're no longer an admin
       await client.query(`
         UPDATE user_profiles 
@@ -564,7 +653,15 @@ export class UsersController {
       
       await client.query('COMMIT');
       
+      // Invalidate caches to ensure fresh data on next request
+      await this.redisCache.delete(`user_profile_${targetUserId}`);
+      await this.redisCache.delete(`user_profile_${requestingAdminId}`);
+      await this.redisCache.invalidatePattern('users_list*');
+      console.log(`[demoteAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+      
       console.log(`✅ User ${targetUserId} demoted from admin by ${requestingAdminId}`);
+      console.log(`[demoteAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=NULL`);
+      
       return { 
         success: true, 
         message: `הרשאות מנהל הוסרו מ-${targetUser[0].name || targetUser[0].email}` 
@@ -1309,16 +1406,25 @@ export class UsersController {
     @Query('city') city?: string,
     @Query('search') search?: string,
     @Query('limit') limit?: string,
-    @Query('offset') offset?: string
+    @Query('offset') offset?: string,
+    @Query('forceRefresh') forceRefresh?: string
   ) {
     // TODO: Implement proper cache key structure and versioning
     // TODO: Add cache invalidation strategy when users are updated
     // TODO: Implement cache warming for frequently accessed data
     const cacheKey = `users_list_${city || 'all'}_${search || ''}_${limit || '50'}_${offset || '0'}`;
-    const cached = await this.redisCache.get(cacheKey);
-
-    if (cached) {
-      return { success: true, data: cached };
+    
+    // Skip cache if forceRefresh is requested
+    const shouldForceRefresh = forceRefresh === 'true' || forceRefresh === '1';
+    
+    if (!shouldForceRefresh) {
+      const cached = await this.redisCache.get(cacheKey);
+      if (cached) {
+        console.log(`[getUsers] 📦 Returning cached data for key: ${cacheKey}`);
+        return { success: true, data: cached };
+      }
+    } else {
+      console.log(`[getUsers] 🔄 Force refresh requested, bypassing cache for key: ${cacheKey}`);
     }
 
     // Unified query: Get all users from both user_profiles and users (legacy) tables
