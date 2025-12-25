@@ -30,7 +30,7 @@ console.log('📍 CWD:', process.cwd());
 console.log('========================================');
 
 // #region agent log
-console.log('[DEBUG-H1-H4] Server startup initiated:', JSON.stringify({nodeVersion:process.version,platform:process.platform,cwd:process.cwd(),port:process.env.PORT,hasDbUrl:!!process.env.DATABASE_URL,hasRedisUrl:!!process.env.REDIS_URL,hasJwtSecret:!!process.env.JWT_SECRET,hasGoogleClientId:!!(process.env.GOOGLE_CLIENT_ID||process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID)}));
+console.log('[DEBUG-H1-H4] Server startup initiated:', JSON.stringify({ nodeVersion: process.version, platform: process.platform, cwd: process.cwd(), port: process.env.PORT, hasDbUrl: !!process.env.DATABASE_URL, hasRedisUrl: !!process.env.REDIS_URL, hasJwtSecret: !!process.env.JWT_SECRET, hasGoogleClientId: !!(process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) }));
 // #endregion
 
 import 'reflect-metadata';
@@ -63,17 +63,17 @@ import * as bodyParser from 'body-parser';
  */
 function validateEnvironment(): void {
   const logger = new Logger('Bootstrap');
-  
+
   const required = [
     { key: 'GOOGLE_CLIENT_ID', fallback: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID' },
     { key: 'DATABASE_URL', fallback: null },
     // REDIS_URL is now optional - removed from required list
     { key: 'JWT_SECRET', fallback: null, minLength: 32 }
   ];
-  
+
   const missing: string[] = [];
   const invalid: Array<{ key: string; requirement: string; current: number }> = [];
-  
+
   for (const { key, fallback, minLength } of required) {
     if (!process.env[key]) {
       if (fallback && process.env[fallback]) {
@@ -83,16 +83,16 @@ function validateEnvironment(): void {
         missing.push(key);
       }
     }
-    
+
     // Validate minimum length if specified
     if (minLength && process.env[key] && process.env[key]!.length < minLength) {
       invalid.push({ key, requirement: `minimum ${minLength} characters`, current: process.env[key]!.length });
     }
   }
-  
+
   if (missing.length > 0) {
     // #region agent log
-    console.log('[DEBUG-H1] Missing environment variables - server will exit:', JSON.stringify({missing:missing}));
+    console.log('[DEBUG-H1] Missing environment variables - server will exit:', JSON.stringify({ missing: missing }));
     // #endregion
     logger.error(`❌ Missing REQUIRED environment variables: ${missing.join(', ')}`);
     logger.error('💡 Set these variables in your .env file or environment');
@@ -103,7 +103,7 @@ function validateEnvironment(): void {
     }
     process.exit(1);
   }
-  
+
   if (invalid.length > 0) {
     logger.error(`❌ Invalid environment variables:`);
     for (const { key, requirement, current } of invalid) {
@@ -115,19 +115,19 @@ function validateEnvironment(): void {
     }
     process.exit(1);
   }
-  
+
   // ═══════════════════════════════════════════════════════════════
   // ENVIRONMENT SEPARATION VALIDATION
   // ═══════════════════════════════════════════════════════════════
   // Validate that environment configuration matches the database
   // This prevents critical errors like connecting dev to prod DB
-  
+
   const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'unknown';
   const databaseUrl = process.env.DATABASE_URL || '';
   const redisUrl = process.env.REDIS_URL || '';
-  
+
   logger.log(`📍 Environment: ${environment.toUpperCase()} ${environment === 'development' ? '🟢' : environment === 'production' ? '🔴' : '⚪'}`);
-  
+
   // Check DATABASE_URL matches environment
   if (environment === 'development') {
     // DEV should use password: mmWLXgvXF... or host: postgres-a3d6beef
@@ -156,7 +156,7 @@ function validateEnvironment(): void {
   } else {
     logger.warn(`⚠️  ENVIRONMENT not set (currently: ${environment}). Set to 'development' or 'production'`);
   }
-  
+
   // Check if Redis is shared (warning only, not critical)
   if (redisUrl.includes('deQMolmzgWZsqeAkiEpZPFvejfGjenEm')) {
     logger.warn('⚠️  Redis appears to be SHARED between environments!');
@@ -167,7 +167,7 @@ function validateEnvironment(): void {
   } else if (environment === 'production' && redisUrl.includes('deQMolmzgWZsqeAkiEpZPFvejfGjenEm')) {
     logger.log('✅ Redis: Production');
   }
-  
+
   logger.log('✅ Environment validation passed');
 }
 
@@ -185,52 +185,52 @@ function validateEnvironment(): void {
 async function bootstrap(): Promise<void> {
   console.log('🔥 bootstrap() function called');
   const logger = new Logger('Bootstrap');
-  
+
   try {
     console.log('📝 Loading .env file...');
     // Load environment variables from .env file
     dotenv.config();
     console.log('✅ .env loaded');
-    
+
     // Validate critical environment variables
     validateEnvironment();
-    
+
     // #region agent log
     console.log('[DEBUG-H1] Environment validation passed');
     // #endregion
-    
+
     logger.log('🚀 Starting Karma Community Server...');
-    
+
     // #region agent log
     console.log('[DEBUG-H2-H3] Creating NestJS app...');
     // #endregion
-    
+
     // Create NestJS application instance with Express adapter
-    const app = await NestFactory.create<NestExpressApplication>(AppModule, { 
+    const app = await NestFactory.create<NestExpressApplication>(AppModule, {
       cors: false, // We configure CORS manually for more control
       logger: ['error', 'warn', 'log', 'debug', 'verbose'],
       bodyParser: false, // Disable default body parser so we can configure it manually
     });
-    
+
     // #region agent log
     console.log('[DEBUG-H2-H3] NestJS app created successfully');
     // #endregion
-    
+
     // Configure body parser with 50MB limit for base64 image uploads
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
-    
+
     logger.log('📦 Body parser configured with 50MB limit for image uploads');
-    
+
     const port = Number(process.env.PORT || 3001);
-    
+
     // ═══════════════════════════════════════════════════════════════
     // SECURITY MIDDLEWARE - Helmet.js
     // ═══════════════════════════════════════════════════════════════
     // TEMPORARILY DISABLED: Helmet was causing "upstream sent too big header" error
     // Railway's nginx proxy has limited buffer size for response headers
     // TODO: Re-enable with minimal configuration after fixing the issue
-    
+
     // app.use(helmet({
     //   contentSecurityPolicy: false,
     //   hsts: false,
@@ -240,44 +240,64 @@ async function bootstrap(): Promise<void> {
     //   referrerPolicy: false,
     //   crossOriginOpenerPolicy: false
     // }));
-    
+
     logger.log('⚠️  Security headers (Helmet.js) temporarily disabled to fix 502 error');
 
     // Determine environment for CORS configuration
     const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
     const isProduction = environment === 'production';
-    
+
     // Configure CORS (Cross-Origin Resource Sharing)
     let corsOrigin = process.env.CORS_ORIGIN;
-    
+
     // Remove surrounding quotes if present (Railway sometimes includes them)
     if (corsOrigin && corsOrigin.startsWith('"') && corsOrigin.endsWith('"')) {
       corsOrigin = corsOrigin.slice(1, -1);
       logger.log('🔧 Removed surrounding quotes from CORS_ORIGIN');
     }
-    
+
     if (!corsOrigin) {
       logger.warn('⚠️  WARNING: CORS_ORIGIN not set! Using default origins based on environment.');
     }
-    
+
     // Default origins based on environment
     const defaultOrigins = isProduction
       ? [
-          'https://karma-community-kc.com',
-          'https://www.karma-community-kc.com'
-        ]
+        'https://karma-community-kc.com',
+        'https://www.karma-community-kc.com'
+      ]
       : [
-          'https://dev.karma-community-kc.com',
-          'http://localhost:19006',
-          'http://localhost:3000',
-          'http://localhost:8081',
-          'http://127.0.0.1:3000'
-        ];
-    
-    const allowedOrigins = corsOrigin 
+        'https://dev.karma-community-kc.com',
+        'http://localhost:19006',
+        'http://localhost:3000',
+        'http://localhost:8081',
+        'http://127.0.0.1:3000'
+      ];
+
+    let allowedOrigins = corsOrigin
       ? corsOrigin.split(',').map(s => s.trim())
       : defaultOrigins;
-    
+
+    // Force include development domains if not in production
+    // This ensures that even if CORS_ORIGIN is set in Railway but missing the dev domain, it still works
+    if (!isProduction) {
+      const devDomains = [
+        'https://dev.karma-community-kc.com',
+        'http://localhost:19006',
+        'http://localhost:3000',
+        'http://localhost:8081'
+      ];
+
+      // Add unique domains
+      devDomains.forEach(domain => {
+        if (!allowedOrigins.includes(domain)) {
+          allowedOrigins.push(domain);
+        }
+      });
+
+      logger.log(`🔧 Forced inclusion of development domains in CORS allowed origins`);
+    }
+
     app.enableCors({
       origin: allowedOrigins,
       credentials: true,
@@ -287,23 +307,23 @@ async function bootstrap(): Promise<void> {
       optionsSuccessStatus: 204,
       exposedHeaders: ['Cross-Origin-Opener-Policy', 'Cross-Origin-Embedder-Policy'],
     });
-    
+
     // Add Cross-Origin-Opener-Policy header for Google OAuth
     app.use((req: any, res: any, next: any) => {
       res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
       res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
       next();
     });
-    
+
     logger.log(`🌐 CORS enabled for ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'} environment`);
     logger.log(`🌐 Allowed origins: ${allowedOrigins.join(', ')}`);
 
     // Extra CORS fallback middleware for proxy compatibility
     // Some proxies don't properly forward CORS headers, so we add them manually
-    
+
     app.use((req: any, res: any, next: any) => {
       const origin = req.headers.origin;
-      
+
       // Only set CORS headers if origin is in allowed list
       if (origin && allowedOrigins.includes(origin)) {
         res.header('Access-Control-Allow-Origin', origin);
@@ -311,7 +331,7 @@ async function bootstrap(): Promise<void> {
         res.header('Access-Control-Allow-Credentials', 'true');
         res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
         res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept');
-        
+
         // Handle preflight requests
         if (req.method === 'OPTIONS') {
           return res.sendStatus(204);
@@ -323,13 +343,13 @@ async function bootstrap(): Promise<void> {
         // In production, silently block unauthorized origins (security)
         // Don't set any CORS headers, browser will block the request
       }
-      
+
       next();
     });
 
     // Configure global validation pipe with security settings
     // This automatically validates all incoming requests against DTOs
-    app.useGlobalPipes(new ValidationPipe({ 
+    app.useGlobalPipes(new ValidationPipe({
       whitelist: true, // Strip properties that don't have decorators
       transform: true, // Automatically transform payloads to DTO instances
       forbidNonWhitelisted: true, // Throw error if non-whitelisted properties exist
@@ -341,7 +361,7 @@ async function bootstrap(): Promise<void> {
 
     // Start the HTTP server
     await app.listen(port, '0.0.0.0');
-    
+
     // Log successful startup with configuration summary
     const isDevelopment = environment === 'development';
     logger.log('═══════════════════════════════════════════════════');
@@ -350,7 +370,7 @@ async function bootstrap(): Promise<void> {
     logger.log(`📍 Port: ${port}`);
     logger.log(`📍 Environment: ${environment.toUpperCase()} ${isProduction ? '🔴 PRODUCTION' : isDevelopment ? '🟢 DEVELOPMENT' : '🟡 OTHER'}`);
     logger.log(`🔒 Google OAuth: ${process.env.GOOGLE_CLIENT_ID ? '✅ Configured' : '❌ Not configured'}`);
-    
+
     // Show database connection details (masked for security)
     const dbUrl = process.env.DATABASE_URL;
     if (dbUrl) {
@@ -365,7 +385,7 @@ async function bootstrap(): Promise<void> {
     } else {
       logger.log(`💾 Database: ❌ Not connected - DATABASE_URL missing!`);
     }
-    
+
     // Show Redis connection details (masked for security)
     const redisUrl = process.env.REDIS_URL;
     if (redisUrl) {
@@ -379,23 +399,23 @@ async function bootstrap(): Promise<void> {
     } else {
       logger.log(`⚡ Redis: ❌ Not connected - REDIS_URL missing!`);
     }
-    
+
     // Warn if running in production without proper environment flag
     if (isProduction && !process.env.ENVIRONMENT && process.env.NODE_ENV !== 'production') {
       logger.warn('⚠️  WARNING: Running in production mode but ENVIRONMENT is not explicitly set to "production"');
     }
-    
+
     // #region agent log
-    console.log('[DEBUG-ALL] Server startup completed successfully:', JSON.stringify({port:port,environment:environment}));
+    console.log('[DEBUG-ALL] Server startup completed successfully:', JSON.stringify({ port: port, environment: environment }));
     // #endregion
-    
+
     logger.log('═══════════════════════════════════════════════════');
-    
+
   } catch (error) {
     // #region agent log
-    console.log('[DEBUG-ALL-FATAL] Server startup failed:', JSON.stringify({errorMessage:error instanceof Error?error.message:'unknown',errorStack:error instanceof Error?error.stack:'none'}));
+    console.log('[DEBUG-ALL-FATAL] Server startup failed:', JSON.stringify({ errorMessage: error instanceof Error ? error.message : 'unknown', errorStack: error instanceof Error ? error.stack : 'none' }));
     // #endregion
-    
+
     // Handle startup errors gracefully
     if (error instanceof Error) {
       logger.error('❌ Failed to start server:', error.message);
@@ -441,7 +461,7 @@ process.on('SIGTERM', () => {
  */
 process.on('SIGINT', () => {
   const logger = new Logger('Shutdown');
-  logger.log('🛑 SIGINT signal received (Ctrl+C), shutting down gracefully...');  
+  logger.log('🛑 SIGINT signal received (Ctrl+C), shutting down gracefully...');
   logger.log('👋 Goodbye!');
   process.exit(0);
 });
