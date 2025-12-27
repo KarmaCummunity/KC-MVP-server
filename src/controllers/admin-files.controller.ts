@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards, Request } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -124,7 +124,7 @@ export class AdminFilesController {
 
     @Post()
     @UseGuards(JwtAuthGuard, AdminAuthGuard)
-    async uploadFile(@Body() dto: CreateFileDto) {
+    async uploadFile(@Body() dto: CreateFileDto, @Request() req: any) {
         await this.ensureTable();
 
         try {
@@ -138,9 +138,22 @@ export class AdminFilesController {
                 return { success: false, error: `File size exceeds maximum allowed size of ${MAX_FILE_SIZE / (1024 * 1024)}MB` };
             }
 
+            let userId = req.user?.userId;
+            // Validate UUID format
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!userId || !uuidRegex.test(userId)) {
+                // Try to resolve from body if available and valid
+                if (dto.uploaded_by && uuidRegex.test(dto.uploaded_by)) {
+                    userId = dto.uploaded_by;
+                } else {
+                    console.warn(`⚠️ uploadFile: Invalid or missing userId, setting to NULL. Received: ${userId}`);
+                    userId = null;
+                }
+            }
+
             const { rows } = await this.pool.query(
                 `INSERT INTO general_files (name, url, mime_type, size, folder_path, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6::UUID)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
                 [
                     dto.name,
@@ -148,7 +161,7 @@ export class AdminFilesController {
                     dto.mime_type || null,
                     dto.size || 0,
                     dto.folder_path || '/',
-                    dto.uploaded_by || null,
+                    userId,
                 ]
             );
 
