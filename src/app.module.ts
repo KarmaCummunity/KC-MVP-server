@@ -57,6 +57,7 @@ import { CrmController } from './controllers/crm.controller';
 import { AdminFilesController } from './controllers/admin-files.controller';
 import { AdminTablesController } from './controllers/admin-tables.controller';
 import { PostsController } from './controllers/posts.controller';
+import { NotificationsController } from './controllers/notifications.controller';
 import { AdminTablesService } from './services/admin-tables.service';
 
 @Module({
@@ -100,6 +101,7 @@ import { AdminTablesService } from './services/admin-tables.service';
     ItemsDeliveryController, // Items delivery and search
     UsersController,       // User profile management
     PostsController,       // Posts management
+    NotificationsController, // Notifications management
 
     // Analytics and monitoring
     StatsController,       // Statistics and analytics

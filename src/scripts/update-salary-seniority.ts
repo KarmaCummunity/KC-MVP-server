@@ -142,3 +142,4 @@ async function updateSalaryAndSeniority() {
 // Run the update
 updateSalaryAndSeniority();
 
+

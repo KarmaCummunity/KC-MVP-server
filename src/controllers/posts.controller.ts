@@ -195,7 +195,7 @@ export class PostsController {
 
             // Create SQL functions for updating counts
             console.log('📝 Ensuring SQL functions exist...');
-            
+
             // Function to update post likes count
             await this.pool.query(`
                 CREATE OR REPLACE FUNCTION update_post_likes_count()
@@ -428,7 +428,7 @@ export class PostsController {
 
             // Check if post exists
             const postCheck = await client.query(
-                'SELECT id FROM posts WHERE id = $1',
+                'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
                 [postId]
             );
             if (postCheck.rows.length === 0) {
@@ -438,7 +438,7 @@ export class PostsController {
 
             // Check if user exists
             const userCheck = await client.query(
-                'SELECT id FROM user_profiles WHERE id = $1',
+                'SELECT id, name FROM user_profiles WHERE id = $1',
                 [user_id]
             );
             if (userCheck.rows.length === 0) {
@@ -468,6 +468,28 @@ export class PostsController {
                     [postId, user_id]
                 );
                 isLiked = true;
+
+                // Send notification to post author if it's not the same user
+                const post = postCheck.rows[0];
+                const user = userCheck.rows[0];
+
+                if (post.author_id !== user_id) {
+                    const likerName = user.name || 'משתמש';
+                    const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
+
+                    await client.query(`
+                        INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT DO NOTHING
+                    `, [
+                        post.author_id,
+                        'לייק חדש!',
+                        `${likerName} אהב/ה את ה${postType} שלך: "${post.title}"`,
+                        'like',
+                        postId,
+                        { liker_id: user_id, post_id: postId }
+                    ]);
+                }
             }
 
             // Calculate likes count from post_likes table (more reliable than reading from posts.likes)
@@ -615,7 +637,7 @@ export class PostsController {
 
             // Check if post exists
             const postCheck = await client.query(
-                'SELECT id FROM posts WHERE id = $1',
+                'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
                 [postId]
             );
             if (postCheck.rows.length === 0) {
@@ -625,7 +647,7 @@ export class PostsController {
 
             // Check if user exists
             const userCheck = await client.query(
-                'SELECT id FROM user_profiles WHERE id = $1',
+                'SELECT id, name FROM user_profiles WHERE id = $1',
                 [user_id]
             );
             if (userCheck.rows.length === 0) {
@@ -659,6 +681,27 @@ export class PostsController {
                 'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
                 [commentsCount, postId]
             );
+
+            // Send notification to post author if not same user
+            const post = postCheck.rows[0];
+            const user = userCheck.rows[0];
+
+            if (post.author_id !== user_id) {
+                const commenterName = user.name || 'משתמש';
+                const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
+
+                await client.query(`
+                    INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                `, [
+                    post.author_id,
+                    'תגובה חדשה!',
+                    `${commenterName} הגיב/ה על ה${postType} שלך: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`,
+                    'comment',
+                    postId,
+                    { commenter_id: user_id, post_id: postId, comment_id: comment.id }
+                ]);
+            }
 
             await client.query('COMMIT');
 
@@ -919,7 +962,7 @@ export class PostsController {
 
             // Check if comment exists
             const commentCheck = await client.query(
-                'SELECT id FROM post_comments WHERE id = $1 AND post_id = $2',
+                'SELECT id, user_id, text FROM post_comments WHERE id = $1 AND post_id = $2',
                 [commentId, postId]
             );
             if (commentCheck.rows.length === 0) {
@@ -929,7 +972,7 @@ export class PostsController {
 
             // Check if user exists
             const userCheck = await client.query(
-                'SELECT id FROM user_profiles WHERE id = $1',
+                'SELECT id, name FROM user_profiles WHERE id = $1',
                 [user_id]
             );
             if (userCheck.rows.length === 0) {
@@ -959,6 +1002,27 @@ export class PostsController {
                     [commentId, user_id]
                 );
                 isLiked = true;
+
+                // Send notification to comment author if not same user
+                const comment = commentCheck.rows[0];
+                const user = userCheck.rows[0];
+
+                if (comment.user_id !== user_id) {
+                    const likerName = user.name || 'משתמש';
+
+                    await client.query(`
+                        INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT DO NOTHING
+                    `, [
+                        comment.user_id,
+                        'לייק לתגובה!',
+                        `${likerName} אהב/ה את התגובה שלך: "${comment.text.substring(0, 30)}${comment.text.length > 30 ? '...' : ''}"`,
+                        'like',
+                        postId,
+                        { liker_id: user_id, post_id: postId, comment_id: commentId }
+                    ]);
+                }
             }
 
             // Calculate likes count from comment_likes table (more reliable than reading from post_comments.likes_count)
