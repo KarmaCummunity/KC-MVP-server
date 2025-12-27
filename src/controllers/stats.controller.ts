@@ -403,6 +403,7 @@ export class StatsController {
   }
 
   @Get('dashboard')
+  @UseGuards(JwtAuthGuard)
   async getDashboardStats() {
     const cacheKey = 'dashboard_stats';
     const cached = await this.redisCache.get(cacheKey);
@@ -442,6 +443,45 @@ export class StatsController {
       WHERE email IS NOT NULL AND email <> ''
     `);
 
+    // Volunteer hours statistics - check if table exists first
+    let hoursStats: any;
+    try {
+      const tableExists = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'task_time_logs'
+        )
+      `);
+      
+      if (tableExists.rows[0].exists) {
+        hoursStats = await this.pool.query(`
+          SELECT 
+            COALESCE(SUM(actual_hours), 0)::NUMERIC as total_volunteer_hours,
+            COUNT(DISTINCT user_id) as users_with_hours,
+            COALESCE(
+              SUM(CASE 
+                WHEN logged_at >= DATE_TRUNC('month', NOW()) 
+                THEN actual_hours ELSE 0 
+              END), 0
+            )::NUMERIC as current_month_hours
+          FROM task_time_logs
+        `);
+      } else {
+        // Table doesn't exist - return zero values
+        hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
+      }
+    } catch (error) {
+      console.warn('Task time logs table check failed, using zero values:', error);
+      hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
+    }
+
+    const totalHours = parseFloat(hoursStats.rows[0]?.total_volunteer_hours || '0');
+    const usersWithHours = Number(hoursStats.rows[0]?.users_with_hours || 0);
+    const totalUsers = Number(usersStats.rows[0].total_users || 0);
+    const avgHoursPerUser = totalUsers > 0 ? totalHours / totalUsers : 0;
+    const currentMonthHours = parseFloat(hoursStats.rows[0]?.current_month_hours || '0');
+
     // Merge all metrics and convert to numbers
     const metrics = {
       // Tasks stats
@@ -451,10 +491,15 @@ export class StatsController {
       tasks_total: Number(tasksStats.rows[0].tasks_total || 0),
 
       // Users stats
-      total_users: Number(usersStats.rows[0].total_users || 0),
+      total_users: totalUsers,
       admins_count: Number(usersStats.rows[0].admins_count || 0),
       regular_users_count: Number(usersStats.rows[0].regular_users_count || 0),
       managers_with_subordinates: Number(usersStats.rows[0].managers_with_subordinates || 0),
+
+      // Volunteer hours stats
+      total_volunteer_hours: totalHours,
+      avg_hours_per_user: Math.round(avgHoursPerUser * 100) / 100, // Round to 2 decimal places
+      current_month_hours: currentMonthHours,
     };
 
     const dashboard = {

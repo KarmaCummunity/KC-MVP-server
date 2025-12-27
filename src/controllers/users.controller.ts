@@ -809,40 +809,93 @@ export class UsersController {
 
       const superAdmin = superAdminRows[0];
 
-      // Get all users with their hierarchy information
-      const { rows: allUsers } = await this.pool.query(`
-        WITH RECURSIVE hierarchy AS (
-          -- Base case: super admin (root)
+      // Try query with salary/seniority fields, fallback if columns don't exist
+      let allUsers: any[];
+      try {
+        const result = await this.pool.query(`
+          WITH RECURSIVE hierarchy AS (
+            -- Base case: super admin (root)
+            SELECT 
+              id, name, email, avatar_url, parent_manager_id, roles, salary, seniority_start_date,
+              0 as level,
+              ARRAY[id] as path
+            FROM user_profiles
+            WHERE email = 'navesarussi@gmail.com'
+            
+            UNION ALL
+            
+            -- Recursive: all subordinates
+            SELECT 
+              u.id, u.name, u.email, u.avatar_url, u.parent_manager_id, u.roles, u.salary, u.seniority_start_date,
+              h.level + 1,
+              h.path || u.id
+            FROM user_profiles u
+            INNER JOIN hierarchy h ON u.parent_manager_id = h.id
+            WHERE h.level < 10  -- Max depth to prevent infinite loops
+          )
           SELECT 
-            id, name, email, avatar_url, parent_manager_id, roles,
-            0 as level,
-            ARRAY[id] as path
-          FROM user_profiles
-          WHERE email = 'navesarussi@gmail.com'
-          
-          UNION ALL
-          
-          -- Recursive: all subordinates
-          SELECT 
-            u.id, u.name, u.email, u.avatar_url, u.parent_manager_id, u.roles,
-            h.level + 1,
-            h.path || u.id
-          FROM user_profiles u
-          INNER JOIN hierarchy h ON u.parent_manager_id = h.id
-          WHERE h.level < 10  -- Max depth to prevent infinite loops
-        )
-        SELECT 
-          id::text as id, 
-          COALESCE(name, 'ללא שם') as name, 
-          email, 
-          avatar_url, 
-          parent_manager_id::text as parent_manager_id, 
-          roles,
-          level,
-          CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
-        FROM hierarchy
-        ORDER BY level, name
-      `);
+            id::text as id, 
+            COALESCE(name, 'ללא שם') as name, 
+            email, 
+            avatar_url, 
+            parent_manager_id::text as parent_manager_id, 
+            roles,
+            level,
+            COALESCE(salary, 0) as salary,
+            COALESCE(seniority_start_date::text, CURRENT_DATE::text) as seniority_start_date,
+            CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
+          FROM hierarchy
+          ORDER BY level, name
+        `);
+        allUsers = result.rows;
+      } catch (error: any) {
+        // If columns don't exist, use query without them
+        if (error.message && error.message.includes('salary')) {
+          console.warn('Salary/seniority columns not found, using fallback query');
+          const result = await this.pool.query(`
+            WITH RECURSIVE hierarchy AS (
+              -- Base case: super admin (root)
+              SELECT 
+                id, name, email, avatar_url, parent_manager_id, roles,
+                0::DECIMAL(10,2) as salary,
+                CURRENT_DATE::DATE as seniority_start_date,
+                0 as level,
+                ARRAY[id] as path
+              FROM user_profiles
+              WHERE email = 'navesarussi@gmail.com'
+              
+              UNION ALL
+              
+              -- Recursive: all subordinates
+              SELECT 
+                u.id, u.name, u.email, u.avatar_url, u.parent_manager_id, u.roles,
+                0::DECIMAL(10,2) as salary,
+                CURRENT_DATE::DATE as seniority_start_date,
+                h.level + 1,
+                h.path || u.id
+              FROM user_profiles u
+              INNER JOIN hierarchy h ON u.parent_manager_id = h.id
+              WHERE h.level < 10  -- Max depth to prevent infinite loops
+            )
+            SELECT 
+              id::text as id, 
+              COALESCE(name, 'ללא שם') as name, 
+              email, 
+              avatar_url, 
+              parent_manager_id::text as parent_manager_id, 
+              roles,
+              level,
+              0 as salary,
+              CURRENT_DATE::text as seniority_start_date,
+              CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
+            FROM hierarchy
+            ORDER BY level, name
+          `);
+          allUsers = result.rows;
+        } else {
+          throw error;
+        }
+      }
 
       // Build nested tree structure
       const buildTree = (parentId: string | null, level: number): any[] => {
@@ -861,6 +914,8 @@ export class UsersController {
             level: user.level,
             isSuperAdmin: user.is_super_admin,
             isAdmin: Array.isArray(user.roles) && user.roles.includes('admin'),
+            salary: user.salary || 0,
+            seniority_start_date: user.seniority_start_date || new Date().toISOString().split('T')[0],
             children: buildTree(user.id, level + 1)
           }));
       };

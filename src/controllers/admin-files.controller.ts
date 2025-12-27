@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Inject } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 interface CreateFileDto {
     name: string;
@@ -60,6 +61,7 @@ export class AdminFilesController {
     }
 
     @Get()
+    @UseGuards(JwtAuthGuard)
     async getFiles(
         @Query('folder') folder?: string,
         @Query('search') search?: string,
@@ -106,6 +108,7 @@ export class AdminFilesController {
     }
 
     @Get('folders')
+    @UseGuards(JwtAuthGuard)
     async getFolders() {
         await this.ensureTable();
         try {
@@ -120,12 +123,19 @@ export class AdminFilesController {
     }
 
     @Post()
+    @UseGuards(JwtAuthGuard, AdminAuthGuard)
     async uploadFile(@Body() dto: CreateFileDto) {
         await this.ensureTable();
 
         try {
             if (!dto.name || !dto.url) {
                 return { success: false, error: 'Name and URL are required' };
+            }
+
+            // Validate file size if provided (max 10MB)
+            const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+            if (dto.size && dto.size > MAX_FILE_SIZE) {
+                return { success: false, error: `File size exceeds maximum allowed size of ${MAX_FILE_SIZE / (1024 * 1024)}MB` };
             }
 
             const { rows } = await this.pool.query(
@@ -151,6 +161,7 @@ export class AdminFilesController {
     }
 
     @Delete(':id')
+    @UseGuards(JwtAuthGuard, AdminAuthGuard)
     async deleteFile(@Param('id') id: string) {
         await this.ensureTable();
 

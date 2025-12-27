@@ -55,7 +55,9 @@ import { CommunityMembersController } from './controllers/community-members.cont
 import { SyncController } from './controllers/sync.controller';
 import { CrmController } from './controllers/crm.controller';
 import { AdminFilesController } from './controllers/admin-files.controller';
+import { AdminTablesController } from './controllers/admin-tables.controller';
 import { PostsController } from './controllers/posts.controller';
+import { AdminTablesService } from './services/admin-tables.service';
 
 @Module({
   imports: [
@@ -108,6 +110,7 @@ import { PostsController } from './controllers/posts.controller';
     SyncController,        // Firebase users sync
     CrmController,         // CRM / Relationship management
     AdminFilesController,  // Admin shared files
+    AdminTablesController, // Admin dynamic tables
 
     // Testing (TODO: Remove in production)
     RedisTestController,   // Redis connectivity testing
@@ -117,6 +120,8 @@ import { PostsController } from './controllers/posts.controller';
     DatabaseInit,
     // Items delivery service
     ItemsDeliveryService,
+    // Admin tables service
+    AdminTablesService,
   ],
 })
 export class AppModule { }

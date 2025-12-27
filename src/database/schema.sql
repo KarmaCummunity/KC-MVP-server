@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS user_profiles (
         "privacy": "public"
     }'::jsonb,
     parent_manager_id UUID, -- REFERENCES user_profiles(id) ON DELETE SET NULL, -- For hierarchy management
+    salary DECIMAL(10,2) DEFAULT 0, -- Manager salary in ILS
+    seniority_start_date DATE DEFAULT CURRENT_DATE, -- Start date for seniority calculation
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -60,6 +62,28 @@ BEGIN
                 ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_parent_manager_id_fkey FOREIGN KEY (parent_manager_id) REFERENCES user_profiles(id) ON DELETE SET NULL;
             END IF;
         END IF;
+    END IF;
+END $$;
+
+-- Ensure salary column exists (for existing tables that might not have it)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'salary'
+    ) THEN
+        ALTER TABLE user_profiles ADD COLUMN salary DECIMAL(10,2) DEFAULT 0;
+    END IF;
+END $$;
+
+-- Ensure seniority_start_date column exists (for existing tables that might not have it)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'user_profiles' AND column_name = 'seniority_start_date'
+    ) THEN
+        ALTER TABLE user_profiles ADD COLUMN seniority_start_date DATE DEFAULT CURRENT_DATE;
     END IF;
 END $$;
 
@@ -410,6 +434,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     checklist JSONB, -- [{id, text, done}]
     created_by UUID, -- REFERENCES user_profiles(id), -- UUID to match user_profiles.id type
     parent_task_id UUID, -- REFERENCES tasks(id) ON DELETE CASCADE, -- For subtasks hierarchy
+    estimated_hours NUMERIC(10,2), -- Estimated hours for task completion
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -455,6 +480,21 @@ END $$;
 
 DROP TRIGGER IF EXISTS update_tasks_updated_at ON tasks;
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Task time logs table for tracking actual hours worked on tasks
+CREATE TABLE IF NOT EXISTS task_time_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    actual_hours NUMERIC(10,2) NOT NULL CHECK (actual_hours > 0),
+    logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(task_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_id ON task_time_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_task_time_logs_logged_at ON task_time_logs(logged_at DESC);
 
 -- Posts table for user posts and task-related posts
 CREATE TABLE IF NOT EXISTS posts (
@@ -918,4 +958,60 @@ CREATE TRIGGER update_community_members_updated_at BEFORE UPDATE ON community_me
 
 -- NOTE: links table has been removed - it contained duplicate user/item data
 -- All user data is now unified in user_profiles table with UUID identifiers
+
+-- Admin Dynamic Tables - Custom tables management for admins
+CREATE TABLE IF NOT EXISTS admin_tables (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    created_by UUID, -- REFERENCES user_profiles(id) ON DELETE SET NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Admin Table Columns - Column definitions for each table
+CREATE TABLE IF NOT EXISTS admin_table_columns (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    table_id UUID NOT NULL, -- REFERENCES admin_tables(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    data_type VARCHAR(20) NOT NULL CHECK (data_type IN ('text', 'number', 'date')),
+    is_required BOOLEAN DEFAULT false,
+    display_order INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT unique_table_column_name UNIQUE (table_id, name)
+);
+
+-- Admin Table Rows - Data rows for each table
+CREATE TABLE IF NOT EXISTS admin_table_rows (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    table_id UUID NOT NULL, -- REFERENCES admin_tables(id) ON DELETE CASCADE,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by UUID, -- REFERENCES user_profiles(id) ON DELETE SET NULL,
+    updated_by UUID, -- REFERENCES user_profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for admin_tables
+CREATE INDEX IF NOT EXISTS idx_admin_tables_created_by ON admin_tables(created_by);
+CREATE INDEX IF NOT EXISTS idx_admin_tables_created_at ON admin_tables(created_at DESC);
+
+-- Indexes for admin_table_columns
+CREATE INDEX IF NOT EXISTS idx_admin_table_columns_table_id ON admin_table_columns(table_id);
+CREATE INDEX IF NOT EXISTS idx_admin_table_columns_display_order ON admin_table_columns(table_id, display_order);
+
+-- Indexes for admin_table_rows
+CREATE INDEX IF NOT EXISTS idx_admin_table_rows_table_id ON admin_table_rows(table_id);
+CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_by ON admin_table_rows(created_by);
+CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_at ON admin_table_rows(table_id, created_at DESC);
+-- GIN index for fast JSONB queries
+CREATE INDEX IF NOT EXISTS idx_admin_table_rows_data_gin ON admin_table_rows USING GIN (data);
+
+-- Triggers for updated_at timestamps
+DROP TRIGGER IF EXISTS update_admin_tables_updated_at ON admin_tables;
+CREATE TRIGGER update_admin_tables_updated_at BEFORE UPDATE ON admin_tables FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_admin_table_rows_updated_at ON admin_table_rows;
+CREATE TRIGGER update_admin_table_rows_updated_at BEFORE UPDATE ON admin_table_rows FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

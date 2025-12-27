@@ -157,16 +157,141 @@ export class PostsController {
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
                         user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                        text TEXT NOT NULL,
+                        text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
                         likes_count INTEGER DEFAULT 0,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
                     CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
                     CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
                 `);
                 console.log('✅ post_comments table created');
             }
+
+            // Check if comment_likes table exists
+            const commentLikesTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'comment_likes'
+                ) AS exists;
+            `);
+
+            if (!commentLikesTableCheck.rows[0]?.exists) {
+                console.log('📝 Creating comment_likes table...');
+                await this.pool.query(`
+                    CREATE TABLE IF NOT EXISTS comment_likes (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(comment_id, user_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
+                    CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);
+                `);
+                console.log('✅ comment_likes table created');
+            }
+
+            // Create SQL functions for updating counts
+            console.log('📝 Ensuring SQL functions exist...');
+            
+            // Function to update post likes count
+            await this.pool.query(`
+                CREATE OR REPLACE FUNCTION update_post_likes_count()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF TG_OP = 'INSERT' THEN
+                        UPDATE posts SET likes = likes + 1, updated_at = NOW() WHERE id = NEW.post_id;
+                        RETURN NEW;
+                    ELSIF TG_OP = 'DELETE' THEN
+                        UPDATE posts SET likes = GREATEST(0, likes - 1), updated_at = NOW() WHERE id = OLD.post_id;
+                        RETURN OLD;
+                    END IF;
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+            `);
+
+            // Function to update post comments count
+            await this.pool.query(`
+                CREATE OR REPLACE FUNCTION update_post_comments_count()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF TG_OP = 'INSERT' THEN
+                        UPDATE posts SET comments = comments + 1, updated_at = NOW() WHERE id = NEW.post_id;
+                        RETURN NEW;
+                    ELSIF TG_OP = 'DELETE' THEN
+                        UPDATE posts SET comments = GREATEST(0, comments - 1), updated_at = NOW() WHERE id = OLD.post_id;
+                        RETURN OLD;
+                    END IF;
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+            `);
+
+            // Function to update comment likes count
+            await this.pool.query(`
+                CREATE OR REPLACE FUNCTION update_comment_likes_count()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    IF TG_OP = 'INSERT' THEN
+                        UPDATE post_comments SET likes_count = likes_count + 1, updated_at = NOW() WHERE id = NEW.comment_id;
+                        RETURN NEW;
+                    ELSIF TG_OP = 'DELETE' THEN
+                        UPDATE post_comments SET likes_count = GREATEST(0, likes_count - 1), updated_at = NOW() WHERE id = OLD.comment_id;
+                        RETURN OLD;
+                    END IF;
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+            `);
+
+            console.log('✅ SQL functions ensured');
+
+            // Create triggers
+            console.log('📝 Ensuring triggers exist...');
+
+            // Trigger for post_likes
+            await this.pool.query(`
+                DROP TRIGGER IF EXISTS trigger_update_post_likes_count ON post_likes;
+                CREATE TRIGGER trigger_update_post_likes_count
+                    AFTER INSERT OR DELETE ON post_likes
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_post_likes_count();
+            `);
+
+            // Trigger for post_comments
+            await this.pool.query(`
+                DROP TRIGGER IF EXISTS trigger_update_post_comments_count ON post_comments;
+                CREATE TRIGGER trigger_update_post_comments_count
+                    AFTER INSERT OR DELETE ON post_comments
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_post_comments_count();
+            `);
+
+            // Trigger for comment_likes
+            await this.pool.query(`
+                DROP TRIGGER IF EXISTS trigger_update_comment_likes_count ON comment_likes;
+                CREATE TRIGGER trigger_update_comment_likes_count
+                    AFTER INSERT OR DELETE ON comment_likes
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_comment_likes_count();
+            `);
+
+            // Trigger for post_comments updated_at
+            await this.pool.query(`
+                DROP TRIGGER IF EXISTS update_post_comments_updated_at ON post_comments;
+                CREATE TRIGGER update_post_comments_updated_at 
+                    BEFORE UPDATE ON post_comments 
+                    FOR EACH ROW 
+                    EXECUTE FUNCTION update_updated_at_column();
+            `).catch(() => {
+                // Function might not exist, that's okay
+                console.log('⚠️ update_updated_at_column function not found, skipping trigger');
+            });
+
+            console.log('✅ Triggers ensured');
         } catch (error) {
             console.error('❌ Failed to ensure likes/comments tables:', error);
         }
@@ -193,7 +318,10 @@ export class PostsController {
             let query = `
                 SELECT 
                     p.*,
-                    json_build_object('id', u.id, 'name', u.name, 'avatar_url', u.avatar_url) as author,
+                    CASE 
+                        WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
+                        ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
+                    END as author,
                     CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
             `;
 
@@ -209,7 +337,7 @@ export class PostsController {
 
             query += `
                 FROM posts p
-                JOIN user_profiles u ON p.author_id = u.id
+                LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
                 ORDER BY p.created_at DESC
                 LIMIT $1 OFFSET $2
@@ -240,7 +368,10 @@ export class PostsController {
             let query = `
                 SELECT 
                     p.*,
-                    json_build_object('id', u.id, 'name', u.name, 'avatar_url', u.avatar_url) as author,
+                    CASE 
+                        WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
+                        ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
+                    END as author,
                     CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
             `;
 
@@ -256,7 +387,7 @@ export class PostsController {
 
             query += `
                 FROM posts p
-                JOIN user_profiles u ON p.author_id = u.id
+                LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
                 WHERE p.author_id = $1
                 ORDER BY p.created_at DESC
@@ -295,6 +426,26 @@ export class PostsController {
 
             await client.query('BEGIN');
 
+            // Check if post exists
+            const postCheck = await client.query(
+                'SELECT id FROM posts WHERE id = $1',
+                [postId]
+            );
+            if (postCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
+
             // Check if like already exists
             const existingLike = await client.query(
                 'SELECT id FROM post_likes WHERE post_id = $1 AND user_id = $2',
@@ -302,7 +453,6 @@ export class PostsController {
             );
 
             let isLiked: boolean;
-            let likesCount: number;
 
             if (existingLike.rows.length > 0) {
                 // Unlike - remove the like
@@ -320,12 +470,18 @@ export class PostsController {
                 isLiked = true;
             }
 
-            // Get updated likes count
+            // Calculate likes count from post_likes table (more reliable than reading from posts.likes)
             const countResult = await client.query(
-                'SELECT likes FROM posts WHERE id = $1',
+                'SELECT COUNT(*)::int as count FROM post_likes WHERE post_id = $1',
                 [postId]
             );
-            likesCount = countResult.rows[0]?.likes || 0;
+            const likesCount = countResult.rows[0]?.count || 0;
+
+            // Update posts.likes manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET likes = $1, updated_at = NOW() WHERE id = $2',
+                [likesCount, postId]
+            );
 
             await client.query('COMMIT');
 
@@ -457,6 +613,26 @@ export class PostsController {
 
             await client.query('BEGIN');
 
+            // Check if post exists
+            const postCheck = await client.query(
+                'SELECT id FROM posts WHERE id = $1',
+                [postId]
+            );
+            if (postCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
+
             // Insert comment
             const { rows } = await client.query(`
                 INSERT INTO post_comments (post_id, user_id, text)
@@ -471,10 +647,17 @@ export class PostsController {
                 SELECT id, name, avatar_url FROM user_profiles WHERE id = $1
             `, [user_id]);
 
-            // Get updated comments count
+            // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
             const countResult = await client.query(
-                'SELECT comments FROM posts WHERE id = $1',
+                'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
                 [postId]
+            );
+            const commentsCount = countResult.rows[0]?.count || 0;
+
+            // Update posts.comments manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
+                [commentsCount, postId]
             );
 
             await client.query('COMMIT');
@@ -487,7 +670,7 @@ export class PostsController {
                 data: {
                     ...comment,
                     user: userResult.rows[0] || null,
-                    comments_count: countResult.rows[0]?.comments || 0
+                    comments_count: commentsCount
                 }
             };
         } catch (error) {
@@ -674,10 +857,17 @@ export class PostsController {
                 [commentId]
             );
 
-            // Get updated comments count
+            // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
             const countResult = await client.query(
-                'SELECT comments FROM posts WHERE id = $1',
+                'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
                 [postId]
+            );
+            const commentsCount = countResult.rows[0]?.count || 0;
+
+            // Update posts.comments manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
+                [commentsCount, postId]
             );
 
             await client.query('COMMIT');
@@ -689,7 +879,7 @@ export class PostsController {
                 success: true,
                 data: {
                     deleted_comment_id: commentId,
-                    comments_count: countResult.rows[0]?.comments || 0
+                    comments_count: commentsCount
                 }
             };
         } catch (error) {
@@ -720,23 +910,32 @@ export class PostsController {
         try {
             await this.ensureLikesCommentsTable();
 
-            // Ensure comment_likes table exists
-            await client.query(`
-                CREATE TABLE IF NOT EXISTS comment_likes (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
-                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(comment_id, user_id)
-                );
-            `);
-
             const { user_id } = body;
             if (!user_id) {
                 return { success: false, error: 'user_id is required' };
             }
 
             await client.query('BEGIN');
+
+            // Check if comment exists
+            const commentCheck = await client.query(
+                'SELECT id FROM post_comments WHERE id = $1 AND post_id = $2',
+                [commentId, postId]
+            );
+            if (commentCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Comment not found' };
+            }
+
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
 
             // Check if like already exists
             const existingLike = await client.query(
@@ -762,10 +961,17 @@ export class PostsController {
                 isLiked = true;
             }
 
-            // Get updated likes count
+            // Calculate likes count from comment_likes table (more reliable than reading from post_comments.likes_count)
             const countResult = await client.query(
-                'SELECT likes_count FROM post_comments WHERE id = $1',
+                'SELECT COUNT(*)::int as count FROM comment_likes WHERE comment_id = $1',
                 [commentId]
+            );
+            const likesCount = countResult.rows[0]?.count || 0;
+
+            // Update post_comments.likes_count manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE post_comments SET likes_count = $1, updated_at = NOW() WHERE id = $2',
+                [likesCount, commentId]
             );
 
             await client.query('COMMIT');
@@ -775,7 +981,7 @@ export class PostsController {
                 data: {
                     comment_id: commentId,
                     is_liked: isLiked,
-                    likes_count: countResult.rows[0]?.likes_count || 0
+                    likes_count: likesCount
                 }
             };
         } catch (error) {
