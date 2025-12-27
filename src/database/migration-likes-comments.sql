@@ -117,3 +117,5 @@ CREATE TRIGGER trigger_update_comment_likes_count
     FOR EACH ROW
     EXECUTE FUNCTION update_comment_likes_count();
 
+
+
