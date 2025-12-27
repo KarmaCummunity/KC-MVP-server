@@ -401,7 +401,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(255) NOT NULL,
     description TEXT,
-    status VARCHAR(20) NOT NULL DEFAULT 'open', -- open, in_progress, done, archived
+    status VARCHAR(20) NOT NULL DEFAULT 'open', -- open, in_progress, stuck, testing, done, archived
     priority VARCHAR(10) NOT NULL DEFAULT 'medium', -- low, medium, high
     category VARCHAR(50), -- development, marketing, operations, etc.
     due_date TIMESTAMPTZ,

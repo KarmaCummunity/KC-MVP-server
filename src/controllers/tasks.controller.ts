@@ -11,7 +11,7 @@ import { UserResolutionService } from '../services/user-resolution.service';
 import { ItemsService } from '../items/items.service';
 import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
-type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived';
+type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived' | 'stuck' | 'testing';
 type TaskPriority = 'low' | 'medium' | 'high';
 
 @Controller('/api/tasks')
