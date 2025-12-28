@@ -4,7 +4,7 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 # Dockerfile 'CMD' will be used to start the app (providing better logging)
-# startCommand = "node dist/main.js"
+startCommand = "node dist/main.js"
 
 # Healthcheck to verify the server is actually up nicely
 healthcheckPath = "/health"
