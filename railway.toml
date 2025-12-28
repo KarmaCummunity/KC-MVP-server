@@ -1,10 +1,12 @@
+```
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
 # startCommand = "node dist/main.js"
-startCommand = "node dist/minimal-server.js"
+# Start command override
+startCommand = "node minimal-server.js"
 
 # Healthcheck to verify the server is actually up nicely
 healthcheckPath = "/health"

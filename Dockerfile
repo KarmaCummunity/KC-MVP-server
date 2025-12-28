@@ -30,5 +30,6 @@ RUN mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ || tr
 EXPOSE 3001
 
 # Use shell form to enable logging
-CMD ["sh", "-c", "echo '🚀 Container starting...' && echo '📍 Node version:' $(node --version) && echo '📁 Working directory:' $(pwd) && echo '🎬 Starting application...' && exec node dist/main.js"]
+# Simplified CMD for debugging
+CMD ["node", "minimal-server.js"]
 
