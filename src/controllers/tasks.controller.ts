@@ -11,7 +11,7 @@ import { UserResolutionService } from '../services/user-resolution.service';
 import { ItemsService } from '../items/items.service';
 import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
-type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived';
+type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived' | 'stuck' | 'testing';
 type TaskPriority = 'low' | 'medium' | 'high';
 
 @Controller('/api/tasks')
@@ -147,7 +147,26 @@ export class TasksController {
         )
       `);
 
-      // 2. Ensure INDEXES (Idempotent)
+      // 2. Ensure estimated_hours column exists (for existing tables)
+      try {
+        await this.pool.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'tasks' AND column_name = 'estimated_hours'
+            ) THEN
+              ALTER TABLE tasks ADD COLUMN estimated_hours NUMERIC(10,2);
+              -- Set default value of 0 for existing tasks
+              UPDATE tasks SET estimated_hours = 0 WHERE estimated_hours IS NULL;
+            END IF;
+          END $$;
+        `);
+      } catch (e) {
+        console.warn('⚠️ Could not ensure estimated_hours column:', e);
+      }
+
+      // 3. Ensure INDEXES (Idempotent)
       // Some simple manual index checks
       const indexes = [
         'idx_tasks_status ON tasks (status)',
@@ -164,7 +183,29 @@ export class TasksController {
         } catch (e) { /* ignore */ }
       }
 
-      // 3. Ensure NOTIFICATIONS table (Idempotent)
+      // 4. Ensure task_time_logs table exists
+      try {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS task_time_logs (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+            actual_hours NUMERIC(10,2) NOT NULL CHECK (actual_hours > 0),
+            logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(task_id, user_id)
+          )
+        `);
+        
+        // Create indexes for task_time_logs
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_id ON task_time_logs(task_id)`);
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id)`);
+        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_logged_at ON task_time_logs(logged_at DESC)`);
+      } catch (e) {
+        console.warn('⚠️ Could not ensure task_time_logs table:', e);
+      }
+
+      // 5. Ensure NOTIFICATIONS table (Idempotent)
       await this.pool.query(`
         CREATE TABLE IF NOT EXISTS notifications (
             user_id TEXT NOT NULL,
@@ -250,6 +291,7 @@ export class TasksController {
    * Cache TTL: 10 minutes (tasks change moderately frequently)
    */
   @Get()
+  @UseGuards(JwtAuthGuard)
   async listTasks(
     @Query('status') status?: TaskStatus,
     @Query('priority') priority?: TaskPriority,
@@ -338,9 +380,23 @@ export class TasksController {
 
       const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
+      // Check if task_time_logs table exists
+      const tableExists = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'task_time_logs'
+        )
+      `);
+      const hasTimeLogs = tableExists.rows[0].exists;
+
+      const actualHoursSubquery = hasTimeLogs 
+        ? `COALESCE((SELECT SUM(actual_hours)::NUMERIC FROM task_time_logs WHERE task_id = t.id), 0) as actual_hours`
+        : `0::NUMERIC as actual_hours`;
+
       const sql = `
         SELECT 
-            t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.created_at, t.updated_at,
+            t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.estimated_hours, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
              FROM user_profiles u 
              WHERE u.id::text = t.created_by::text 
@@ -351,7 +407,8 @@ export class TasksController {
              FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details,
             (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id) as subtask_count,
             (SELECT json_build_object('id', pt.id, 'title', pt.title) 
-             FROM tasks pt WHERE pt.id = t.parent_task_id) as parent_task_details
+             FROM tasks pt WHERE pt.id = t.parent_task_id) as parent_task_details,
+            ${actualHoursSubquery}
         FROM tasks t
         ${where}
         ORDER BY 
@@ -424,6 +481,7 @@ export class TasksController {
    * Cache TTL: 15 minutes
    */
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   async getTask(@Param('id') id: string) {
     try {
       // Ensure table exists before querying
@@ -451,7 +509,7 @@ export class TasksController {
 
       const { rows } = await this.pool.query(
         `SELECT 
-            t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.created_by, t.parent_task_id, t.created_at, t.updated_at,
+            t.id, t.title, t.description, t.status, t.priority, t.category, t.due_date, t.assignees, t.tags, t.checklist, t.created_by, t.parent_task_id, t.estimated_hours, t.created_at, t.updated_at,
             (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
              FROM user_profiles u 
              WHERE u.id::text = t.created_by::text 
@@ -459,7 +517,8 @@ export class TasksController {
                 OR u.google_id = t.created_by::text
              LIMIT 1) as creator_details,
             (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
-             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details
+             FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details,
+            COALESCE((SELECT SUM(actual_hours)::NUMERIC FROM task_time_logs WHERE task_id = t.id), 0) as actual_hours
          FROM tasks t WHERE t.id = $1`,
         [id],
       );
@@ -489,6 +548,7 @@ export class TasksController {
    * GET /api/tasks/:id/subtasks
    */
   @Get(':id/subtasks')
+  @UseGuards(JwtAuthGuard)
   async getSubtasks(@Param('id') parentId: string) {
     try {
       await this.ensureTasksTable();
@@ -502,13 +562,14 @@ export class TasksController {
       const { rows } = await this.pool.query(`
         SELECT 
           t.id, t.title, t.description, t.status, t.priority, t.category, 
-          t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
+          t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.estimated_hours,
           t.created_at, t.updated_at,
           (SELECT json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url) 
            FROM user_profiles u WHERE u.id = CAST(t.created_by AS UUID)) as creator_details,
           (SELECT json_agg(json_build_object('id', u.id, 'name', u.name, 'email', u.email, 'avatar_url', u.avatar_url)) 
            FROM user_profiles u WHERE u.id = ANY(t.assignees::UUID[])) as assignees_details,
-          (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id) as subtask_count
+          (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = t.id) as subtask_count,
+          COALESCE((SELECT SUM(actual_hours)::NUMERIC FROM task_time_logs WHERE task_id = t.id), 0) as actual_hours
         FROM tasks t
         WHERE t.parent_task_id = $1
         ORDER BY 
@@ -532,6 +593,7 @@ export class TasksController {
    * GET /api/tasks/:id/tree
    */
   @Get(':id/tree')
+  @UseGuards(JwtAuthGuard)
   async getTaskTree(@Param('id') rootId: string) {
     try {
       await this.ensureTasksTable();
@@ -549,7 +611,7 @@ export class TasksController {
           SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, 
             t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
-            t.created_by, t.created_at, t.updated_at,
+            t.estimated_hours, t.created_by, t.created_at, t.updated_at,
             0 as level,
             ARRAY[t.id] as path
           FROM tasks t
@@ -561,7 +623,7 @@ export class TasksController {
           SELECT 
             t.id, t.title, t.description, t.status, t.priority, t.category, 
             t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, 
-            t.created_by, t.created_at, t.updated_at,
+            t.estimated_hours, t.created_by, t.created_at, t.updated_at,
             tt.level + 1,
             tt.path || t.id
           FROM tasks t
@@ -591,7 +653,7 @@ export class TasksController {
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminAuthGuard)
   async createTask(@Body() body: any) {
     try {
       // Ensure table exists before inserting
@@ -611,6 +673,7 @@ export class TasksController {
         checkList = null,
         created_by = null,
         parent_task_id = null,
+        estimated_hours = null,
       } = body || {};
 
       if (!title || typeof title !== 'string' || !title.trim()) {
@@ -717,10 +780,20 @@ export class TasksController {
       console.log('✅ Hierarchy permission check passed for all assignees');
 
 
+      // Validate estimated_hours if provided
+      let parsedEstimatedHours = null;
+      if (estimated_hours !== null && estimated_hours !== undefined) {
+        const hours = parseFloat(String(estimated_hours));
+        if (isNaN(hours) || hours < 0) {
+          return { success: false, error: 'estimated_hours must be a non-negative number' };
+        }
+        parsedEstimatedHours = hours;
+      }
+
       const sql = `
-        INSERT INTO tasks (title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::UUID[], $8::TEXT[], $9::JSONB, $10::UUID, $11::UUID)
-        RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, created_at, updated_at
+        INSERT INTO tasks (title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, estimated_hours)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::UUID[], $8::TEXT[], $9::JSONB, $10::UUID, $11::UUID, $12::NUMERIC)
+        RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, estimated_hours, created_at, updated_at
       `;
       const params = [
         title.trim(),
@@ -734,6 +807,7 @@ export class TasksController {
         checklist,
         createdByUuid,
         parent_task_id || null,
+        parsedEstimatedHours,
       ];
 
       console.log(`🚀 Executing INSERT SQL with params:`, JSON.stringify(params));
@@ -868,8 +942,88 @@ export class TasksController {
     }
   }
 
-  @Patch(':id')
+  /**
+   * Log hours worked on a task
+   * POST /api/tasks/:id/log-hours
+   * Note: Must be before @Patch(':id') to ensure proper route matching
+   */
+  @Post(':id/log-hours')
   @UseGuards(JwtAuthGuard)
+  async logTaskHours(@Param('id') taskId: string, @Body() body: any) {
+    try {
+      // Ensure task_time_logs table exists
+      await this.ensureTasksTable();
+
+      // Validate UUID format
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(taskId)) {
+        return { success: false, error: 'Invalid task ID format' };
+      }
+
+      const { hours, user_id } = body || {};
+
+      if (!hours || typeof hours !== 'number' || hours <= 0) {
+        return { success: false, error: 'hours must be a positive number' };
+      }
+
+      if (!user_id) {
+        return { success: false, error: 'user_id is required' };
+      }
+
+      // Resolve user_id to UUID
+      const userIdUuid = await this.resolveUserIdToUUID(user_id);
+      if (!userIdUuid) {
+        return { success: false, error: 'Invalid user_id' };
+      }
+
+      // Verify task exists
+      const taskCheck = await this.pool.query('SELECT id FROM tasks WHERE id = $1', [taskId]);
+      if (!taskCheck.rows[0]) {
+        return { success: false, error: 'Task not found' };
+      }
+
+      // Check if table exists before inserting
+      const tableExists = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'task_time_logs'
+        )
+      `);
+
+      if (!tableExists.rows[0].exists) {
+        return { success: false, error: 'Time logging is not available - table not initialized' };
+      }
+
+      // Insert or update time log (using ON CONFLICT for unique constraint)
+      const { rows } = await this.pool.query(`
+        INSERT INTO task_time_logs (task_id, user_id, actual_hours, logged_at)
+        VALUES ($1, $2, $3::NUMERIC, NOW())
+        ON CONFLICT (task_id, user_id)
+        DO UPDATE SET actual_hours = EXCLUDED.actual_hours, logged_at = NOW()
+        RETURNING id, task_id, user_id, actual_hours, logged_at, created_at
+      `, [taskId, userIdUuid, hours]);
+
+      // Clear task cache
+      try {
+        await this.redisCache.delete(`task_${taskId}`);
+        await this.clearTaskCaches();
+      } catch (cacheError) {
+        console.warn('Redis cache delete error (non-fatal):', cacheError);
+      }
+
+      return { success: true, data: rows[0] };
+    } catch (error) {
+      console.error('Error logging task hours:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to log task hours',
+      };
+    }
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, AdminAuthGuard)
   async updateTask(@Param('id') id: string, @Body() body: any) {
     try {
       // Ensure table exists before updating
@@ -881,13 +1035,45 @@ export class TasksController {
         return { success: false, error: 'Invalid task ID format' };
       }
 
-      // Fetch OLD task to compare assignees
-      const oldTaskRes = await this.pool.query('SELECT assignees FROM tasks WHERE id = $1', [id]);
+      // Fetch OLD task to compare assignees and check current status
+      const oldTaskRes = await this.pool.query('SELECT assignees, status FROM tasks WHERE id = $1', [id]);
+      if (!oldTaskRes.rows[0]) {
+        return { success: false, error: 'Task not found' };
+      }
       const oldAssignees: string[] = oldTaskRes.rows[0]?.assignees || [];
+      const oldStatus: string = oldTaskRes.rows[0]?.status || 'open';
 
       // Validate status if provided
-      if (body.status && !['open', 'in_progress', 'done', 'archived'].includes(body.status)) {
+      if (body.status && !['open', 'in_progress', 'done', 'archived', 'stuck', 'testing'].includes(body.status)) {
         return { success: false, error: 'Invalid status value' };
+      }
+
+      // Check if status is changing to 'done' - require time log (only if table exists)
+      if (body.status === 'done' && oldStatus !== 'done') {
+        const tableExists = await this.pool.query(`
+          SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'task_time_logs'
+          )
+        `);
+        
+        if (tableExists.rows[0].exists) {
+          // Check if there's a time log for this task
+          const timeLogCheck = await this.pool.query(
+            'SELECT COUNT(*) as count FROM task_time_logs WHERE task_id = $1',
+            [id]
+          );
+          const hasTimeLog = parseInt(timeLogCheck.rows[0]?.count || '0', 10) > 0;
+          if (!hasTimeLog) {
+            return {
+              success: false,
+              error: 'נדרש לרשום שעות עבודה לפני סימון המשימה כבוצעה. אנא מלא את שעות העבודה בפועל.',
+              requiresHoursLog: true,
+            };
+          }
+        }
+        // If table doesn't exist, skip the time log requirement
       }
 
       // Validate priority if provided
@@ -923,6 +1109,7 @@ export class TasksController {
         'assigneesEmails',
         'tags',
         'checklist',
+        'estimated_hours',
       ] as const;
       const sets: string[] = [];
       const params: any[] = [];
@@ -964,6 +1151,23 @@ export class TasksController {
           if (body.due_date !== undefined) {
             params.push(parsedDueDate);
             sets.push(`due_date = $${params.length}`);
+          }
+          continue;
+        }
+
+        if (key === 'estimated_hours') {
+          // Handle estimated_hours separately with validation
+          if (body.estimated_hours !== undefined) {
+            let parsedHours = null;
+            if (body.estimated_hours !== null) {
+              const hours = parseFloat(String(body.estimated_hours));
+              if (isNaN(hours) || hours < 0) {
+                return { success: false, error: 'estimated_hours must be a non-negative number' };
+              }
+              parsedHours = hours;
+            }
+            params.push(parsedHours);
+            sets.push(`estimated_hours = $${params.length}::NUMERIC`);
           }
           continue;
         }
@@ -1024,7 +1228,7 @@ export class TasksController {
       const sql = `
         UPDATE tasks SET ${sets.join(', ')}, updated_at = NOW()
         WHERE id = $${params.length}
-        RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, created_at, updated_at
+        RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, estimated_hours, created_at, updated_at
       `;
 
       console.log('🚀 Executing SQL:', sql, params);
@@ -1196,7 +1400,7 @@ export class TasksController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AdminAuthGuard)
   async deleteTask(@Param('id') id: string) {
     try {
       // Ensure table exists before deleting
@@ -1240,6 +1444,154 @@ export class TasksController {
       await this.redisCache.invalidatePattern('tasks_list_*');
     } catch (cacheError) {
       console.warn('Redis cache invalidation error (non-fatal):', cacheError);
+    }
+  }
+
+  /**
+   * Get hours report for a manager and their team
+   * GET /api/tasks/hours-report/:managerId
+   */
+  @Get('hours-report/:managerId')
+  @UseGuards(JwtAuthGuard)
+  async getHoursReport(@Param('managerId') managerId: string) {
+    try {
+      // Ensure task_time_logs table exists
+      await this.ensureTasksTable();
+
+      // Check if task_time_logs table exists
+      const tableExists = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'task_time_logs'
+        )
+      `);
+
+      if (!tableExists.rows[0].exists) {
+        // Table doesn't exist - return empty report
+        return {
+          success: true,
+          data: {
+            manager_hours: 0,
+            team_total_hours: 0,
+            by_task: [],
+            by_period: [],
+            by_user: [],
+          },
+        };
+      }
+
+      // Resolve managerId to UUID
+      const managerUuid = await this.resolveUserIdToUUID(managerId);
+      if (!managerUuid) {
+        return { success: false, error: 'Invalid manager ID' };
+      }
+
+      // Get all subordinates (recursive)
+      const { rows: subordinates } = await this.pool.query(`
+        WITH RECURSIVE subordinates AS (
+          SELECT id, name, email
+          FROM user_profiles
+          WHERE parent_manager_id = $1
+          
+          UNION ALL
+          
+          SELECT u.id, u.name, u.email
+          FROM user_profiles u
+          INNER JOIN subordinates s ON u.parent_manager_id = s.id
+        )
+        SELECT id, name, email FROM subordinates
+      `, [managerUuid]);
+
+      const teamUserIds = [managerUuid, ...subordinates.map((s: any) => s.id)];
+
+      // Get manager's own hours
+      const managerHoursRes = await this.pool.query(`
+        SELECT COALESCE(SUM(actual_hours), 0)::NUMERIC as total_hours
+        FROM task_time_logs
+        WHERE user_id = $1
+      `, [managerUuid]);
+      const managerHours = parseFloat(managerHoursRes.rows[0]?.total_hours || '0');
+
+      // Get team total hours
+      const teamHoursRes = await this.pool.query(`
+        SELECT COALESCE(SUM(actual_hours), 0)::NUMERIC as total_hours
+        FROM task_time_logs
+        WHERE user_id = ANY($1::UUID[])
+      `, [teamUserIds]);
+      const teamTotalHours = parseFloat(teamHoursRes.rows[0]?.total_hours || '0');
+
+      // Get hours by task
+      const hoursByTaskRes = await this.pool.query(`
+        SELECT 
+          t.id as task_id,
+          t.title as task_title,
+          COALESCE(SUM(ttl.actual_hours), 0)::NUMERIC as hours
+        FROM tasks t
+        INNER JOIN task_time_logs ttl ON t.id = ttl.task_id
+        WHERE ttl.user_id = ANY($1::UUID[])
+        GROUP BY t.id, t.title
+        ORDER BY hours DESC
+      `, [teamUserIds]);
+
+      // Get hours by period (month)
+      const hoursByPeriodRes = await this.pool.query(`
+        SELECT 
+          TO_CHAR(logged_at, 'YYYY-MM') as period,
+          COALESCE(SUM(actual_hours), 0)::NUMERIC as hours
+        FROM task_time_logs
+        WHERE user_id = ANY($1::UUID[])
+        GROUP BY TO_CHAR(logged_at, 'YYYY-MM')
+        ORDER BY period DESC
+        LIMIT 12
+      `, [teamUserIds]);
+
+      // Get hours by user
+      const hoursByUserRes = await this.pool.query(`
+        SELECT 
+          u.id as user_id,
+          u.name as user_name,
+          COALESCE(SUM(ttl.actual_hours), 0)::NUMERIC as hours
+        FROM user_profiles u
+        LEFT JOIN task_time_logs ttl ON u.id = ttl.user_id
+        WHERE u.id = ANY($1::UUID[])
+        GROUP BY u.id, u.name
+        ORDER BY hours DESC
+      `, [teamUserIds]);
+
+      const report = {
+        manager_hours: managerHours,
+        team_total_hours: teamTotalHours,
+        by_task: hoursByTaskRes.rows.map((row: any) => ({
+          task_id: row.task_id,
+          task_title: row.task_title,
+          hours: parseFloat(row.hours || '0'),
+        })),
+        by_period: hoursByPeriodRes.rows.map((row: any) => ({
+          period: row.period,
+          hours: parseFloat(row.hours || '0'),
+        })),
+        by_user: hoursByUserRes.rows.map((row: any) => ({
+          user_id: row.user_id,
+          user_name: row.user_name,
+          hours: parseFloat(row.hours || '0'),
+        })),
+      };
+
+      return { success: true, data: report };
+    } catch (error) {
+      console.error('Error getting hours report:', error);
+      // Return empty report on error instead of failing
+      return {
+        success: true,
+        data: {
+          manager_hours: 0,
+          team_total_hours: 0,
+          by_task: [],
+          by_period: [],
+          by_user: [],
+        },
+      };
     }
   }
 

@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Inject } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards, Request } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
+import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 interface CreateFileDto {
     name: string;
@@ -60,6 +61,7 @@ export class AdminFilesController {
     }
 
     @Get()
+    @UseGuards(JwtAuthGuard)
     async getFiles(
         @Query('folder') folder?: string,
         @Query('search') search?: string,
@@ -106,6 +108,7 @@ export class AdminFilesController {
     }
 
     @Get('folders')
+    @UseGuards(JwtAuthGuard)
     async getFolders() {
         await this.ensureTable();
         try {
@@ -120,7 +123,8 @@ export class AdminFilesController {
     }
 
     @Post()
-    async uploadFile(@Body() dto: CreateFileDto) {
+    @UseGuards(JwtAuthGuard, AdminAuthGuard)
+    async uploadFile(@Body() dto: CreateFileDto, @Request() req: any) {
         await this.ensureTable();
 
         try {
@@ -128,9 +132,28 @@ export class AdminFilesController {
                 return { success: false, error: 'Name and URL are required' };
             }
 
+            // Validate file size if provided (max 10MB)
+            const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+            if (dto.size && dto.size > MAX_FILE_SIZE) {
+                return { success: false, error: `File size exceeds maximum allowed size of ${MAX_FILE_SIZE / (1024 * 1024)}MB` };
+            }
+
+            let userId = req.user?.userId;
+            // Validate UUID format
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!userId || !uuidRegex.test(userId)) {
+                // Try to resolve from body if available and valid
+                if (dto.uploaded_by && uuidRegex.test(dto.uploaded_by)) {
+                    userId = dto.uploaded_by;
+                } else {
+                    console.warn(`⚠️ uploadFile: Invalid or missing userId, setting to NULL. Received: ${userId}`);
+                    userId = null;
+                }
+            }
+
             const { rows } = await this.pool.query(
                 `INSERT INTO general_files (name, url, mime_type, size, folder_path, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6::UUID)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
                 [
                     dto.name,
@@ -138,7 +161,7 @@ export class AdminFilesController {
                     dto.mime_type || null,
                     dto.size || 0,
                     dto.folder_path || '/',
-                    dto.uploaded_by || null,
+                    userId,
                 ]
             );
 
@@ -151,6 +174,7 @@ export class AdminFilesController {
     }
 
     @Delete(':id')
+    @UseGuards(JwtAuthGuard, AdminAuthGuard)
     async deleteFile(@Param('id') id: string) {
         await this.ensureTable();
 

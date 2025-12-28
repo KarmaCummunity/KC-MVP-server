@@ -447,6 +447,7 @@ export class StatsController {
   }
 
   @Get('dashboard')
+  @UseGuards(JwtAuthGuard)
   async getDashboardStats() {
     const cacheKey = 'dashboard_stats';
     const cached = await this.redisCache.get(cacheKey);
@@ -455,110 +456,98 @@ export class StatsController {
       return { success: true, data: cached };
     }
 
-    // Key metrics for the last 24 hours, 7 days, and 30 days
-    // Count users from user_profiles only (legacy users table no longer used)
-    const allUsersJoinDate = await this.pool.query(`
+    // Tasks statistics - count by status
+    const tasksStats = await this.pool.query(`
       SELECT 
-        COUNT(CASE WHEN join_date >= CURRENT_DATE THEN 1 END) as new_users_today,
-        COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as new_users_week,
-        COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_month,
-        COUNT(*) as total_users
+        COUNT(CASE WHEN status = 'open' THEN 1 END) as tasks_open,
+        COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as tasks_in_progress,
+        COUNT(CASE WHEN status = 'done' THEN 1 END) as tasks_done,
+        COUNT(*) as tasks_total
+      FROM tasks
+    `);
+
+    // Users and admins statistics
+    const usersStats = await this.pool.query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE 
+          WHEN 'admin' = ANY(roles) OR 'super_admin' = ANY(roles) 
+          THEN 1 
+        END) as admins_count,
+        COUNT(CASE 
+          WHEN NOT ('admin' = ANY(roles) OR 'super_admin' = ANY(roles))
+          THEN 1 
+        END) as regular_users_count,
+        COUNT(CASE 
+          WHEN ('admin' = ANY(roles) OR 'super_admin' = ANY(roles)) 
+            AND parent_manager_id IS NOT NULL
+          THEN 1 
+        END) as managers_with_subordinates
       FROM user_profiles
       WHERE email IS NOT NULL AND email <> ''
     `);
 
-    const metrics = await this.pool.query(`
-      SELECT 
-        -- Today's stats
-        COUNT(CASE WHEN d.created_at >= CURRENT_DATE THEN 1 END) as donations_today,
-        COUNT(CASE WHEN r.created_at >= CURRENT_DATE THEN 1 END) as rides_today,
-        
-        -- This week's stats
-        COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as donations_week,
-        COUNT(CASE WHEN r.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as rides_week,
-        
-        -- This month's stats
-        COUNT(CASE WHEN d.created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as donations_month,
-        COUNT(CASE WHEN r.created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as rides_month,
-        
-        -- Total stats
-        COUNT(d.id) as total_donations,
-        COUNT(r.id) as total_rides,
-        SUM(CASE WHEN d.type = 'money' THEN d.amount ELSE 0 END) as total_money_donated
-        
-      FROM donations d
-      FULL OUTER JOIN rides r ON 1=1
-    `);
+    // Volunteer hours statistics - check if table exists first
+    let hoursStats: any;
+    try {
+      const tableExists = await this.pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'task_time_logs'
+        )
+      `);
+      
+      if (tableExists.rows[0].exists) {
+        hoursStats = await this.pool.query(`
+          SELECT 
+            COALESCE(SUM(actual_hours), 0)::NUMERIC as total_volunteer_hours,
+            COUNT(DISTINCT user_id) as users_with_hours,
+            COALESCE(
+              SUM(CASE 
+                WHEN logged_at >= DATE_TRUNC('month', NOW()) 
+                THEN actual_hours ELSE 0 
+              END), 0
+            )::NUMERIC as current_month_hours
+          FROM task_time_logs
+        `);
+      } else {
+        // Table doesn't exist - return zero values
+        hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
+      }
+    } catch (error) {
+      console.warn('Task time logs table check failed, using zero values:', error);
+      hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
+    }
 
-    // Merge user stats with other metrics and convert all to numbers
-    const mergedMetrics = {
-      // Today's stats
-      donations_today: Number(metrics.rows[0].donations_today || 0),
-      rides_today: Number(metrics.rows[0].rides_today || 0),
+    const totalHours = parseFloat(hoursStats.rows[0]?.total_volunteer_hours || '0');
+    const usersWithHours = Number(hoursStats.rows[0]?.users_with_hours || 0);
+    const totalUsers = Number(usersStats.rows[0].total_users || 0);
+    const avgHoursPerUser = totalUsers > 0 ? totalHours / totalUsers : 0;
+    const currentMonthHours = parseFloat(hoursStats.rows[0]?.current_month_hours || '0');
 
-      // This week's stats
-      donations_week: Number(metrics.rows[0].donations_week || 0),
-      rides_week: Number(metrics.rows[0].rides_week || 0),
+    // Merge all metrics and convert to numbers
+    const metrics = {
+      // Tasks stats
+      tasks_open: Number(tasksStats.rows[0].tasks_open || 0),
+      tasks_in_progress: Number(tasksStats.rows[0].tasks_in_progress || 0),
+      tasks_done: Number(tasksStats.rows[0].tasks_done || 0),
+      tasks_total: Number(tasksStats.rows[0].tasks_total || 0),
 
-      // This month's stats
-      donations_month: Number(metrics.rows[0].donations_month || 0),
-      rides_month: Number(metrics.rows[0].rides_month || 0),
+      // Users stats
+      total_users: totalUsers,
+      admins_count: Number(usersStats.rows[0].admins_count || 0),
+      regular_users_count: Number(usersStats.rows[0].regular_users_count || 0),
+      managers_with_subordinates: Number(usersStats.rows[0].managers_with_subordinates || 0),
 
-      // Total stats
-      total_donations: Number(metrics.rows[0].total_donations || 0),
-      total_rides: Number(metrics.rows[0].total_rides || 0),
-      total_money_donated: Number(metrics.rows[0].total_money_donated || 0),
-
-      // User stats
-      new_users_today: Number(allUsersJoinDate.rows[0].new_users_today || 0),
-      new_users_week: Number(allUsersJoinDate.rows[0].new_users_week || 0),
-      new_users_month: Number(allUsersJoinDate.rows[0].new_users_month || 0),
-      total_users: Number(allUsersJoinDate.rows[0].total_users || 0),
+      // Volunteer hours stats
+      total_volunteer_hours: totalHours,
+      avg_hours_per_user: Math.round(avgHoursPerUser * 100) / 100, // Round to 2 decimal places
+      current_month_hours: currentMonthHours,
     };
-
-    // Active users - from user_profiles only
-    const activeUsers = await this.pool.query(`
-      SELECT 
-        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '1 day' THEN 1 END) as daily_active,
-        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active,
-        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active
-      FROM user_profiles
-      WHERE email IS NOT NULL AND email <> ''
-        AND is_active = true
-    `);
-
-    // Convert active users to numbers
-    const activeUsersData = {
-      daily_active: Number(activeUsers.rows[0].daily_active || 0),
-      weekly_active: Number(activeUsers.rows[0].weekly_active || 0),
-      monthly_active: Number(activeUsers.rows[0].monthly_active || 0),
-    };
-
-    // Top categories
-    const topCategories = await this.pool.query(`
-      SELECT 
-        dc.name_he,
-        dc.icon,
-        COUNT(d.id) as donation_count
-      FROM donation_categories dc
-      LEFT JOIN donations d ON dc.id = d.category_id
-      WHERE dc.is_active = true
-      GROUP BY dc.id, dc.name_he, dc.icon
-      ORDER BY donation_count DESC
-      LIMIT 5
-    `);
-
-    // Convert category counts to numbers
-    const topCategoriesData = topCategories.rows.map(cat => ({
-      name_he: cat.name_he,
-      icon: cat.icon,
-      donation_count: Number(cat.donation_count || 0),
-    }));
 
     const dashboard = {
-      metrics: mergedMetrics,
-      active_users: activeUsersData,
-      top_categories: topCategoriesData
+      metrics: metrics
     };
 
     await this.redisCache.set(cacheKey, dashboard, 5 * 60); // 5 minutes cache

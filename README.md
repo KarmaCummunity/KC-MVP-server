@@ -2,33 +2,36 @@
 
 שרת NestJS לאפליקציית Karma Community עם Postgres ו-Redis, ו־REST גנרי תואם ל־`DatabaseService` בפרונט.
 
-**גרסה נוכחית:** 2.3.6  
-**עדכון אחרון:** 2025-12-24 - הפרדת סביבות Development ו-Production
+**גרסה נוכחית:** 2.5.2  
+**עדכון אחרון:** 2025-12-24 - בדיקת Redis בפרודקשן
 
-## 🆕 מה חדש בגרסה 2.3.6
+## 🆕 מה חדש בגרסה 2.5.2
 
 - ✅ **הפרדת סביבות מוחלטת:** Development ו-Production מופרדים לחלוטין
 - ✅ **בדיקות אוטומטיות:** סקריפטים לבדיקת משתני סביבה והפרדה
 - ✅ **אבטחה משופרת:** בדיקה בעת startup שמונעת חיבור של dev ל-prod DB
 - ✅ **תיעוד מקיף:** מדריכים מפורטים להגדרת Railway והעתקת DB
 - ✅ **GitHub Actions:** בדיקות אוטומטיות לפני כל deploy
+- 🔍 **בדיקת Redis בפרודקשן:** סקריפטים לבדיקה ותיקון Redis
 
-**ראה:** `RAILWAY_SETUP_GUIDE.md`, `DB_COPY_GUIDE.md`, `ENVIRONMENT_SEPARATION.md`
+**⚠️ נמצאה בעיה:** Redis לא מוגדר בפרודקשן! ראה `FIX_REDIS_PRODUCTION.md`
+
+**ראה:** `FIX_REDIS_PRODUCTION.md`, `TEST_REDIS_PRODUCTION.md`, `RAILWAY_SETUP_GUIDE.md`
 
 ## 🌍 סביבות
 
 ### Production (main)
 - **Domain**: `karma-community-kc.com`
 - **Branch**: `main`
-- **Database**: Postgres נפרד (ID: 5f1b9d5d)
-- **Redis**: Redis נפרד
+- **Database**: Postgres נפרד (ID: 5f1b9d5d) ✅
+- **Redis**: ❌ **לא מוגדר - צריך תיקון!** (ראה `FIX_REDIS_PRODUCTION.md`)
 - **Purpose**: משתמשים אמיתיים, נתונים אמיתיים
 
 ### Development (dev)
 - **Domain**: `dev.karma-community-kc.com`
 - **Branch**: `dev`
-- **Database**: Postgres נפרד (ID: f92654e1)
-- **Redis**: Redis נפרד (מומלץ)
+- **Database**: Postgres נפרד (ID: f92654e1) ✅
+- **Redis**: Redis נפרד ✅ (password: ggCVffISJOm...)
 - **Purpose**: בדיקות, פיתוח, נתונים מאנונימיזציים
 
 ## 🚀 הפעלה מקומית
