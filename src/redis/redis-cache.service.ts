@@ -8,7 +8,7 @@ import { REDIS } from './redis.module';
 
 @Injectable()
 export class RedisCacheService {
-  constructor(@Inject(REDIS) private readonly redis: Redis | null) {}
+  constructor(@Inject(REDIS) private readonly redis: Redis | null) { }
 
   /**
    * Check if Redis is available
@@ -22,13 +22,21 @@ export class RedisCacheService {
    */
   async set(key: string, value: any, ttlSeconds?: number): Promise<void> {
     if (!this.isRedisAvailable()) return;
-    
+
     const serializedValue = JSON.stringify(value);
-    
+
     if (ttlSeconds) {
-      await this.redis!.setex(key, ttlSeconds, serializedValue);
+      try {
+        await this.redis!.setex(key, ttlSeconds, serializedValue);
+      } catch (error: any) {
+        console.warn(`[RedisCache] Failed to setex key ${key}:`, error.message);
+      }
     } else {
-      await this.redis!.set(key, serializedValue);
+      try {
+        await this.redis!.set(key, serializedValue);
+      } catch (error: any) {
+        console.warn(`[RedisCache] Failed to set key ${key}:`, error.message);
+      }
     }
   }
 
@@ -37,9 +45,9 @@ export class RedisCacheService {
    */
   async get<T = any>(key: string): Promise<T | null> {
     if (!this.isRedisAvailable()) return null;
-    
+
     const value = await this.redis!.get(key);
-    
+
     if (!value) {
       return null;
     }
@@ -57,8 +65,13 @@ export class RedisCacheService {
    */
   async delete(key: string): Promise<boolean> {
     if (!this.isRedisAvailable()) return false;
-    const result = await this.redis!.del(key);
-    return result > 0;
+    try {
+      const result = await this.redis!.del(key);
+      return result > 0;
+    } catch (error: any) {
+      console.warn(`[RedisCache] Failed to delete key ${key}:`, error.message);
+      return false;
+    }
   }
 
   /**
@@ -90,10 +103,15 @@ export class RedisCacheService {
    */
   async increment(key: string, amount: number = 1): Promise<number> {
     if (!this.isRedisAvailable()) return 0;
-    if (amount === 1) {
-      return await this.redis!.incr(key);
-    } else {
-      return await this.redis!.incrby(key, amount);
+    try {
+      if (amount === 1) {
+        return await this.redis!.incr(key);
+      } else {
+        return await this.redis!.incrby(key, amount);
+      }
+    } catch (error: any) {
+      console.warn(`[RedisCache] Failed to increment key ${key}:`, error.message);
+      return 0;
     }
   }
 
@@ -108,10 +126,10 @@ export class RedisCacheService {
         info: 'Redis not configured',
       };
     }
-    
+
     const info = await this.redis!.info();
     const keyCount = await this.redis!.dbsize();
-    
+
     return {
       connected: this.redis!.status === 'ready',
       keyCount,
@@ -134,7 +152,7 @@ export class RedisCacheService {
     if (!this.isRedisAvailable() || entries.length === 0) return;
 
     const pipeline = this.redis!.pipeline();
-    
+
     for (const entry of entries) {
       const serializedValue = JSON.stringify(entry.value);
       if (entry.ttl) {
@@ -143,8 +161,12 @@ export class RedisCacheService {
         pipeline.set(entry.key, serializedValue);
       }
     }
-    
-    await pipeline.exec();
+
+    try {
+      await pipeline.exec();
+    } catch (error: any) {
+      console.warn(`[RedisCache] Failed to setMultiple:`, error.message);
+    }
   }
 
   /**
@@ -162,7 +184,7 @@ export class RedisCacheService {
 
     const pipeline = this.redis!.pipeline();
     keys.forEach(key => pipeline.get(key));
-    
+
     const results = await pipeline.exec();
     const map = new Map<string, T | null>();
 
@@ -170,7 +192,7 @@ export class RedisCacheService {
       for (let i = 0; i < keys.length; i++) {
         const result = results[i];
         const key = keys[i];
-        
+
         if (result && result[1] !== null) {
           try {
             map.set(key, JSON.parse(result[1] as string));
@@ -198,7 +220,7 @@ export class RedisCacheService {
    */
   async invalidatePattern(pattern: string): Promise<number> {
     if (!this.isRedisAvailable()) return 0;
-    
+
     try {
       const keys = await this.getKeys(pattern);
       if (keys.length === 0) return 0;

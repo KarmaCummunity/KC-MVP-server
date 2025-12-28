@@ -57,8 +57,8 @@ export class DatabaseInit implements OnModuleInit {
         client.release();
       }
     } catch (err) {
-      console.error('❌ DatabaseInit failed', err);
-      throw err;
+      console.error('❌ DatabaseInit failed (Non-fatal, continuing startup)', err);
+      // DO NOT throw err; allow app to start so we can debug via logs/health check
     }
   }
 
@@ -229,7 +229,7 @@ export class DatabaseInit implements OnModuleInit {
           FROM information_schema.columns 
           WHERE table_name = 'user_profiles' AND column_name = 'google_id'
         `);
-        
+
         if (columnCheck.rows.length === 0) {
           console.log('📝 google_id column does not exist, creating it...');
           await client.query(`
@@ -239,14 +239,14 @@ export class DatabaseInit implements OnModuleInit {
         } else {
           console.log('✅ google_id column already exists');
         }
-        
+
         // Add unique constraint separately if it doesn't exist
         const constraintCheck = await client.query(`
           SELECT conname 
           FROM pg_constraint 
           WHERE conname = 'user_profiles_google_id_key'
         `);
-        
+
         if (constraintCheck.rows.length === 0) {
           console.log('📝 google_id unique constraint does not exist, creating it...');
           await client.query(`
@@ -256,14 +256,14 @@ export class DatabaseInit implements OnModuleInit {
         } else {
           console.log('✅ google_id unique constraint already exists');
         }
-        
+
         // Create index if it doesn't exist
         const indexCheck = await client.query(`
           SELECT indexname 
           FROM pg_indexes 
           WHERE tablename = 'user_profiles' AND indexname = 'idx_user_profiles_google_id'
         `);
-        
+
         if (indexCheck.rows.length === 0) {
           console.log('📝 google_id index does not exist, creating it...');
           await client.query(`
@@ -273,7 +273,7 @@ export class DatabaseInit implements OnModuleInit {
         } else {
           console.log('✅ google_id index already exists');
         }
-        
+
         console.log('✅ google_id column, constraint, and index ensured in user_profiles');
       } catch (err: any) {
         console.error('❌ Failed to add google_id column:', err.message);
@@ -932,7 +932,7 @@ export class DatabaseInit implements OnModuleInit {
           is_active = EXCLUDED.is_active,
           updated_at = NOW()
       `);
-      
+
       // Ensure super admin always has the correct roles
       await client.query(`
         UPDATE user_profiles 

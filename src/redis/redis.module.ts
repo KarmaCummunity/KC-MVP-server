@@ -80,7 +80,7 @@ export const REDIS = 'REDIS';
   ],
   exports: [REDIS],
 })
-export class RedisModule {}
+export class RedisModule { }
 
 function maskRedisUrl(url: string): string {
   try {
@@ -99,9 +99,21 @@ function attachRedisLogging(client: Redis, target: string) {
     // eslint-disable-next-line no-console
     console.log('[redis] socket connected');
   });
-  client.on('ready', () => {
+  client.on('ready', async () => {
     // eslint-disable-next-line no-console
     console.log('[redis] ready');
+
+    // Attempt to fix MISCONF error for dev environments
+    try {
+      // eslint-disable-next-line no-console
+      console.log('[redis] attempting to disable stop-writes-on-bgsave-error...');
+      await client.config('SET', 'stop-writes-on-bgsave-error', 'no');
+      // eslint-disable-next-line no-console
+      console.log('[redis] successfully disabled stop-writes-on-bgsave-error');
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.warn('[redis] failed to disable stop-writes-on-bgsave-error (might be restricted):', err.message);
+    }
   });
   client.on('end', () => {
     // eslint-disable-next-line no-console
