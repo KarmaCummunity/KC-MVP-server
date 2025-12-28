@@ -495,3 +495,5 @@ process.on('uncaughtException', (error) => {
   logger.error('⚠️  Application will exit due to critical error');
   process.exit(1);
 });
+
+import './sanity';
