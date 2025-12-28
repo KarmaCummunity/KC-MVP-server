@@ -41,6 +41,11 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import * as dotenv from 'dotenv';
 import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
+import './sanity';
+
+console.log("🔥🔥🔥 PROCESS STARTING: src/main.ts LOADED 🔥🔥🔥");
+console.log(`Env PORT: ${process.env.PORT}`);
+console.log(`Env DATABASE_URL exists: ${!!process.env.DATABASE_URL}`);
 
 /**
  * Validate required environment variables before server startup

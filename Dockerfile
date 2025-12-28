@@ -29,9 +29,6 @@ RUN mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ || tr
 # Expose is optional for Railway, but helps locally
 EXPOSE 3001
 
-# Use shell form to enable logging
-RUN chmod +x start.sh
-
-# Simplified CMD for debugging
-CMD ["./start.sh"]
+# Standard start command
+CMD ["node", "dist/main.js"]
 
