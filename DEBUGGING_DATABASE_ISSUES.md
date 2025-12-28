@@ -104,3 +104,4 @@ WHERE tablename = 'tasks';
 - `Schema creation failed`
 
 
+
