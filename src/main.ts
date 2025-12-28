@@ -230,7 +230,7 @@ async function bootstrap(): Promise<void> {
     const port = Number(process.env.PORT || 3001);
 
     // ═══════════════════════════════════════════════════════════════
-    // SECURITY MIDDLEWARE - Helmet.js
+    // SECURITY MIDDLEWARE - Helmet.js.
     // ═══════════════════════════════════════════════════════════════
     // TEMPORARILY DISABLED: Helmet was causing "upstream sent too big header" error
     // Railway's nginx proxy has limited buffer size for response headers
