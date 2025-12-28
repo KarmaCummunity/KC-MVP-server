@@ -360,7 +360,9 @@ async function bootstrap(): Promise<void> {
     }));
 
     // Start the HTTP server
+    console.log(`[DEBUG-CRITICAL] Attempting to bind to PORT: ${port} (HOST: 0.0.0.0)`);
     await app.listen(port, '0.0.0.0');
+    console.log(`[DEBUG-CRITICAL] Server is now LISTENING on PORT: ${port}`);
 
     // Log successful startup with configuration summary
     const isDevelopment = environment === 'development';
