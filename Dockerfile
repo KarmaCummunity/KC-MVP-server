@@ -30,6 +30,8 @@ RUN mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ || tr
 EXPOSE 3001
 
 # Use shell form to enable logging
+RUN chmod +x start.sh
+
 # Simplified CMD for debugging
-CMD ["node", "minimal-server.js"]
+CMD ["./start.sh"]
 
