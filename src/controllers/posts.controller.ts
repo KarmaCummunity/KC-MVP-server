@@ -167,6 +167,66 @@ export class PostsController {
                     CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
                 `);
                 console.log('✅ post_comments table created');
+            } else {
+                // Check if id column exists, if not add it
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_comments' AND column_name = 'id'
+                    ) AS exists;
+                `);
+                
+                if (!idColumnCheck.rows[0]?.exists) {
+                    console.log('📝 Adding id column to post_comments table...');
+                    try {
+                        // First add the column
+                        await this.pool.query(`
+                            ALTER TABLE post_comments 
+                            ADD COLUMN id UUID DEFAULT uuid_generate_v4();
+                        `);
+                        
+                        // Update existing rows to have IDs
+                        await this.pool.query(`
+                            UPDATE post_comments 
+                            SET id = uuid_generate_v4() 
+                            WHERE id IS NULL;
+                        `);
+                        
+                        // Make it NOT NULL
+                        await this.pool.query(`
+                            ALTER TABLE post_comments 
+                            ALTER COLUMN id SET NOT NULL;
+                        `);
+                        
+                        // Add primary key constraint
+                        await this.pool.query(`
+                            ALTER TABLE post_comments 
+                            ADD PRIMARY KEY (id);
+                        `);
+                        
+                        console.log('✅ id column added to post_comments table');
+                    } catch (alterError) {
+                        console.error('⚠️ Failed to add id column:', alterError);
+                        // Try to recreate the table if adding column fails
+                        console.log('📝 Attempting to recreate post_comments table...');
+                        await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
+                        await this.pool.query(`
+                            CREATE TABLE post_comments (
+                                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                                post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                                user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                                text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+                                likes_count INTEGER DEFAULT 0,
+                                created_at TIMESTAMPTZ DEFAULT NOW(),
+                                updated_at TIMESTAMPTZ DEFAULT NOW()
+                            );
+                            CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
+                            CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
+                            CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
+                        `);
+                        console.log('✅ post_comments table recreated');
+                    }
+                }
             }
 
             // Check if comment_likes table exists
@@ -318,6 +378,24 @@ export class PostsController {
             const countResult = await this.pool.query('SELECT COUNT(*) as count FROM posts');
             const totalPosts = parseInt(countResult.rows[0]?.count || '0');
             console.log(`📊 Total posts in database: ${totalPosts}`);
+            
+            // Debug: Check posts with task_assignment and task_completion types
+            const taskPostsCount = await this.pool.query(`
+                SELECT COUNT(*) as count FROM posts 
+                WHERE post_type IN ('task_assignment', 'task_completion')
+            `);
+            const totalTaskPosts = parseInt(taskPostsCount.rows[0]?.count || '0');
+            console.log(`📊 Total task-related posts (assignment/completion): ${totalTaskPosts}`);
+            
+            // Debug: Check posts with missing author_id in user_profiles
+            const missingAuthorCount = await this.pool.query(`
+                SELECT COUNT(*) as count 
+                FROM posts p
+                LEFT JOIN user_profiles u ON p.author_id = u.id
+                WHERE u.id IS NULL
+            `);
+            const missingAuthors = parseInt(missingAuthorCount.rows[0]?.count || '0');
+            console.log(`⚠️ Posts with author_id not found in user_profiles: ${missingAuthors}`);
 
             // Build query with optional user_id for checking if user liked each post
             let query = `
@@ -353,14 +431,26 @@ export class PostsController {
             console.log('📝 getPosts query:', { query, params, limit, offset, userId });
             const { rows } = await this.pool.query(query, params);
             console.log(`✅ getPosts returned ${rows.length} posts`);
+            
+            // Count task-related posts in results
+            const taskPostsInResults = rows.filter(p => 
+                p.post_type === 'task_assignment' || p.post_type === 'task_completion'
+            ).length;
+            console.log(`📊 Task-related posts in results: ${taskPostsInResults}/${rows.length}`);
+            
             if (rows.length > 0) {
-                console.log('📋 Sample post:', {
-                    id: rows[0].id?.substring(0, 8),
-                    title: rows[0].title?.substring(0, 30),
-                    post_type: rows[0].post_type,
-                    author_id: rows[0].author_id?.substring(0, 8),
-                    has_author: !!rows[0].author
-                });
+                // Show first few posts for debugging
+                const samplePosts = rows.slice(0, 3).map(p => ({
+                    id: p.id?.substring(0, 8),
+                    title: p.title?.substring(0, 30),
+                    post_type: p.post_type,
+                    author_id: p.author_id?.substring(0, 8),
+                    has_author: !!p.author,
+                    author_id_in_author: p.author?.id?.substring(0, 8)
+                }));
+                console.log('📋 Sample posts:', samplePosts);
+            } else {
+                console.warn('⚠️ getPosts returned 0 posts!');
             }
 
             return { success: true, data: rows };
@@ -690,8 +780,13 @@ export class PostsController {
             const { rows } = await client.query(`
                 INSERT INTO post_comments (post_id, user_id, text)
                 VALUES ($1, $2, $3)
-                RETURNING *
+                RETURNING id, post_id, user_id, text, likes_count, created_at, updated_at
             `, [postId, user_id, text.trim()]);
+
+            if (!rows || rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Failed to create comment' };
+            }
 
             const comment = rows[0];
 
