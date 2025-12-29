@@ -41,20 +41,33 @@ export class PostsController {
             `);
 
             if (tableCheck.rows[0]?.exists) {
-                // Check if it has the correct structure (author_id column)
-                const columnCheck = await this.pool.query(`
+                // Check if it has the correct structure (both id and author_id columns)
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'posts' AND column_name = 'id'
+                    ) AS exists;
+                `);
+
+                const authorIdColumnCheck = await this.pool.query(`
                     SELECT EXISTS (
                         SELECT 1 FROM information_schema.columns 
                         WHERE table_name = 'posts' AND column_name = 'author_id'
                     ) AS exists;
                 `);
 
-                if (!columnCheck.rows[0]?.exists) {
+                const hasIdColumn = idColumnCheck.rows[0]?.exists;
+                const hasAuthorIdColumn = authorIdColumnCheck.rows[0]?.exists;
+
+                if (!hasIdColumn || !hasAuthorIdColumn) {
                     // Legacy table exists with wrong structure - drop and recreate
                     console.log('⚠️  Detected legacy posts table structure - recreating with correct schema');
+                    console.log(`   - Has id column: ${hasIdColumn}`);
+                    console.log(`   - Has author_id column: ${hasAuthorIdColumn}`);
                     await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
                 } else {
                     // Table exists with correct structure
+                    console.log('✅ Posts table exists with correct schema');
                     return;
                 }
             }
@@ -118,6 +131,19 @@ export class PostsController {
      */
     private async ensureLikesCommentsTable() {
         try {
+            // First, verify that posts table exists (required for foreign keys)
+            const postsTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'posts'
+                ) AS exists;
+            `);
+
+            if (!postsTableCheck.rows[0]?.exists) {
+                console.log('⚠️  Posts table does not exist yet - skipping likes/comments table creation');
+                return;
+            }
+
             // Check if post_likes table exists
             const likesTableCheck = await this.pool.query(`
                 SELECT EXISTS (
@@ -126,7 +152,34 @@ export class PostsController {
                 ) AS exists;
             `);
 
-            if (!likesTableCheck.rows[0]?.exists) {
+            if (likesTableCheck.rows[0]?.exists) {
+                // Table exists - check if it has the correct schema (id column)
+                const likesIdColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_likes' AND column_name = 'id'
+                    ) AS exists;
+                `);
+
+                if (!likesIdColumnCheck.rows[0]?.exists) {
+                    // Legacy table without id column - drop and recreate
+                    console.log('⚠️  Detected legacy post_likes table without id column - recreating...');
+                    await this.pool.query('DROP TABLE IF EXISTS post_likes CASCADE;');
+                } else {
+                    // Table has correct schema
+                    console.log('✅ post_likes table exists with correct schema');
+                }
+            }
+
+            // Create post_likes table if it doesn't exist (or was just dropped)
+            const likesTableCheck2 = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_likes'
+                ) AS exists;
+            `);
+
+            if (!likesTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating post_likes table...');
                 await this.pool.query(`
                     CREATE TABLE IF NOT EXISTS post_likes (
@@ -150,7 +203,34 @@ export class PostsController {
                 ) AS exists;
             `);
 
-            if (!commentsTableCheck.rows[0]?.exists) {
+            if (commentsTableCheck.rows[0]?.exists) {
+                // Table exists - check if it has the correct schema (id column)
+                const commentsIdColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_comments' AND column_name = 'id'
+                    ) AS exists;
+                `);
+
+                if (!commentsIdColumnCheck.rows[0]?.exists) {
+                    // Legacy table without id column - drop and recreate
+                    console.log('⚠️  Detected legacy post_comments table without id column - recreating...');
+                    await this.pool.query('DROP TABLE IF EXISTS post_comments CASCADE;');
+                } else {
+                    // Table has correct schema
+                    console.log('✅ post_comments table exists with correct schema');
+                }
+            }
+
+            // Create post_comments table if it doesn't exist (or was just dropped)
+            const commentsTableCheck2 = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_comments'
+                ) AS exists;
+            `);
+
+            if (!commentsTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating post_comments table...');
                 await this.pool.query(`
                     CREATE TABLE IF NOT EXISTS post_comments (
@@ -177,7 +257,34 @@ export class PostsController {
                 ) AS exists;
             `);
 
-            if (!commentLikesTableCheck.rows[0]?.exists) {
+            if (commentLikesTableCheck.rows[0]?.exists) {
+                // Table exists - check if it has the correct schema (id column)
+                const commentLikesIdColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'comment_likes' AND column_name = 'id'
+                    ) AS exists;
+                `);
+
+                if (!commentLikesIdColumnCheck.rows[0]?.exists) {
+                    // Legacy table without id column - drop and recreate
+                    console.log('⚠️  Detected legacy comment_likes table without id column - recreating...');
+                    await this.pool.query('DROP TABLE IF EXISTS comment_likes CASCADE;');
+                } else {
+                    // Table has correct schema
+                    console.log('✅ comment_likes table exists with correct schema');
+                }
+            }
+
+            // Create comment_likes table if it doesn't exist (or was just dropped)
+            const commentLikesTableCheck2 = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'comment_likes'
+                ) AS exists;
+            `);
+
+            if (!commentLikesTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating comment_likes table...');
                 await this.pool.query(`
                     CREATE TABLE IF NOT EXISTS comment_likes (
@@ -349,7 +456,8 @@ export class PostsController {
             return { success: true, data: rows };
         } catch (error) {
             console.error('Get posts error:', error);
-            return { success: false, error: 'Failed to get posts' };
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            return { success: false, error: `Failed to get posts: ${errorMessage}` };
         }
     }
 
@@ -520,8 +628,9 @@ export class PostsController {
             };
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error('Toggle like error:', error);
-            return { success: false, error: 'Failed to toggle like' };
+            console.error('Toggle like error:', { error, postId, userId: body.user_id });
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            return { success: false, error: `Failed to toggle like: ${errorMessage}` };
         } finally {
             client.release();
         }
@@ -718,8 +827,9 @@ export class PostsController {
             };
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error('Add comment error:', error);
-            return { success: false, error: 'Failed to add comment' };
+            console.error('Add comment error:', { error, postId, userId: body.user_id });
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            return { success: false, error: `Failed to add comment: ${errorMessage}` };
         } finally {
             client.release();
         }
