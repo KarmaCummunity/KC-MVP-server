@@ -956,8 +956,12 @@ export class UsersController {
         }
       }
 
-      // Build nested tree structure
-      const buildTree = (parentId: string | null, level: number): any[] => {
+      // Build nested tree structure with cycle detection
+      // We use a Set to track visited IDs in the current branch
+      const buildTree = (parentId: string | null, level: number, visitedIds: Set<string> = new Set()): any[] => {
+        // Safety break for deep recursion
+        if (level > 20) return [];
+
         return allUsers
           .filter(user => {
             if (level === 0) {
@@ -965,18 +969,26 @@ export class UsersController {
             }
             return user.parent_manager_id === parentId;
           })
-          .map(user => ({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            avatar_url: user.avatar_url,
-            level: user.level,
-            isSuperAdmin: user.is_super_admin,
-            isAdmin: Array.isArray(user.roles) && user.roles.includes('admin'),
-            salary: user.salary || 0,
-            seniority_start_date: user.seniority_start_date || new Date().toISOString().split('T')[0],
-            children: buildTree(user.id, level + 1)
-          }));
+          // Filter out users we've already visited in this branch to prevent cycles
+          .filter(user => !visitedIds.has(user.id))
+          .map(user => {
+            // Create a new set for the next level including current user
+            const nextVisitedIds = new Set(visitedIds);
+            nextVisitedIds.add(user.id);
+
+            return {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              avatar_url: user.avatar_url,
+              level: user.level,
+              isSuperAdmin: user.is_super_admin,
+              isAdmin: Array.isArray(user.roles) && user.roles.includes('admin'),
+              salary: user.salary || 0,
+              seniority_start_date: user.seniority_start_date || new Date().toISOString().split('T')[0],
+              children: buildTree(user.id, level + 1, nextVisitedIds)
+            };
+          });
       };
 
       const tree = buildTree(null, 0);
