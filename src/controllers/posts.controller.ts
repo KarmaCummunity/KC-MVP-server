@@ -53,9 +53,12 @@ export class PostsController {
 
                 const columns = columnsCheck.rows.map(r => r.column_name);
 
-                // If author_id is missing, the table structure is fundamentally wrong (legacy)
-                if (!columns.includes('author_id')) {
-                    console.log('⚠️  Detected legacy posts table (missing author_id) - recreating...');
+                // If id or author_id is missing, the table structure is fundamentally wrong (legacy)
+                // We can't add id column later since it's the primary key
+                if (!columns.includes('id') || !columns.includes('author_id')) {
+                    console.log('⚠️  Detected legacy posts table structure - recreating...');
+                    console.log(`   - Has id column: ${columns.includes('id')}`);
+                    console.log(`   - Has author_id column: ${columns.includes('author_id')}`);
                     await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
                 } else {
                     // Check for new columns and add them if missing
@@ -141,6 +144,19 @@ export class PostsController {
     private async ensureLikesCommentsTable() {
         try {
             console.log('📝 Ensuring likes and comments tables exist...');
+
+            // First, verify that posts table exists (required for foreign keys)
+            const postsTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'posts' AND table_schema = 'public'
+                ) AS exists;
+            `);
+
+            if (!postsTableCheck.rows[0]?.exists) {
+                console.log('⚠️  Posts table does not exist yet - skipping likes/comments table creation');
+                return;
+            }
 
             // Check if post_likes table exists and has correct structure
             const likesTableCheck = await this.pool.query(`
