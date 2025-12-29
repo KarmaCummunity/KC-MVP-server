@@ -118,140 +118,62 @@ export class PostsController {
      */
     private async ensureLikesCommentsTable() {
         try {
-            // Check if post_likes table exists
-            const likesTableCheck = await this.pool.query(`
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'post_likes'
-                ) AS exists;
+            console.log('📝 Ensuring likes and comments tables exist...');
+
+            // Drop existing tables in correct order (to handle foreign key dependencies)
+            console.log('🗑️ Dropping existing tables if they exist...');
+            await this.pool.query(`DROP TABLE IF EXISTS comment_likes CASCADE;`);
+            await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
+            await this.pool.query(`DROP TABLE IF EXISTS post_likes CASCADE;`);
+
+            // Create post_likes table
+            console.log('📝 Creating post_likes table...');
+            await this.pool.query(`
+                CREATE TABLE post_likes (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(post_id, user_id)
+                );
             `);
+            await this.pool.query(`CREATE INDEX idx_post_likes_post_id ON post_likes(post_id);`);
+            await this.pool.query(`CREATE INDEX idx_post_likes_user_id ON post_likes(user_id);`);
+            await this.pool.query(`CREATE INDEX idx_post_likes_created_at ON post_likes(created_at DESC);`);
+            console.log('✅ post_likes table created');
 
-            if (!likesTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating post_likes table...');
-                await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS post_likes (
-                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        UNIQUE(post_id, user_id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);
-                `);
-                console.log('✅ post_likes table created');
-            }
-
-            // Check if post_comments table exists
-            const commentsTableCheck = await this.pool.query(`
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'post_comments'
-                ) AS exists;
+            // Create post_comments table
+            console.log('📝 Creating post_comments table...');
+            await this.pool.query(`
+                CREATE TABLE post_comments (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+                    likes_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
             `);
+            await this.pool.query(`CREATE INDEX idx_post_comments_post_id ON post_comments(post_id);`);
+            await this.pool.query(`CREATE INDEX idx_post_comments_user_id ON post_comments(user_id);`);
+            await this.pool.query(`CREATE INDEX idx_post_comments_created_at ON post_comments(created_at DESC);`);
+            console.log('✅ post_comments table created');
 
-            if (!commentsTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating post_comments table...');
-                await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS post_comments (
-                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                        text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
-                        likes_count INTEGER DEFAULT 0,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ DEFAULT NOW()
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
-                `);
-                console.log('✅ post_comments table created');
-            } else {
-                // Check if id column exists, if not add it
-                const idColumnCheck = await this.pool.query(`
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'post_comments' AND column_name = 'id'
-                    ) AS exists;
-                `);
-                
-                if (!idColumnCheck.rows[0]?.exists) {
-                    console.log('📝 Adding id column to post_comments table...');
-                    try {
-                        // First add the column
-                        await this.pool.query(`
-                            ALTER TABLE post_comments 
-                            ADD COLUMN id UUID DEFAULT uuid_generate_v4();
-                        `);
-                        
-                        // Update existing rows to have IDs
-                        await this.pool.query(`
-                            UPDATE post_comments 
-                            SET id = uuid_generate_v4() 
-                            WHERE id IS NULL;
-                        `);
-                        
-                        // Make it NOT NULL
-                        await this.pool.query(`
-                            ALTER TABLE post_comments 
-                            ALTER COLUMN id SET NOT NULL;
-                        `);
-                        
-                        // Add primary key constraint
-                        await this.pool.query(`
-                            ALTER TABLE post_comments 
-                            ADD PRIMARY KEY (id);
-                        `);
-                        
-                        console.log('✅ id column added to post_comments table');
-                    } catch (alterError) {
-                        console.error('⚠️ Failed to add id column:', alterError);
-                        // Try to recreate the table if adding column fails
-                        console.log('📝 Attempting to recreate post_comments table...');
-                        await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
-                        await this.pool.query(`
-                            CREATE TABLE post_comments (
-                                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                                post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-                                user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                                text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
-                                likes_count INTEGER DEFAULT 0,
-                                created_at TIMESTAMPTZ DEFAULT NOW(),
-                                updated_at TIMESTAMPTZ DEFAULT NOW()
-                            );
-                            CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
-                            CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
-                            CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
-                        `);
-                        console.log('✅ post_comments table recreated');
-                    }
-                }
-            }
-
-            // Check if comment_likes table exists
-            const commentLikesTableCheck = await this.pool.query(`
-                SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'comment_likes'
-                ) AS exists;
+            // Create comment_likes table
+            console.log('📝 Creating comment_likes table...');
+            await this.pool.query(`
+                CREATE TABLE comment_likes (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
+                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(comment_id, user_id)
+                );
             `);
-
-            if (!commentLikesTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating comment_likes table...');
-                await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS comment_likes (
-                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                        comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
-                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        UNIQUE(comment_id, user_id)
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
-                    CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);
-                `);
-                console.log('✅ comment_likes table created');
-            }
+            await this.pool.query(`CREATE INDEX idx_comment_likes_comment_id ON comment_likes(comment_id);`);
+            await this.pool.query(`CREATE INDEX idx_comment_likes_user_id ON comment_likes(user_id);`);
+            console.log('✅ comment_likes table created');
 
             // Create SQL functions for updating counts
             console.log('📝 Ensuring SQL functions exist...');
@@ -377,7 +299,7 @@ export class PostsController {
             // Debug: Check total posts count
             const countResult = await this.pool.query('SELECT COUNT(*) as count FROM posts');
             const totalPosts = parseInt(countResult.rows[0]?.count || '0');
-            console.log(`📊 Total posts in database: ${totalPosts}`);
+            console.log(`📊 [getPosts] Total posts in database: ${totalPosts}`);
             
             // Debug: Check posts with task_assignment and task_completion types
             const taskPostsCount = await this.pool.query(`
@@ -385,7 +307,7 @@ export class PostsController {
                 WHERE post_type IN ('task_assignment', 'task_completion')
             `);
             const totalTaskPosts = parseInt(taskPostsCount.rows[0]?.count || '0');
-            console.log(`📊 Total task-related posts (assignment/completion): ${totalTaskPosts}`);
+            console.log(`📊 [getPosts] Total task-related posts (assignment/completion): ${totalTaskPosts}`);
             
             // Debug: Check posts with missing author_id in user_profiles
             const missingAuthorCount = await this.pool.query(`
@@ -395,7 +317,22 @@ export class PostsController {
                 WHERE u.id IS NULL
             `);
             const missingAuthors = parseInt(missingAuthorCount.rows[0]?.count || '0');
-            console.log(`⚠️ Posts with author_id not found in user_profiles: ${missingAuthors}`);
+            console.log(`⚠️ [getPosts] Posts with author_id not found in user_profiles: ${missingAuthors}`);
+            
+            // Debug: Get sample posts directly from database
+            const samplePostsCheck = await this.pool.query(`
+                SELECT id, title, post_type, author_id, created_at 
+                FROM posts 
+                ORDER BY created_at DESC 
+                LIMIT 5
+            `);
+            console.log(`📋 [getPosts] Sample posts from DB (first 5):`, samplePostsCheck.rows.map(p => ({
+                id: p.id?.substring(0, 8),
+                title: p.title?.substring(0, 30),
+                post_type: p.post_type,
+                author_id: p.author_id?.substring(0, 8),
+                created_at: p.created_at
+            })));
 
             // Build query with optional user_id for checking if user liked each post
             let query = `
@@ -428,9 +365,13 @@ export class PostsController {
 
             const params = userId ? [limit, offset, userId] : [limit, offset];
             
-            console.log('📝 getPosts query:', { query, params, limit, offset, userId });
+            // Debug: Execute a simple query to verify posts exist
+            const simpleCheck = await this.pool.query('SELECT COUNT(*) as count FROM posts');
+            console.log(`🔍 [getPosts] Simple COUNT(*) query result: ${simpleCheck.rows[0]?.count} posts`);
+            
+            console.log('📝 [getPosts] Executing query with params:', { limit, offset, userId, hasUserId: !!userId });
             const { rows } = await this.pool.query(query, params);
-            console.log(`✅ getPosts returned ${rows.length} posts`);
+            console.log(`✅ [getPosts] Query returned ${rows.length} posts (limit: ${limit}, offset: ${offset})`);
             
             // Count task-related posts in results
             const taskPostsInResults = rows.filter(p => 
@@ -455,8 +396,19 @@ export class PostsController {
 
             return { success: true, data: rows };
         } catch (error) {
-            console.error('Get posts error:', error);
-            return { success: false, error: 'Failed to get posts' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get posts error:', {
+                message: errorMessage,
+                stack: errorStack,
+                limit: limitArg,
+                offset: offsetArg,
+                userId
+            });
+            return { 
+                success: false, 
+                error: `Failed to get posts: ${errorMessage}` 
+            };
         }
     }
 
@@ -506,8 +458,19 @@ export class PostsController {
 
             return { success: true, data: rows };
         } catch (error) {
-            console.error('Get user posts error:', error);
-            return { success: false, error: 'Failed to get user posts' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get user posts error:', {
+                message: errorMessage,
+                stack: errorStack,
+                userId,
+                limit: limitArg,
+                viewerId
+            });
+            return { 
+                success: false, 
+                error: `Failed to get user posts: ${errorMessage}` 
+            };
         }
     }
 
@@ -692,8 +655,19 @@ export class PostsController {
                 total: parseInt(countResult.rows[0]?.total || '0')
             };
         } catch (error) {
-            console.error('Get post likes error:', error);
-            return { success: false, error: 'Failed to get likes' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post likes error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg
+            });
+            return { 
+                success: false, 
+                error: `Failed to get likes: ${errorMessage}` 
+            };
         }
     }
 
@@ -720,8 +694,18 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            console.error('Check user liked error:', error);
-            return { success: false, error: 'Failed to check like status' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Check user liked error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId
+            });
+            return { 
+                success: false, 
+                error: `Failed to check like status: ${errorMessage}` 
+            };
         }
     }
 
@@ -932,8 +916,20 @@ export class PostsController {
                 total: parseInt(countResult.rows[0]?.total || '0')
             };
         } catch (error) {
-            console.error('Get post comments error:', error);
-            return { success: false, error: 'Failed to get comments' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post comments error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg,
+                viewerId
+            });
+            return { 
+                success: false, 
+                error: `Failed to get comments: ${errorMessage}` 
+            };
         }
     }
 
@@ -992,8 +988,19 @@ export class PostsController {
 
             return { success: true, data: rows[0] };
         } catch (error) {
-            console.error('Update comment error:', error);
-            return { success: false, error: 'Failed to update comment' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Update comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return { 
+                success: false, 
+                error: `Failed to update comment: ${errorMessage}` 
+            };
         }
     }
 
@@ -1066,9 +1073,24 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Delete comment error:', error);
-            return { success: false, error: 'Failed to delete comment' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Delete comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId
+            });
+            return { 
+                success: false, 
+                error: `Failed to delete comment: ${errorMessage}` 
+            };
         } finally {
             client.release();
         }
