@@ -313,6 +313,11 @@ export class PostsController {
 
             const limit = parseInt(limitArg) || 20;
             const offset = parseInt(offsetArg) || 0;
+            
+            // Debug: Check total posts count
+            const countResult = await this.pool.query('SELECT COUNT(*) as count FROM posts');
+            const totalPosts = parseInt(countResult.rows[0]?.count || '0');
+            console.log(`📊 Total posts in database: ${totalPosts}`);
 
             // Build query with optional user_id for checking if user liked each post
             let query = `
@@ -344,7 +349,19 @@ export class PostsController {
             `;
 
             const params = userId ? [limit, offset, userId] : [limit, offset];
+            
+            console.log('📝 getPosts query:', { query, params, limit, offset, userId });
             const { rows } = await this.pool.query(query, params);
+            console.log(`✅ getPosts returned ${rows.length} posts`);
+            if (rows.length > 0) {
+                console.log('📋 Sample post:', {
+                    id: rows[0].id?.substring(0, 8),
+                    title: rows[0].title?.substring(0, 30),
+                    post_type: rows[0].post_type,
+                    author_id: rows[0].author_id?.substring(0, 8),
+                    has_author: !!rows[0].author
+                });
+            }
 
             return { success: true, data: rows };
         } catch (error) {
@@ -519,9 +536,23 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Toggle like error:', error);
-            return { success: false, error: 'Failed to toggle like' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return { 
+                success: false, 
+                error: `Failed to toggle like: ${errorMessage}` 
+            };
         } finally {
             client.release();
         }
@@ -717,9 +748,23 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Add comment error:', error);
-            return { success: false, error: 'Failed to add comment' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Add comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return { 
+                success: false, 
+                error: `Failed to add comment: ${errorMessage}` 
+            };
         } finally {
             client.release();
         }
@@ -1049,9 +1094,24 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Toggle comment like error:', error);
-            return { success: false, error: 'Failed to toggle comment like' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle comment like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return { 
+                success: false, 
+                error: `Failed to toggle comment like: ${errorMessage}` 
+            };
         } finally {
             client.release();
         }

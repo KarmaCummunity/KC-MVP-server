@@ -38,13 +38,26 @@ export class JwtAuthGuard implements CanActivate {
     // DEVELOPMENT BYPASS: Allow requests without authentication in local development
     const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ENVIRONMENT === 'development';
     const bypassAuth = process.env.BYPASS_AUTH === 'true';
+    const railwayEnv = process.env.RAILWAY_ENVIRONMENT;
+
+    this.logger.debug('🔐 Authentication check', {
+      path: request.path,
+      method: request.method,
+      nodeEnv: process.env.NODE_ENV,
+      environment: process.env.ENVIRONMENT,
+      railwayEnv,
+      isDevelopment,
+      bypassAuth,
+      hasAuthHeader: !!request.headers.authorization
+    });
 
     if (isDevelopment || bypassAuth) {
       this.logger.debug('🔓 Development mode: Bypassing authentication', {
         path: request.path,
         method: request.method,
         isDevelopment,
-        bypassAuth
+        bypassAuth,
+        railwayEnv
       });
 
       // In development, try to get the super admin from the database
@@ -99,10 +112,21 @@ export class JwtAuthGuard implements CanActivate {
           ip: request.ip,
           userAgent: request.headers['user-agent'],
           path: request.path,
-          method: request.method
+          method: request.method,
+          environment: process.env.ENVIRONMENT,
+          nodeEnv: process.env.NODE_ENV,
+          railwayEnv: process.env.RAILWAY_ENVIRONMENT,
+          authHeader: request.headers.authorization ? 'present' : 'missing',
+          customAuthHeader: request.headers['x-auth-token'] ? 'present' : 'missing'
         });
         throw new UnauthorizedException('Authentication token is required');
       }
+
+      this.logger.debug('Token extracted from request', {
+        tokenLength: token.length,
+        tokenPrefix: token.substring(0, 20) + '...',
+        path: request.path
+      });
 
       // Apply rate limiting per user token
       const rateLimitResult = await this.rateLimitService.checkRateLimit(
@@ -136,7 +160,10 @@ export class JwtAuthGuard implements CanActivate {
         }
       } catch (jwtError) {
         // If JWT verification failed, try Firebase token
-        this.logger.debug('JWT verification failed, trying Firebase token');
+        this.logger.debug('JWT verification failed, trying Firebase token', {
+          jwtError: jwtError instanceof Error ? jwtError.message : String(jwtError),
+          path: request.path
+        });
         payload = await this.verifyFirebaseToken(token);
       }
 

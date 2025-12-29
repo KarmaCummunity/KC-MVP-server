@@ -41,6 +41,50 @@ export class UsersController {
   ) { }
 
   /**
+   * Ensure salary and seniority_start_date columns exist in user_profiles table
+   * Creates them if missing (idempotent)
+   */
+  private async ensureSalarySeniorityColumns(): Promise<void> {
+    try {
+      const client = await this.pool.connect();
+      try {
+        // Check if columns exist
+        const checkResult = await client.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'user_profiles' 
+          AND column_name IN ('salary', 'seniority_start_date')
+        `);
+
+        const existingColumns = checkResult.rows.map(r => r.column_name);
+
+        if (!existingColumns.includes('salary')) {
+          console.log('📋 Adding salary column to user_profiles...');
+          await client.query(`
+            ALTER TABLE user_profiles 
+            ADD COLUMN salary DECIMAL(10,2) DEFAULT 0
+          `);
+          console.log('✅ Added salary column');
+        }
+
+        if (!existingColumns.includes('seniority_start_date')) {
+          console.log('📋 Adding seniority_start_date column to user_profiles...');
+          await client.query(`
+            ALTER TABLE user_profiles 
+            ADD COLUMN seniority_start_date DATE DEFAULT CURRENT_DATE
+          `);
+          console.log('✅ Added seniority_start_date column');
+        }
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('❌ Error ensuring salary/seniority columns:', error);
+      // Don't throw - allow fallback query to work
+    }
+  }
+
+  /**
    * Search users for autocomplete (lightweight)
    * GET /api/users/search?q=...
    */
@@ -795,6 +839,9 @@ export class UsersController {
   @Get('hierarchy/tree')
   async getFullHierarchyTree() {
     try {
+      // Ensure columns exist before querying
+      await this.ensureSalarySeniorityColumns();
+
       // First, get the super admin (root of the tree)
       const { rows: superAdminRows } = await this.pool.query(`
         SELECT id, name, email, avatar_url, roles

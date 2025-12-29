@@ -23,6 +23,64 @@ export class NotificationsController {
         private readonly redisCache: RedisCacheService,
     ) { }
 
+    /**
+     * Ensure user_notifications table exists
+     * Creates it if missing (idempotent)
+     */
+    private async ensureTableExists(client: any): Promise<void> {
+        try {
+            // Ensure uuid-ossp extension exists (required for uuid_generate_v4)
+            await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+
+            // Check if table exists
+            const checkResult = await client.query(`
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'user_notifications'
+                );
+            `);
+
+            if (!checkResult.rows[0]?.exists) {
+                console.log('📋 Creating user_notifications table...');
+                await client.query(`
+                    CREATE TABLE user_notifications (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        user_id UUID,
+                        title VARCHAR(255),
+                        content TEXT,
+                        notification_type VARCHAR(50),
+                        related_id UUID,
+                        is_read BOOLEAN DEFAULT false,
+                        read_at TIMESTAMPTZ,
+                        metadata JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                `);
+
+                // Create indexes for better performance
+                await client.query(`
+                    CREATE INDEX IF NOT EXISTS idx_user_notifications_user_id 
+                    ON user_notifications(user_id);
+                `);
+                await client.query(`
+                    CREATE INDEX IF NOT EXISTS idx_user_notifications_created_at 
+                    ON user_notifications(created_at DESC);
+                `);
+                await client.query(`
+                    CREATE INDEX IF NOT EXISTS idx_user_notifications_is_read 
+                    ON user_notifications(user_id, is_read) 
+                    WHERE is_read = false;
+                `);
+
+                console.log('✅ user_notifications table created successfully');
+            }
+        } catch (error) {
+            console.error('❌ Error ensuring user_notifications table:', error);
+            throw error;
+        }
+    }
+
     @Get(':userId')
     async getUserNotifications(
         @Param('userId') userId: string,
@@ -41,6 +99,7 @@ export class NotificationsController {
         try {
             const client = await this.pool.connect();
             try {
+                await this.ensureTableExists(client);
                 const query = `
           SELECT 
             id,
@@ -82,6 +141,7 @@ export class NotificationsController {
         try {
             const client = await this.pool.connect();
             try {
+                await this.ensureTableExists(client);
                 await client.query(
                     'UPDATE user_notifications SET is_read = true, read_at = NOW() WHERE user_id = $1',
                     [userId]
@@ -104,6 +164,7 @@ export class NotificationsController {
         try {
             const client = await this.pool.connect();
             try {
+                await this.ensureTableExists(client);
                 await client.query(
                     'UPDATE user_notifications SET is_read = true, read_at = NOW() WHERE id = $1 AND user_id = $2',
                     [notificationId, userId]
@@ -126,6 +187,7 @@ export class NotificationsController {
         try {
             const client = await this.pool.connect();
             try {
+                await this.ensureTableExists(client);
                 await client.query(
                     'DELETE FROM user_notifications WHERE id = $1 AND user_id = $2',
                     [notificationId, userId]
@@ -145,6 +207,7 @@ export class NotificationsController {
         try {
             const client = await this.pool.connect();
             try {
+                await this.ensureTableExists(client);
                 await client.query(
                     'DELETE FROM user_notifications WHERE user_id = $1',
                     [userId]

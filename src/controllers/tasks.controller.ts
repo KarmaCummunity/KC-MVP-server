@@ -918,6 +918,16 @@ export class TasksController {
           }
           
           console.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
+          
+          // Clear posts cache after creating posts
+          if (postResults.created > 0) {
+            try {
+              await this.clearPostsCaches();
+              console.log('✅ Posts caches cleared after post creation');
+            } catch (cacheErr) {
+              console.warn('Error clearing posts caches after creation (non-fatal):', cacheErr);
+            }
+          }
         } catch (tableError) {
           console.error('❌ Failed to ensure posts table:', tableError);
           postResults.errors.push('Posts table initialization failed');
@@ -1310,6 +1320,16 @@ export class TasksController {
               }
             }
             console.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
+            
+            // Clear posts cache after creating posts
+            if (assignPostResults.created > 0) {
+              try {
+                await this.clearPostsCaches();
+                console.log('✅ Posts caches cleared after assignment post creation');
+              } catch (cacheErr) {
+                console.warn('Error clearing posts caches after assignment (non-fatal):', cacheErr);
+              }
+            }
           } catch (tableError) {
             console.error('❌ Failed to ensure posts table for assignment posts:', tableError);
           }
@@ -1384,6 +1404,16 @@ export class TasksController {
             }
           }
           console.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
+          
+          // Clear posts cache after creating posts
+          if (completionPostResults.created > 0) {
+            try {
+              await this.clearPostsCaches();
+              console.log('✅ Posts caches cleared after completion post creation');
+            } catch (cacheErr) {
+              console.warn('Error clearing posts caches after completion (non-fatal):', cacheErr);
+            }
+          }
         } catch (tableError) {
           console.error('❌ Failed to ensure posts table for completion posts:', tableError);
         }
@@ -1444,6 +1474,19 @@ export class TasksController {
       await this.redisCache.invalidatePattern('tasks_list_*');
     } catch (cacheError) {
       console.warn('Redis cache invalidation error (non-fatal):', cacheError);
+    }
+  }
+
+  /**
+   * Clear all posts-related caches
+   * Called after creating posts to ensure data consistency
+   */
+  private async clearPostsCaches() {
+    try {
+      await this.redisCache.invalidatePattern('posts_list_*');
+      await this.redisCache.invalidatePattern('user_posts_*');
+    } catch (cacheError) {
+      console.warn('Redis cache invalidation error for posts (non-fatal):', cacheError);
     }
   }
 
