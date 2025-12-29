@@ -22,13 +22,19 @@ export class ItemsDeliveryService {
   async createItem(createItemDto: CreateItemDto) {
     const client = await this.pool.connect();
     try {
+      await client.query('BEGIN');
+
+      // Generate ID if not provided (items table has TEXT PRIMARY KEY with no default)
+      const itemId = (createItemDto as any).id || `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
       const { rows } = await client.query(`
         INSERT INTO items (
-          owner_id, title, description, category, condition, location,
+          id, owner_id, title, description, category, condition, location,
           price, images, tags, quantity, delivery_method, metadata, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
       `, [
+        itemId,
         createItemDto.owner_id,
         createItemDto.title,
         createItemDto.description || null,
@@ -44,11 +50,48 @@ export class ItemsDeliveryService {
         createItemDto.expires_at ? new Date(createItemDto.expires_at) : null,
       ]);
 
+      const createdItem = rows[0];
+
+      // Auto-create a corresponding post for this item
+      // This allows likes/comments to work on items in the feed
+      try {
+        const price = createItemDto.price ?? 0;
+        const postType = price > 0 ? 'item' : 'donation';
+        const postTitle = createItemDto.title;
+        const postDescription = createItemDto.description || '';
+
+        await client.query(`
+          INSERT INTO posts (author_id, item_id, title, description, images, post_type, metadata)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+          createItemDto.owner_id,
+          createdItem.id,
+          postTitle,
+          postDescription,
+          createItemDto.images || [],
+          postType,
+          JSON.stringify({
+            item_id: createdItem.id,
+            category: createItemDto.category,
+            price: price,
+            condition: createItemDto.condition,
+          })
+        ]);
+
+        console.log('✅ Auto-created post for item:', createdItem.id);
+      } catch (postError) {
+        console.error('⚠️ Failed to auto-create post for item (continuing anyway):', postError);
+        // Don't fail the item creation if post creation fails
+      }
+
+      await client.query('COMMIT');
+
       // Invalidate cache
       await this.invalidateItemCaches();
 
-      return { success: true, data: rows[0] };
+      return { success: true, data: createdItem };
     } catch (error) {
+      await client.query('ROLLBACK');
       console.error('Create item error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to create item' };
     } finally {

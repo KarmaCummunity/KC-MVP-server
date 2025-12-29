@@ -9,7 +9,7 @@ import { CreateItemDto, UpdateItemDto } from './dto/dedicated-item.dto';
 
 @Injectable()
 export class DedicatedItemsService {
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) { }
 
   /**
    * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
@@ -58,19 +58,19 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      
+
       // Resolve owner_id to UUID - this ensures we always use UUID
       const ownerUuid = await this.resolveUserIdToUUID(dto.owner_id);
-      
+
       // Get owner name for logging
       const ownerResult = await client.query(
         `SELECT name FROM user_profiles WHERE id = $1::uuid LIMIT 1`,
         [ownerUuid]
       );
       const ownerName = ownerResult.rows[0]?.name || 'ללא שם';
-      
+
       console.log('📝 Creating item:', dto.id, dto.title, '- Owner:', ownerName, `(${ownerUuid})`);
-      
+
       const result = await client.query(
         `INSERT INTO items (
           id, owner_id, title, description, category, condition,
@@ -97,13 +97,50 @@ export class DedicatedItemsService {
           dto.status || 'available',
         ]
       );
-      
+
+      const createdItem = result.rows[0];
+
+      // Auto-create a corresponding post for this item
+      // This allows likes/comments to work on items in the feed
+      try {
+        const postType = dto.price && dto.price > 0 ? 'item' : 'donation';
+        const postTitle = dto.title;
+        const postDescription = dto.description || '';
+
+        // Get first image from base64 if exists
+        const images = dto.image_base64 ? [dto.image_base64] : [];
+
+        await client.query(`
+          INSERT INTO posts (author_id, item_id, title, description, images, post_type, metadata)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+          ownerUuid,
+          createdItem.id,
+          postTitle,
+          postDescription,
+          images,
+          postType,
+          JSON.stringify({
+            item_id: createdItem.id,
+            category: dto.category,
+            price: dto.price || 0,
+            condition: dto.condition,
+            city: dto.city,
+          })
+        ]);
+
+        console.log('✅ Auto-created post for item:', createdItem.id);
+      } catch (postError) {
+        console.error('⚠️ Failed to auto-create post for item (continuing anyway):', postError);
+        // Don't fail the item creation if post creation fails
+      }
+
       await client.query('COMMIT');
-      
+
       console.log('✅ Item created successfully:', result.rows[0].id, '- Owner:', ownerName, `(${ownerUuid})`);
       return result.rows[0];
     } catch (error) {
-      await client.query('ROLLBACK').catch(() => {}); // Ignore rollback errors
+      await client.query('ROLLBACK').catch(() => { }); // Ignore rollback errors
       console.error('❌ Error creating item:', error);
       throw error;
     } finally {
@@ -119,16 +156,16 @@ export class DedicatedItemsService {
     try {
       // Resolve owner_id to UUID
       const ownerUuid = await this.resolveUserIdToUUID(ownerId);
-      
+
       console.log('🔍 Fetching items for owner:', ownerUuid);
-      
+
       const result = await client.query(
         `SELECT * FROM items 
          WHERE owner_id = $1::uuid AND is_deleted = FALSE 
          ORDER BY created_at DESC`,
         [ownerUuid]
       );
-      
+
       console.log(`✅ Found ${result.rows.length} items for owner:`, ownerUuid);
       return result.rows;
     } catch (error) {
@@ -146,17 +183,17 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       console.log('🔍 Fetching item:', id);
-      
+
       const result = await client.query(
         `SELECT * FROM items WHERE id = $1 AND is_deleted = FALSE`,
         [id]
       );
-      
+
       if (result.rows.length === 0) {
         console.log('⚠️ Item not found:', id);
         return null;
       }
-      
+
       console.log('✅ Item found:', id);
       return result.rows[0];
     } catch (error) {
@@ -174,7 +211,7 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       console.log('✏️ Updating item:', id);
-      
+
       const fields = [];
       const values = [];
       let paramCount = 1;
@@ -198,12 +235,12 @@ export class DedicatedItemsService {
 
       const query = `UPDATE items SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`;
       const result = await client.query(query, values);
-      
+
       if (result.rows.length === 0) {
         console.log('⚠️ Item not found for update:', id);
         return null;
       }
-      
+
       console.log('✅ Item updated successfully:', id);
       return result.rows[0];
     } catch (error) {
@@ -221,7 +258,7 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       console.log('🗑️ Soft deleting item:', id);
-      
+
       const result = await client.query(
         `UPDATE items 
          SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW() 
@@ -229,12 +266,12 @@ export class DedicatedItemsService {
          RETURNING *`,
         [id]
       );
-      
+
       if (result.rows.length === 0) {
         console.log('⚠️ Item not found or already deleted:', id);
         return { success: false, message: 'Item not found or already deleted' };
       }
-      
+
       console.log('✅ Item soft deleted successfully:', id);
       return { success: true, message: 'Item deleted', item: result.rows[0] };
     } catch (error) {
@@ -252,14 +289,14 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       console.log('🔍 Fetching items by category:', category);
-      
+
       const result = await client.query(
         `SELECT * FROM items 
          WHERE category = $1 AND is_deleted = FALSE 
          ORDER BY created_at DESC`,
         [category]
       );
-      
+
       console.log(`✅ Found ${result.rows.length} items for category:`, category);
       return result.rows;
     } catch (error) {
@@ -277,7 +314,7 @@ export class DedicatedItemsService {
     const client = await this.pool.connect();
     try {
       console.log('🔍 Searching items:', searchTerm);
-      
+
       const result = await client.query(
         `SELECT * FROM items 
          WHERE (title ILIKE $1 OR description ILIKE $1) 
@@ -285,7 +322,7 @@ export class DedicatedItemsService {
          ORDER BY created_at DESC`,
         [`%${searchTerm}%`]
       );
-      
+
       console.log(`✅ Found ${result.rows.length} items matching:`, searchTerm);
       return result.rows;
     } catch (error) {

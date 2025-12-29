@@ -226,9 +226,15 @@ export class UsersController {
         SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
       `, [managerId, id]);
 
+      console.log(`[setManager] 🔄 Checking for hierarchy cycle: Would user ${id} becoming subordinate of ${managerId} create a cycle?`);
+
       if (cycleCheck.length > 0) {
+        console.log(`❌ [setManager] CYCLE DETECTED: User ${id} is already in the management chain ABOVE ${managerId}`);
+        console.log(`   This would create: ${id} → ... → ${managerId} → ${id} (circular!)`);
         return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
       }
+
+      console.log(`[setManager] ✅ No upward cycle found`);
 
       // Check reverse direction - if manager is subordinate of user
       const { rows: reverseCheck } = await this.pool.query(`
@@ -249,9 +255,15 @@ export class UsersController {
         SELECT 1 FROM subordinate_tree WHERE id = $1 LIMIT 1
       `, [managerId, id]);
 
+      console.log(`[setManager] 🔄 Checking reverse: Is ${managerId} a subordinate of ${id}?`);
+
       if (reverseCheck.length > 0) {
+        console.log(`❌ [setManager] REVERSE CYCLE DETECTED: ${managerId} is currently a subordinate of ${id}`);
+        console.log(`   Cannot assign ${managerId} as manager of ${id} - would create cycle`);
         return { success: false, error: 'Cannot assign - the proposed manager is currently your subordinate' };
       }
+
+      console.log(`[setManager] ✅ No reverse cycle found - proceeding with assignment`);
 
       console.log(`[setManager] 📝 Before UPDATE: user=${id}, new parent_manager_id=${managerId}`);
 
@@ -322,10 +334,15 @@ export class UsersController {
           SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
         `, [managerId, subordinateId]);
 
+        console.log(`[manageHierarchy] 🔄 Checking for hierarchy cycle: Would ${subordinateId} → ${managerId} create a cycle?`);
+
         if (cycleCheck.length > 0) {
           await client.query('ROLLBACK');
+          console.log(`❌ [manageHierarchy] CYCLE DETECTED: ${subordinateId} is already in the management chain ABOVE ${managerId}`);
           return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
         }
+
+        console.log(`[manageHierarchy] ✅ No upward cycle found`);
 
         // Also check if subordinate would become manager of someone in their own chain
         const { rows: reverseCheck } = await client.query(`
@@ -346,10 +363,15 @@ export class UsersController {
           SELECT 1 FROM subordinate_chain WHERE id = $1 LIMIT 1
         `, [managerId, subordinateId]);
 
+        console.log(`[manageHierarchy] 🔄 Checking reverse: Is ${managerId} in hierarchy chain of ${subordinateId}?`);
+
         if (reverseCheck.length > 0) {
           await client.query('ROLLBACK');
+          console.log(`❌ [manageHierarchy] REVERSE CYCLE DETECTED: ${managerId} is already in management chain of ${subordinateId}`);
           return { success: false, error: 'Cannot assign - this user is already in your management chain' };
         }
+
+        console.log(`[manageHierarchy] ✅ No reverse cycle found - proceeding with assignment`);
 
         await client.query(`
           UPDATE user_profiles 
