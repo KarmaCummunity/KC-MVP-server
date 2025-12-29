@@ -53,7 +53,7 @@ export class UsersController {
           SELECT column_name 
           FROM information_schema.columns 
           WHERE table_name = 'user_profiles' 
-          AND column_name IN ('salary', 'seniority_start_date')
+          AND column_name IN ('salary', 'seniority_start_date', 'parent_manager_id')
         `);
 
         const existingColumns = checkResult.rows.map(r => r.column_name);
@@ -75,11 +75,23 @@ export class UsersController {
           `);
           console.log('✅ Added seniority_start_date column');
         }
+
+        if (!existingColumns.includes('parent_manager_id')) {
+          console.log('📋 Adding parent_manager_id column to user_profiles...');
+          await client.query(`
+            ALTER TABLE user_profiles 
+            ADD COLUMN parent_manager_id UUID REFERENCES user_profiles(id) ON DELETE SET NULL
+          `);
+          await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_user_profiles_parent_manager ON user_profiles(parent_manager_id)
+          `);
+          console.log('✅ Added parent_manager_id column');
+        }
       } finally {
         client.release();
       }
     } catch (error) {
-      console.error('❌ Error ensuring salary/seniority columns:', error);
+      console.error('❌ Error ensuring user profile columns:', error);
       // Don't throw - allow fallback query to work
     }
   }

@@ -1044,14 +1044,26 @@ export class PostsController {
                 return { success: false, error: 'Comment text is too long (max 2000 characters)' };
             }
 
+            // Ensure schema is up to date (Just in case getPosts wasn't called yet or schema is stale)
+            await this.ensurePostsTable();
+
             await client.query('BEGIN');
+
+            console.log(`[addComment] Checking existence of post ${postId}`);
 
             // Check if post exists
             const postCheck = await client.query(
                 'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
                 [postId]
             );
+
+            console.log(`[addComment] Post check result: ${postCheck.rows.length} rows found`);
+
             if (postCheck.rows.length === 0) {
+                // Debugging: Check if post exists with whitespace or case issues?
+                const debugCheck = await client.query('SELECT id FROM posts LIMIT 5');
+                console.log('[addComment] Debug - First 5 posts in DB:', debugCheck.rows);
+
                 await client.query('ROLLBACK');
                 return { success: false, error: 'Post not found' };
             }
