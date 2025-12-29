@@ -538,31 +538,35 @@ export class PostsController {
 
                     console.log(`✅[getPosts] Fallback query returned ${mappedRows.length} posts`);
                     return { success: true, data: mappedRows };
+                } catch (fallbackError) {
+                    console.warn('⚠️ [getPosts] Fallback query also failed');
+                    throw queryError;
                 }
-        } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                console.error('Get posts error:', errorMessage);
-                return {
-                    success: false,
-                    error: `Failed to get posts: ${errorMessage} `
-                };
             }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Get posts error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to get posts: ${errorMessage} `
+            };
         }
+    }
 
     @Get('user/:userId')
-        async getUserPosts(
-            @Param('userId') userId: string,
-            @Query('limit') limitArg: string,
-            @Query('viewer_id') viewerId ?: string
-        ) {
-            try {
-                await this.ensurePostsTable();
-                await this.ensureLikesCommentsTable();
+    async getUserPosts(
+        @Param('userId') userId: string,
+        @Query('limit') limitArg: string,
+        @Query('viewer_id') viewerId?: string
+    ) {
+        try {
+            await this.ensurePostsTable();
+            await this.ensureLikesCommentsTable();
 
-                const limit = parseInt(limitArg) || 20;
+            const limit = parseInt(limitArg) || 20;
 
-                // Use explicit column names to avoid conflicts in JOIN queries
-                let query = `
+            // Use explicit column names to avoid conflicts in JOIN queries
+            let query = `
                 SELECT
                 p.id,
                     p.author_id,
@@ -583,25 +587,25 @@ export class PostsController {
                     CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
                 `;
 
-                // Check if post_likes table exists before using it
-                const postLikesExists = await this.pool.query(`
+            // Check if post_likes table exists before using it
+            const postLikesExists = await this.pool.query(`
                 SELECT EXISTS(
                     SELECT 1 FROM information_schema.tables 
                     WHERE table_name = 'post_likes' AND table_schema = 'public'
                 ) AS exists;
                 `);
 
-                if (viewerId && postLikesExists.rows[0]?.exists) {
-                    query += `,
+            if (viewerId && postLikesExists.rows[0]?.exists) {
+                query += `,
                     EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
                 `;
-                } else {
-                    query += `,
+            } else {
+                query += `,
                     false as is_liked
                 `;
-                }
+            }
 
-                query += `
+            query += `
                 FROM posts p
                 LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
@@ -610,181 +614,181 @@ export class PostsController {
                 LIMIT $2
             `;
 
-                const params = viewerId ? [userId, limit, viewerId] : [userId, limit];
-                const { rows } = await this.pool.query(query, params);
+            const params = viewerId ? [userId, limit, viewerId] : [userId, limit];
+            const { rows } = await this.pool.query(query, params);
 
-                return { success: true, data: rows };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Get user posts error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    userId,
-                    limit: limitArg,
-                    viewerId
-                });
-                return {
-                    success: false,
-                    error: `Failed to get user posts: ${errorMessage} `
-                };
-            }
+            return { success: true, data: rows };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get user posts error:', {
+                message: errorMessage,
+                stack: errorStack,
+                userId,
+                limit: limitArg,
+                viewerId
+            });
+            return {
+                success: false,
+                error: `Failed to get user posts: ${errorMessage} `
+            };
         }
+    }
 
-        // ============================================
-        // LIKES ENDPOINTS
-        // ============================================
+    // ============================================
+    // LIKES ENDPOINTS
+    // ============================================
 
-        /**
-         * Toggle like on a post (like if not liked, unlike if already liked)
-         * POST /api/posts/:postId/like
-         */
-        @Post(':postId/like')
-        @UseGuards(JwtAuthGuard)
-        async toggleLike(@Param('postId') postId: string, @Body() body: LikeBody) {
-            const client = await this.pool.connect();
-            try {
-                await this.ensureLikesCommentsTable();
+    /**
+     * Toggle like on a post (like if not liked, unlike if already liked)
+     * POST /api/posts/:postId/like
+     */
+    @Post(':postId/like')
+    @UseGuards(JwtAuthGuard)
+    async toggleLike(@Param('postId') postId: string, @Body() body: LikeBody) {
+        const client = await this.pool.connect();
+        try {
+            await this.ensureLikesCommentsTable();
 
-                const { user_id } = body;
-                if (!user_id) {
-                    return { success: false, error: 'user_id is required' };
-                }
+            const { user_id } = body;
+            if (!user_id) {
+                return { success: false, error: 'user_id is required' };
+            }
 
-                await client.query('BEGIN');
+            await client.query('BEGIN');
 
-                // Check if post exists
-                const postCheck = await client.query(
-                    'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
-                    [postId]
-                );
-                if (postCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'Post not found' };
-                }
+            // Check if post exists
+            const postCheck = await client.query(
+                'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
+                [postId]
+            );
+            if (postCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
 
-                // Check if user exists
-                const userCheck = await client.query(
-                    'SELECT id, name FROM user_profiles WHERE id = $1',
-                    [user_id]
-                );
-                if (userCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'User not found' };
-                }
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id, name FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
 
-                // Check if like already exists
-                const existingLike = await client.query(
-                    'SELECT id FROM post_likes WHERE post_id = $1 AND user_id = $2',
+            // Check if like already exists
+            const existingLike = await client.query(
+                'SELECT id FROM post_likes WHERE post_id = $1 AND user_id = $2',
+                [postId, user_id]
+            );
+
+            let isLiked: boolean;
+
+            if (existingLike.rows.length > 0) {
+                // Unlike - remove the like
+                await client.query(
+                    'DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2',
                     [postId, user_id]
                 );
+                isLiked = false;
+            } else {
+                // Like - add new like
+                await client.query(
+                    'INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)',
+                    [postId, user_id]
+                );
+                isLiked = true;
 
-                let isLiked: boolean;
+                // Send notification to post author if it's not the same user
+                const post = postCheck.rows[0];
+                const user = userCheck.rows[0];
 
-                if (existingLike.rows.length > 0) {
-                    // Unlike - remove the like
-                    await client.query(
-                        'DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2',
-                        [postId, user_id]
-                    );
-                    isLiked = false;
-                } else {
-                    // Like - add new like
-                    await client.query(
-                        'INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2)',
-                        [postId, user_id]
-                    );
-                    isLiked = true;
+                if (post.author_id !== user_id) {
+                    const likerName = user.name || 'משתמש';
+                    const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
 
-                    // Send notification to post author if it's not the same user
-                    const post = postCheck.rows[0];
-                    const user = userCheck.rows[0];
-
-                    if (post.author_id !== user_id) {
-                        const likerName = user.name || 'משתמש';
-                        const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
-
-                        await client.query(`
+                    await client.query(`
                         INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
                 VALUES($1, $2, $3, $4, $5, $6)
                         ON CONFLICT DO NOTHING
                     `, [
-                            post.author_id,
-                            'לייק חדש!',
-                            `${likerName} אהב / ה את ה${postType} שלך: "${post.title}"`,
-                            'like',
-                            postId,
-                            { liker_id: user_id, post_id: postId }
-                        ]);
-                    }
+                        post.author_id,
+                        'לייק חדש!',
+                        `${likerName} אהב / ה את ה${postType} שלך: "${post.title}"`,
+                        'like',
+                        postId,
+                        { liker_id: user_id, post_id: postId }
+                    ]);
                 }
-
-                // Calculate likes count from post_likes table (more reliable than reading from posts.likes)
-                const countResult = await client.query(
-                    'SELECT COUNT(*)::int as count FROM post_likes WHERE post_id = $1',
-                    [postId]
-                );
-                const likesCount = countResult.rows[0]?.count || 0;
-
-                // Update posts.likes manually as fallback (in case trigger didn't fire)
-                await client.query(
-                    'UPDATE posts SET likes = $1, updated_at = NOW() WHERE id = $2',
-                    [likesCount, postId]
-                );
-
-                await client.query('COMMIT');
-
-                // Clear cache
-                await this.redisCache.delete(`post_likes_${postId} `);
-
-                return {
-                    success: true,
-                    data: {
-                        post_id: postId,
-                        is_liked: isLiked,
-                        likes_count: likesCount
-                    }
-                };
-            } catch (error) {
-                try {
-                    await client.query('ROLLBACK');
-                } catch (rollbackError) {
-                    console.error('Rollback error:', rollbackError);
-                }
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Toggle like error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    userId: body?.user_id
-                });
-                return {
-                    success: false,
-                    error: `Failed to toggle like: ${errorMessage} `
-                };
-            } finally {
-                client.release();
             }
-        }
 
-        /**
-         * Get users who liked a post
-         * GET /api/posts/:postId/likes
-         */
-        @Get(':postId/likes')
-        async getPostLikes(
-            @Param('postId') postId: string,
-            @Query('limit') limitArg: string,
-            @Query('offset') offsetArg: string
-        ) {
+            // Calculate likes count from post_likes table (more reliable than reading from posts.likes)
+            const countResult = await client.query(
+                'SELECT COUNT(*)::int as count FROM post_likes WHERE post_id = $1',
+                [postId]
+            );
+            const likesCount = countResult.rows[0]?.count || 0;
+
+            // Update posts.likes manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET likes = $1, updated_at = NOW() WHERE id = $2',
+                [likesCount, postId]
+            );
+
+            await client.query('COMMIT');
+
+            // Clear cache
+            await this.redisCache.delete(`post_likes_${postId} `);
+
+            return {
+                success: true,
+                data: {
+                    post_id: postId,
+                    is_liked: isLiked,
+                    likes_count: likesCount
+                }
+            };
+        } catch (error) {
             try {
-                await this.ensureLikesCommentsTable();
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to toggle like: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
 
-                const limit = parseInt(limitArg) || 50;
-                const offset = parseInt(offsetArg) || 0;
+    /**
+     * Get users who liked a post
+     * GET /api/posts/:postId/likes
+     */
+    @Get(':postId/likes')
+    async getPostLikes(
+        @Param('postId') postId: string,
+        @Query('limit') limitArg: string,
+        @Query('offset') offsetArg: string
+    ) {
+        try {
+            await this.ensureLikesCommentsTable();
 
-                const { rows } = await this.pool.query(`
+            const limit = parseInt(limitArg) || 50;
+            const offset = parseInt(offsetArg) || 0;
+
+            const { rows } = await this.pool.query(`
                 SELECT
                 pl.id,
                     pl.created_at,
@@ -800,230 +804,230 @@ export class PostsController {
                 LIMIT $2 OFFSET $3
             `, [postId, limit, offset]);
 
-                // Get total count
-                const countResult = await this.pool.query(
-                    'SELECT COUNT(*) as total FROM post_likes WHERE post_id = $1',
-                    [postId]
-                );
+            // Get total count
+            const countResult = await this.pool.query(
+                'SELECT COUNT(*) as total FROM post_likes WHERE post_id = $1',
+                [postId]
+            );
 
-                return {
-                    success: true,
-                    data: rows,
-                    total: parseInt(countResult.rows[0]?.total || '0')
-                };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Get post likes error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    limit: limitArg,
-                    offset: offsetArg
-                });
-                return {
-                    success: false,
-                    error: `Failed to get likes: ${errorMessage} `
-                };
-            }
+            return {
+                success: true,
+                data: rows,
+                total: parseInt(countResult.rows[0]?.total || '0')
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post likes error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg
+            });
+            return {
+                success: false,
+                error: `Failed to get likes: ${errorMessage} `
+            };
         }
+    }
 
-        /**
-         * Check if user liked a post
-         * GET /api/posts/:postId/likes/check/:userId
-         */
-        @Get(':postId/likes/check/:userId')
-        async checkUserLiked(@Param('postId') postId: string, @Param('userId') userId: string) {
-            try {
-                await this.ensureLikesCommentsTable();
+    /**
+     * Check if user liked a post
+     * GET /api/posts/:postId/likes/check/:userId
+     */
+    @Get(':postId/likes/check/:userId')
+    async checkUserLiked(@Param('postId') postId: string, @Param('userId') userId: string) {
+        try {
+            await this.ensureLikesCommentsTable();
 
-                const result = await this.pool.query(
-                    'SELECT EXISTS(SELECT 1 FROM post_likes WHERE post_id = $1 AND user_id = $2) as is_liked',
-                    [postId, userId]
-                );
+            const result = await this.pool.query(
+                'SELECT EXISTS(SELECT 1 FROM post_likes WHERE post_id = $1 AND user_id = $2) as is_liked',
+                [postId, userId]
+            );
 
-                return {
-                    success: true,
-                    data: {
-                        post_id: postId,
-                        user_id: userId,
-                        is_liked: result.rows[0]?.is_liked || false
-                    }
-                };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Check user liked error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    userId
-                });
-                return {
-                    success: false,
-                    error: `Failed to check like status: ${errorMessage} `
-                };
-            }
+            return {
+                success: true,
+                data: {
+                    post_id: postId,
+                    user_id: userId,
+                    is_liked: result.rows[0]?.is_liked || false
+                }
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Check user liked error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId
+            });
+            return {
+                success: false,
+                error: `Failed to check like status: ${errorMessage} `
+            };
         }
+    }
 
-        // ============================================
-        // COMMENTS ENDPOINTS
-        // ============================================
+    // ============================================
+    // COMMENTS ENDPOINTS
+    // ============================================
 
-        /**
-         * Add a comment to a post
-         * POST /api/posts/:postId/comments
-         */
-        @Post(':postId/comments')
-        @UseGuards(JwtAuthGuard)
-        async addComment(@Param('postId') postId: string, @Body() body: CommentBody) {
-            const client = await this.pool.connect();
-            try {
-                await this.ensureLikesCommentsTable();
+    /**
+     * Add a comment to a post
+     * POST /api/posts/:postId/comments
+     */
+    @Post(':postId/comments')
+    @UseGuards(JwtAuthGuard)
+    async addComment(@Param('postId') postId: string, @Body() body: CommentBody) {
+        const client = await this.pool.connect();
+        try {
+            await this.ensureLikesCommentsTable();
 
-                const { user_id, text } = body;
+            const { user_id, text } = body;
 
-                if (!user_id) {
-                    return { success: false, error: 'user_id is required' };
-                }
+            if (!user_id) {
+                return { success: false, error: 'user_id is required' };
+            }
 
-                if (!text || text.trim().length === 0) {
-                    return { success: false, error: 'Comment text is required' };
-                }
+            if (!text || text.trim().length === 0) {
+                return { success: false, error: 'Comment text is required' };
+            }
 
-                if (text.length > 2000) {
-                    return { success: false, error: 'Comment text is too long (max 2000 characters)' };
-                }
+            if (text.length > 2000) {
+                return { success: false, error: 'Comment text is too long (max 2000 characters)' };
+            }
 
-                await client.query('BEGIN');
+            await client.query('BEGIN');
 
-                // Check if post exists
-                const postCheck = await client.query(
-                    'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
-                    [postId]
-                );
-                if (postCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'Post not found' };
-                }
+            // Check if post exists
+            const postCheck = await client.query(
+                'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
+                [postId]
+            );
+            if (postCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
 
-                // Check if user exists
-                const userCheck = await client.query(
-                    'SELECT id, name FROM user_profiles WHERE id = $1',
-                    [user_id]
-                );
-                if (userCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'User not found' };
-                }
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id, name FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
 
-                // Insert comment
-                const { rows } = await client.query(`
+            // Insert comment
+            const { rows } = await client.query(`
                 INSERT INTO post_comments(post_id, user_id, text)
                 VALUES($1, $2, $3)
                 RETURNING id, post_id, user_id, text, likes_count, created_at, updated_at
                     `, [postId, user_id, text.trim()]);
 
-                if (!rows || rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'Failed to create comment' };
-                }
+            if (!rows || rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Failed to create comment' };
+            }
 
-                const comment = rows[0];
+            const comment = rows[0];
 
-                // Get user info for the response
-                const userResult = await client.query(`
+            // Get user info for the response
+            const userResult = await client.query(`
                 SELECT id, name, avatar_url FROM user_profiles WHERE id = $1
                     `, [user_id]);
 
-                // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
-                const countResult = await client.query(
-                    'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
-                    [postId]
-                );
-                const commentsCount = countResult.rows[0]?.count || 0;
+            // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
+            const countResult = await client.query(
+                'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
+                [postId]
+            );
+            const commentsCount = countResult.rows[0]?.count || 0;
 
-                // Update posts.comments manually as fallback (in case trigger didn't fire)
-                await client.query(
-                    'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
-                    [commentsCount, postId]
-                );
+            // Update posts.comments manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
+                [commentsCount, postId]
+            );
 
-                // Send notification to post author if not same user
-                const post = postCheck.rows[0];
-                const user = userCheck.rows[0];
+            // Send notification to post author if not same user
+            const post = postCheck.rows[0];
+            const user = userCheck.rows[0];
 
-                if (post.author_id !== user_id) {
-                    const commenterName = user.name || 'משתמש';
-                    const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
+            if (post.author_id !== user_id) {
+                const commenterName = user.name || 'משתמש';
+                const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
 
-                    await client.query(`
+                await client.query(`
                     INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
                 VALUES($1, $2, $3, $4, $5, $6)
                 `, [
-                        post.author_id,
-                        'תגובה חדשה!',
-                        `${commenterName} הגיב / ה על ה${postType} שלך: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`,
-                        'comment',
-                        postId,
-                        { commenter_id: user_id, post_id: postId, comment_id: comment.id }
-                    ]);
-                }
-
-                await client.query('COMMIT');
-
-                // Clear cache
-                await this.redisCache.delete(`post_comments_${postId} `);
-
-                return {
-                    success: true,
-                    data: {
-                        ...comment,
-                        user: userResult.rows[0] || null,
-                        comments_count: commentsCount
-                    }
-                };
-            } catch (error) {
-                try {
-                    await client.query('ROLLBACK');
-                } catch (rollbackError) {
-                    console.error('Rollback error:', rollbackError);
-                }
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Add comment error:', {
-                    message: errorMessage,
-                    stack: errorStack,
+                    post.author_id,
+                    'תגובה חדשה!',
+                    `${commenterName} הגיב / ה על ה${postType} שלך: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`,
+                    'comment',
                     postId,
-                    userId: body?.user_id
-                });
-                return {
-                    success: false,
-                    error: `Failed to add comment: ${errorMessage} `
-                };
-            } finally {
-                client.release();
+                    { commenter_id: user_id, post_id: postId, comment_id: comment.id }
+                ]);
             }
-        }
 
-        /**
-         * Get all comments for a post
-         * GET /api/posts/:postId/comments
-         */
-        @Get(':postId/comments')
-        async getPostComments(
-            @Param('postId') postId: string,
-            @Query('limit') limitArg: string,
-            @Query('offset') offsetArg: string,
-            @Query('viewer_id') viewerId ?: string
-        ) {
+            await client.query('COMMIT');
+
+            // Clear cache
+            await this.redisCache.delete(`post_comments_${postId} `);
+
+            return {
+                success: true,
+                data: {
+                    ...comment,
+                    user: userResult.rows[0] || null,
+                    comments_count: commentsCount
+                }
+            };
+        } catch (error) {
             try {
-                await this.ensureLikesCommentsTable();
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Add comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to add comment: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
 
-                const limit = parseInt(limitArg) || 50;
-                const offset = parseInt(offsetArg) || 0;
+    /**
+     * Get all comments for a post
+     * GET /api/posts/:postId/comments
+     */
+    @Get(':postId/comments')
+    async getPostComments(
+        @Param('postId') postId: string,
+        @Query('limit') limitArg: string,
+        @Query('offset') offsetArg: string,
+        @Query('viewer_id') viewerId?: string
+    ) {
+        try {
+            await this.ensureLikesCommentsTable();
 
-                let query = `
+            const limit = parseInt(limitArg) || 50;
+            const offset = parseInt(offsetArg) || 0;
+
+            let query = `
                 SELECT
                 c.id,
                     c.post_id,
@@ -1039,18 +1043,18 @@ export class PostsController {
                     ) as user
                 `;
 
-                // Add is_liked if viewer_id is provided
-                if (viewerId) {
-                    query += `,
+            // Add is_liked if viewer_id is provided
+            if (viewerId) {
+                query += `,
                     EXISTS(SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = $4) as is_liked
                 `;
-                } else {
-                    query += `,
+            } else {
+                query += `,
                     false as is_liked
                 `;
-                }
+            }
 
-                query += `
+            query += `
                 FROM post_comments c
                 JOIN user_profiles u ON c.user_id = u.id
                 WHERE c.post_id = $1
@@ -1058,336 +1062,336 @@ export class PostsController {
                 LIMIT $2 OFFSET $3
             `;
 
-                const params = viewerId ? [postId, limit, offset, viewerId] : [postId, limit, offset];
-                const { rows } = await this.pool.query(query, params);
+            const params = viewerId ? [postId, limit, offset, viewerId] : [postId, limit, offset];
+            const { rows } = await this.pool.query(query, params);
 
-                // Get total count
-                const countResult = await this.pool.query(
-                    'SELECT COUNT(*) as total FROM post_comments WHERE post_id = $1',
-                    [postId]
-                );
+            // Get total count
+            const countResult = await this.pool.query(
+                'SELECT COUNT(*) as total FROM post_comments WHERE post_id = $1',
+                [postId]
+            );
 
-                return {
-                    success: true,
-                    data: rows,
-                    total: parseInt(countResult.rows[0]?.total || '0')
-                };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Get post comments error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    limit: limitArg,
-                    offset: offsetArg,
-                    viewerId
-                });
-                return {
-                    success: false,
-                    error: `Failed to get comments: ${errorMessage} `
-                };
-            }
+            return {
+                success: true,
+                data: rows,
+                total: parseInt(countResult.rows[0]?.total || '0')
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post comments error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg,
+                viewerId
+            });
+            return {
+                success: false,
+                error: `Failed to get comments: ${errorMessage} `
+            };
         }
+    }
 
-        /**
-         * Update a comment (only owner can update)
-         * PUT /api/posts/:postId/comments/:commentId
-         */
-        @Put(':postId/comments/:commentId')
-        @UseGuards(JwtAuthGuard)
-        async updateComment(
-            @Param('postId') postId: string,
-            @Param('commentId') commentId: string,
-            @Body() body: UpdateCommentBody
-        ) {
-            try {
-                await this.ensureLikesCommentsTable();
+    /**
+     * Update a comment (only owner can update)
+     * PUT /api/posts/:postId/comments/:commentId
+     */
+    @Put(':postId/comments/:commentId')
+    @UseGuards(JwtAuthGuard)
+    async updateComment(
+        @Param('postId') postId: string,
+        @Param('commentId') commentId: string,
+        @Body() body: UpdateCommentBody
+    ) {
+        try {
+            await this.ensureLikesCommentsTable();
 
-                const { user_id, text } = body;
+            const { user_id, text } = body;
 
-                if (!user_id) {
-                    return { success: false, error: 'user_id is required' };
-                }
+            if (!user_id) {
+                return { success: false, error: 'user_id is required' };
+            }
 
-                if (!text || text.trim().length === 0) {
-                    return { success: false, error: 'Comment text is required' };
-                }
+            if (!text || text.trim().length === 0) {
+                return { success: false, error: 'Comment text is required' };
+            }
 
-                if (text.length > 2000) {
-                    return { success: false, error: 'Comment text is too long (max 2000 characters)' };
-                }
+            if (text.length > 2000) {
+                return { success: false, error: 'Comment text is too long (max 2000 characters)' };
+            }
 
-                // Check if comment exists and belongs to user
-                const existingComment = await this.pool.query(
-                    'SELECT id, user_id FROM post_comments WHERE id = $1 AND post_id = $2',
-                    [commentId, postId]
-                );
+            // Check if comment exists and belongs to user
+            const existingComment = await this.pool.query(
+                'SELECT id, user_id FROM post_comments WHERE id = $1 AND post_id = $2',
+                [commentId, postId]
+            );
 
-                if (existingComment.rows.length === 0) {
-                    return { success: false, error: 'Comment not found' };
-                }
+            if (existingComment.rows.length === 0) {
+                return { success: false, error: 'Comment not found' };
+            }
 
-                if (existingComment.rows[0].user_id !== user_id) {
-                    return { success: false, error: 'You can only edit your own comments' };
-                }
+            if (existingComment.rows[0].user_id !== user_id) {
+                return { success: false, error: 'You can only edit your own comments' };
+            }
 
-                // Update comment
-                const { rows } = await this.pool.query(`
+            // Update comment
+            const { rows } = await this.pool.query(`
                 UPDATE post_comments 
                 SET text = $1, updated_at = NOW()
                 WHERE id = $2
                 RETURNING *
                     `, [text.trim(), commentId]);
 
-                // Clear cache
-                await this.redisCache.delete(`post_comments_${postId} `);
+            // Clear cache
+            await this.redisCache.delete(`post_comments_${postId} `);
 
-                return { success: true, data: rows[0] };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Update comment error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    commentId,
-                    userId: body?.user_id
-                });
-                return {
-                    success: false,
-                    error: `Failed to update comment: ${errorMessage} `
-                };
-            }
+            return { success: true, data: rows[0] };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Update comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to update comment: ${errorMessage} `
+            };
         }
+    }
 
-        /**
-         * Delete a comment (only owner can delete)
-         * DELETE /api/posts/:postId/comments/:commentId
-         */
-        @Delete(':postId/comments/:commentId')
-        @UseGuards(JwtAuthGuard)
-        async deleteComment(
-            @Param('postId') postId: string,
-            @Param('commentId') commentId: string,
-            @Query('user_id') userId: string
-        ) {
-            const client = await this.pool.connect();
-            try {
-                await this.ensureLikesCommentsTable();
+    /**
+     * Delete a comment (only owner can delete)
+     * DELETE /api/posts/:postId/comments/:commentId
+     */
+    @Delete(':postId/comments/:commentId')
+    @UseGuards(JwtAuthGuard)
+    async deleteComment(
+        @Param('postId') postId: string,
+        @Param('commentId') commentId: string,
+        @Query('user_id') userId: string
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await this.ensureLikesCommentsTable();
 
-                if (!userId) {
-                    return { success: false, error: 'user_id is required' };
-                }
-
-                await client.query('BEGIN');
-
-                // Check if comment exists and belongs to user
-                const existingComment = await client.query(
-                    'SELECT id, user_id FROM post_comments WHERE id = $1 AND post_id = $2',
-                    [commentId, postId]
-                );
-
-                if (existingComment.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'Comment not found' };
-                }
-
-                if (existingComment.rows[0].user_id !== userId) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'You can only delete your own comments' };
-                }
-
-                // Delete comment (trigger will update count)
-                await client.query(
-                    'DELETE FROM post_comments WHERE id = $1',
-                    [commentId]
-                );
-
-                // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
-                const countResult = await client.query(
-                    'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
-                    [postId]
-                );
-                const commentsCount = countResult.rows[0]?.count || 0;
-
-                // Update posts.comments manually as fallback (in case trigger didn't fire)
-                await client.query(
-                    'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
-                    [commentsCount, postId]
-                );
-
-                await client.query('COMMIT');
-
-                // Clear cache
-                await this.redisCache.delete(`post_comments_${postId} `);
-
-                return {
-                    success: true,
-                    data: {
-                        deleted_comment_id: commentId,
-                        comments_count: commentsCount
-                    }
-                };
-            } catch (error) {
-                try {
-                    await client.query('ROLLBACK');
-                } catch (rollbackError) {
-                    console.error('Rollback error:', rollbackError);
-                }
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Delete comment error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    commentId,
-                    userId
-                });
-                return {
-                    success: false,
-                    error: `Failed to delete comment: ${errorMessage} `
-                };
-            } finally {
-                client.release();
+            if (!userId) {
+                return { success: false, error: 'user_id is required' };
             }
-        }
 
-        // ============================================
-        // COMMENT LIKES ENDPOINTS
-        // ============================================
+            await client.query('BEGIN');
 
-        /**
-         * Toggle like on a comment
-         * POST /api/posts/:postId/comments/:commentId/like
-         */
-        @Post(':postId/comments/:commentId/like')
-        @UseGuards(JwtAuthGuard)
-        async toggleCommentLike(
-            @Param('postId') postId: string,
-            @Param('commentId') commentId: string,
-            @Body() body: LikeBody
-        ) {
-            const client = await this.pool.connect();
+            // Check if comment exists and belongs to user
+            const existingComment = await client.query(
+                'SELECT id, user_id FROM post_comments WHERE id = $1 AND post_id = $2',
+                [commentId, postId]
+            );
+
+            if (existingComment.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Comment not found' };
+            }
+
+            if (existingComment.rows[0].user_id !== userId) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'You can only delete your own comments' };
+            }
+
+            // Delete comment (trigger will update count)
+            await client.query(
+                'DELETE FROM post_comments WHERE id = $1',
+                [commentId]
+            );
+
+            // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
+            const countResult = await client.query(
+                'SELECT COUNT(*)::int as count FROM post_comments WHERE post_id = $1',
+                [postId]
+            );
+            const commentsCount = countResult.rows[0]?.count || 0;
+
+            // Update posts.comments manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE posts SET comments = $1, updated_at = NOW() WHERE id = $2',
+                [commentsCount, postId]
+            );
+
+            await client.query('COMMIT');
+
+            // Clear cache
+            await this.redisCache.delete(`post_comments_${postId} `);
+
+            return {
+                success: true,
+                data: {
+                    deleted_comment_id: commentId,
+                    comments_count: commentsCount
+                }
+            };
+        } catch (error) {
             try {
-                await this.ensureLikesCommentsTable();
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Delete comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId
+            });
+            return {
+                success: false,
+                error: `Failed to delete comment: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
 
-                const { user_id } = body;
-                if (!user_id) {
-                    return { success: false, error: 'user_id is required' };
-                }
+    // ============================================
+    // COMMENT LIKES ENDPOINTS
+    // ============================================
 
-                await client.query('BEGIN');
+    /**
+     * Toggle like on a comment
+     * POST /api/posts/:postId/comments/:commentId/like
+     */
+    @Post(':postId/comments/:commentId/like')
+    @UseGuards(JwtAuthGuard)
+    async toggleCommentLike(
+        @Param('postId') postId: string,
+        @Param('commentId') commentId: string,
+        @Body() body: LikeBody
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await this.ensureLikesCommentsTable();
 
-                // Check if comment exists
-                const commentCheck = await client.query(
-                    'SELECT id, user_id, text FROM post_comments WHERE id = $1 AND post_id = $2',
-                    [commentId, postId]
-                );
-                if (commentCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'Comment not found' };
-                }
+            const { user_id } = body;
+            if (!user_id) {
+                return { success: false, error: 'user_id is required' };
+            }
 
-                // Check if user exists
-                const userCheck = await client.query(
-                    'SELECT id, name FROM user_profiles WHERE id = $1',
-                    [user_id]
-                );
-                if (userCheck.rows.length === 0) {
-                    await client.query('ROLLBACK');
-                    return { success: false, error: 'User not found' };
-                }
+            await client.query('BEGIN');
 
-                // Check if like already exists
-                const existingLike = await client.query(
-                    'SELECT id FROM comment_likes WHERE comment_id = $1 AND user_id = $2',
+            // Check if comment exists
+            const commentCheck = await client.query(
+                'SELECT id, user_id, text FROM post_comments WHERE id = $1 AND post_id = $2',
+                [commentId, postId]
+            );
+            if (commentCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Comment not found' };
+            }
+
+            // Check if user exists
+            const userCheck = await client.query(
+                'SELECT id, name FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+            if (userCheck.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
+
+            // Check if like already exists
+            const existingLike = await client.query(
+                'SELECT id FROM comment_likes WHERE comment_id = $1 AND user_id = $2',
+                [commentId, user_id]
+            );
+
+            let isLiked: boolean;
+
+            if (existingLike.rows.length > 0) {
+                // Unlike - remove the like
+                await client.query(
+                    'DELETE FROM comment_likes WHERE comment_id = $1 AND user_id = $2',
                     [commentId, user_id]
                 );
+                isLiked = false;
+            } else {
+                // Like - add new like
+                await client.query(
+                    'INSERT INTO comment_likes (comment_id, user_id) VALUES ($1, $2)',
+                    [commentId, user_id]
+                );
+                isLiked = true;
 
-                let isLiked: boolean;
+                // Send notification to comment author if not same user
+                const comment = commentCheck.rows[0];
+                const user = userCheck.rows[0];
 
-                if (existingLike.rows.length > 0) {
-                    // Unlike - remove the like
-                    await client.query(
-                        'DELETE FROM comment_likes WHERE comment_id = $1 AND user_id = $2',
-                        [commentId, user_id]
-                    );
-                    isLiked = false;
-                } else {
-                    // Like - add new like
-                    await client.query(
-                        'INSERT INTO comment_likes (comment_id, user_id) VALUES ($1, $2)',
-                        [commentId, user_id]
-                    );
-                    isLiked = true;
+                if (comment.user_id !== user_id) {
+                    const likerName = user.name || 'משתמש';
 
-                    // Send notification to comment author if not same user
-                    const comment = commentCheck.rows[0];
-                    const user = userCheck.rows[0];
-
-                    if (comment.user_id !== user_id) {
-                        const likerName = user.name || 'משתמש';
-
-                        await client.query(`
+                    await client.query(`
                         INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
                 VALUES($1, $2, $3, $4, $5, $6)
                         ON CONFLICT DO NOTHING
                     `, [
-                            comment.user_id,
-                            'לייק לתגובה!',
-                            `${likerName} אהב / ה את התגובה שלך: "${comment.text.substring(0, 30)}${comment.text.length > 30 ? '...' : ''}"`,
-                            'like',
-                            postId,
-                            { liker_id: user_id, post_id: postId, comment_id: commentId }
-                        ]);
-                    }
+                        comment.user_id,
+                        'לייק לתגובה!',
+                        `${likerName} אהב / ה את התגובה שלך: "${comment.text.substring(0, 30)}${comment.text.length > 30 ? '...' : ''}"`,
+                        'like',
+                        postId,
+                        { liker_id: user_id, post_id: postId, comment_id: commentId }
+                    ]);
                 }
-
-                // Calculate likes count from comment_likes table (more reliable than reading from post_comments.likes_count)
-                const countResult = await client.query(
-                    'SELECT COUNT(*)::int as count FROM comment_likes WHERE comment_id = $1',
-                    [commentId]
-                );
-                const likesCount = countResult.rows[0]?.count || 0;
-
-                // Update post_comments.likes_count manually as fallback (in case trigger didn't fire)
-                await client.query(
-                    'UPDATE post_comments SET likes_count = $1, updated_at = NOW() WHERE id = $2',
-                    [likesCount, commentId]
-                );
-
-                await client.query('COMMIT');
-
-                return {
-                    success: true,
-                    data: {
-                        comment_id: commentId,
-                        is_liked: isLiked,
-                        likes_count: likesCount
-                    }
-                };
-            } catch (error) {
-                try {
-                    await client.query('ROLLBACK');
-                } catch (rollbackError) {
-                    console.error('Rollback error:', rollbackError);
-                }
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                const errorStack = error instanceof Error ? error.stack : undefined;
-                console.error('Toggle comment like error:', {
-                    message: errorMessage,
-                    stack: errorStack,
-                    postId,
-                    commentId,
-                    userId: body?.user_id
-                });
-                return {
-                    success: false,
-                    error: `Failed to toggle comment like: ${errorMessage} `
-                };
-            } finally {
-                client.release();
             }
+
+            // Calculate likes count from comment_likes table (more reliable than reading from post_comments.likes_count)
+            const countResult = await client.query(
+                'SELECT COUNT(*)::int as count FROM comment_likes WHERE comment_id = $1',
+                [commentId]
+            );
+            const likesCount = countResult.rows[0]?.count || 0;
+
+            // Update post_comments.likes_count manually as fallback (in case trigger didn't fire)
+            await client.query(
+                'UPDATE post_comments SET likes_count = $1, updated_at = NOW() WHERE id = $2',
+                [likesCount, commentId]
+            );
+
+            await client.query('COMMIT');
+
+            return {
+                success: true,
+                data: {
+                    comment_id: commentId,
+                    is_liked: isLiked,
+                    likes_count: likesCount
+                }
+            };
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle comment like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to toggle comment like: ${errorMessage} `
+            };
+        } finally {
+            client.release();
         }
     }
+}
