@@ -98,6 +98,26 @@ export class RidesController {
 
       const ride = rows[0];
 
+      // Create a corresponding post for the ride (enables likes/comments)
+      await client.query(`
+        INSERT INTO posts (author_id, ride_id, title, description, post_type, metadata, images)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        driverUuid,
+        ride.id,
+        ride.title,
+        ride.description || `נסיעה מ${rideData.from_location?.name || 'כאן'} ל${rideData.to_location?.name || 'שם'}`,
+        'ride',
+        JSON.stringify({
+          from_location: rideData.from_location,
+          to_location: rideData.to_location,
+          departure_time: rideData.departure_time,
+          available_seats: rideData.available_seats,
+          price_per_seat: rideData.price_per_seat
+        }),
+        rideData.images || []
+      ]);
+
       // Track user activity
       await client.query(`
         INSERT INTO user_activities (user_id, activity_type, activity_data)

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards, Req } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -25,7 +25,9 @@ export class PostsController {
     constructor(
         @Inject(PG_POOL) private readonly pool: Pool,
         private readonly redisCache: RedisCacheService,
-    ) { }
+    ) {
+        console.log('🔄 PostsController initialized');
+    }
 
     /**
      * Ensure posts table exists with correct schema, create/migrate if needed
@@ -74,9 +76,50 @@ export class PostsController {
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);");
                     }
 
+                    if (!columns.includes('ride_id')) {
+                        console.log('📝 Adding ride_id column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN ride_id UUID REFERENCES rides(id) ON DELETE CASCADE;");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_ride_id ON posts(ride_id);");
+
+                        // Migrate existing ride posts from metadata to ride_id column
+                        console.log('📝 Migrating existing ride posts to use ride_id column...');
+                        await this.pool.query(`
+                            UPDATE posts 
+                            SET ride_id = (metadata->>'ride_id')::uuid 
+                            WHERE post_type = 'ride' 
+                            AND metadata->>'ride_id' IS NOT NULL
+                            AND ride_id IS NULL;
+                        `);
+                    }
+
+                    if (!columns.includes('item_id')) {
+                        console.log('📝 Adding item_id column to posts table...');
+                        // item_id must be TEXT because items.id is TEXT (to support various ID formats)
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN item_id TEXT;");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_item_id ON posts(item_id);");
+
+                        // Migrate existing item/donation posts from metadata to item_id column
+                        console.log('📝 Migrating existing item/donation posts to use item_id column...');
+                        await this.pool.query(`
+                            UPDATE posts 
+                            SET item_id = metadata->>'item_id'
+                            WHERE post_type IN ('item', 'donation') 
+                            AND metadata->>'item_id' IS NOT NULL
+                            AND item_id IS NULL;
+                        `);
+                    }
+
                     if (!columns.includes('metadata')) {
                         console.log('📝 Adding metadata column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;");
+                    }
+
+                    // Ensure item_id is TEXT (fix for previous failed migrations)
+                    try {
+                        await this.pool.query("ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_item_id_fkey;");
+                        await this.pool.query("ALTER TABLE posts ALTER COLUMN item_id TYPE TEXT;");
+                    } catch (e) {
+                        console.log('ℹ️  Note: item_id fix check:', (e as any).message);
                     }
 
                     // Table exists and is patched
@@ -90,6 +133,8 @@ export class PostsController {
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
                     task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+                    ride_id UUID REFERENCES rides(id) ON DELETE CASCADE,
+                    item_id TEXT, -- No FK to items table as it uses composite PK and text IDs
                     title VARCHAR(255) NOT NULL,
                     description TEXT,
                     images TEXT[],
@@ -106,6 +151,8 @@ export class PostsController {
             const indexes = [
                 'idx_posts_author_id ON posts(author_id)',
                 'idx_posts_task_id ON posts(task_id)',
+                'idx_posts_ride_id ON posts(ride_id)',
+                'idx_posts_item_id ON posts(item_id)',
                 'idx_posts_created_at ON posts(created_at DESC)',
                 'idx_posts_post_type ON posts(post_type)'
             ];
@@ -447,6 +494,8 @@ export class PostsController {
                     p.id,
                     p.author_id,
                     p.task_id,
+                    p.ride_id,
+                    p.item_id,
                     p.title,
                     p.description,
                     p.images,
@@ -460,7 +509,43 @@ export class PostsController {
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
                     END as author,
-                    CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
+                    CASE WHEN t.id IS NOT NULL THEN json_build_object(
+                        'id', t.id, 
+                        'title', t.title, 
+                        'description', t.description,
+                        'status', t.status,
+                        'estimated_hours', t.estimated_hours,
+                        'due_date', t.due_date,
+                        'assignees', (
+                            SELECT json_agg(json_build_object(
+                                'id', u_assignee.id, 
+                                'name', u_assignee.name, 
+                                'avatar', u_assignee.avatar_url
+                            ))
+                            FROM user_profiles u_assignee
+                            WHERE u_assignee.id = ANY(t.assignees)
+                        )
+                    ) ELSE NULL END as task,
+                    CASE 
+                        WHEN r.id IS NOT NULL THEN json_build_object(
+                            'id', r.id, 
+                            'from_location', r.from_location,
+                            'to_location', r.to_location,
+                            'departure_time', r.departure_time,
+                            'available_seats', r.available_seats,
+                            'price_per_seat', r.price_per_seat,
+                            'status', r.status
+                        ) 
+                        ELSE NULL 
+                    END as ride_data,
+                    CASE 
+                        WHEN i.id IS NOT NULL THEN json_build_object(
+                            'id', i.id,
+                            'title', i.title,
+                            'status', i.status
+                        )
+                        ELSE NULL
+                    END as item_data
             `;
 
             // Check if post_likes table exists before using it
@@ -491,6 +576,8 @@ export class PostsController {
                 FROM posts p
                 LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
+                LEFT JOIN rides r ON p.ride_id = r.id
+                LEFT JOIN items i ON p.item_id = i.id
                 ORDER BY p.created_at DESC
                 LIMIT $1 OFFSET $2
             `;
@@ -536,7 +623,7 @@ export class PostsController {
                     const fallbackQuery = `
                         SELECT 
                             id, author_id, title, description, images, likes, comments, created_at,
-                            post_type
+                            post_type, metadata, ride_id, item_id
                         FROM posts
                         ORDER BY created_at DESC
                         LIMIT $1 OFFSET $2
@@ -549,7 +636,9 @@ export class PostsController {
                         ...row,
                         author: { id: row.author_id, name: 'משתמש', avatar_url: '' },
                         task: null,
-                        is_liked: false
+                        is_liked: false,
+                        ride_data: null,
+                        item_data: null
                     }));
 
                     console.log(`✅[getPosts] Fallback query returned ${mappedRows.length} posts`);
@@ -587,6 +676,8 @@ export class PostsController {
                 p.id,
                     p.author_id,
                     p.task_id,
+                    p.ride_id,
+                    p.item_id,
                     p.title,
                     p.description,
                     p.images,
@@ -600,7 +691,43 @@ export class PostsController {
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
                 END as author,
-                    CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
+                    CASE WHEN t.id IS NOT NULL THEN json_build_object(
+                        'id', t.id, 
+                        'title', t.title, 
+                        'description', t.description,
+                        'status', t.status,
+                        'estimated_hours', t.estimated_hours,
+                        'due_date', t.due_date,
+                        'assignees', (
+                            SELECT json_agg(json_build_object(
+                                'id', u_assignee.id, 
+                                'name', u_assignee.name, 
+                                'avatar', u_assignee.avatar_url
+                            ))
+                            FROM user_profiles u_assignee
+                            WHERE u_assignee.id = ANY(t.assignees)
+                        )
+                    ) ELSE NULL END as task,
+                    CASE 
+                        WHEN r.id IS NOT NULL THEN json_build_object(
+                            'id', r.id, 
+                            'from_location', r.from_location,
+                            'to_location', r.to_location,
+                            'departure_time', r.departure_time,
+                            'available_seats', r.available_seats,
+                            'price_per_seat', r.price_per_seat,
+                            'status', r.status
+                        ) 
+                        ELSE NULL 
+                    END as ride_data,
+                    CASE 
+                        WHEN i.id IS NOT NULL THEN json_build_object(
+                            'id', i.id,
+                            'title', i.title,
+                            'status', i.status
+                        )
+                        ELSE NULL
+                    END as item_data
                 `;
 
             // Check if post_likes table exists before using it
@@ -625,6 +752,8 @@ export class PostsController {
                 FROM posts p
                 LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
+                LEFT JOIN rides r ON p.ride_id = r.id
+                LEFT JOIN items i ON p.item_id = i.id
                 WHERE p.author_id = $1
                 ORDER BY p.created_at DESC
                 LIMIT $2
@@ -1405,6 +1534,190 @@ export class PostsController {
             return {
                 success: false,
                 error: `Failed to toggle comment like: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST DELETION ENDPOINT
+    // ============================================
+
+    /**
+     * Delete a post and its related entity (ride/item/task)
+     * DELETE /api/posts/:postId
+     * 
+     * Rules:
+     * 1. User can delete their own posts
+     * 2. Super admin can delete any post
+     * 3. Deleting a post cascades based on post_type:
+     *    - ride: Deletes the ride (post auto-deleted via CASCADE)
+     *    - item/donation: Deletes the item (post auto-deleted via CASCADE)
+     *    - task: Only deletes the post, not the task
+     *    - general: Only deletes the post
+     */
+    @Delete(':postId')
+    @UseGuards(JwtAuthGuard)
+    async deletePost(
+        @Param('postId') postId: string,
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Get user_id from authenticated request (more secure/reliable than body)
+            // JwtAuthGuard populates req.user with SessionTokenPayload which uses 'userId'
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub;
+
+            if (!user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                `SELECT p.*, u.roles 
+                 FROM posts p
+                 LEFT JOIN user_profiles u ON p.author_id = u.id
+                 WHERE p.id = $1`,
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check permissions
+            const userResult = await client.query(
+                'SELECT roles FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+
+            if (userResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
+
+            const userRoles = userResult.rows[0].roles || [];
+            const isSuperAdmin = userRoles.includes('super_admin');
+            const isOwner = post.author_id === user_id;
+
+            if (!isOwner && !isSuperAdmin) {
+                await client.query('ROLLBACK');
+                return {
+                    success: false,
+                    error: 'Permission denied. You can only delete your own posts or be a super admin.'
+                };
+            }
+
+            console.log(`🗑️ Deleting post ${postId} (type: ${post.post_type}) by user ${user_id} (owner: ${isOwner}, admin: ${isSuperAdmin})`);
+
+            // Handle deletion based on post type
+            let deletionStrategy = 'post_only';
+            let relatedEntityDeleted = false;
+
+            switch (post.post_type) {
+                case 'ride':
+                    if (post.ride_id) {
+                        // Delete the ride - post will be auto-deleted via CASCADE
+                        await client.query('DELETE FROM rides WHERE id = $1', [post.ride_id]);
+                        deletionStrategy = 'ride_cascade';
+                        relatedEntityDeleted = true;
+                        console.log(`✅ Deleted ride ${post.ride_id} (post auto-deleted via CASCADE)`);
+                    } else {
+                        // Orphaned ride post - delete post only
+                        await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                        deletionStrategy = 'post_only';
+                    }
+                    break;
+
+                case 'item':
+                case 'donation':
+                    if (post.item_id) {
+                        // Delete the item - post will be auto-deleted via CASCADE
+                        await client.query('DELETE FROM items WHERE id = $1', [post.item_id]);
+                        deletionStrategy = 'item_cascade';
+                        relatedEntityDeleted = true;
+                        console.log(`✅ Deleted item ${post.item_id} (post auto-deleted via CASCADE)`);
+                    } else {
+                        // Orphaned item post - delete post only
+                        await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                        deletionStrategy = 'post_only';
+                    }
+                    break;
+
+                case 'task_completion':
+                case 'task_assignment':
+                    // For tasks, only delete the post, not the task itself
+                    // Tasks can have multiple posts and should be managed separately
+                    await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                    deletionStrategy = 'post_only';
+                    console.log(`✅ Deleted task post ${postId} (task ${post.task_id} preserved)`);
+                    break;
+
+                default:
+                    // General posts or unknown types - delete post only
+                    await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                    deletionStrategy = 'post_only';
+                    console.log(`✅ Deleted general post ${postId}`);
+            }
+
+            // Track deletion activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_deleted',
+                JSON.stringify({
+                    post_id: postId,
+                    post_type: post.post_type,
+                    deletion_strategy: deletionStrategy,
+                    related_entity_deleted: relatedEntityDeleted,
+                    is_admin_action: isSuperAdmin && !isOwner
+                })
+            ]);
+
+            await client.query('COMMIT');
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: {
+                    post_id: postId,
+                    post_type: post.post_type,
+                    deletion_strategy: deletionStrategy,
+                    message: relatedEntityDeleted
+                        ? `Post and related ${post.post_type} deleted successfully`
+                        : 'Post deleted successfully'
+                }
+            };
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Delete post error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: req?.user?.id
+            });
+            return {
+                success: false,
+                error: `Failed to delete post: ${errorMessage}`
             };
         } finally {
             client.release();
