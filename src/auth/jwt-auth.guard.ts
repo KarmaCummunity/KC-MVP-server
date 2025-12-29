@@ -277,7 +277,8 @@ export class AdminAuthGuard extends JwtAuthGuard {
     const isAdmin = user.roles.includes('admin') ||
       user.roles.includes('org_admin') ||
       user.roles.includes('super_admin') ||
-      user.email === 'navesarussi@gmail.com';
+      user.email === 'navesarussi@gmail.com' ||
+      user.email === 'karmacommunity2.0@gmail.com';
     if (!isAdmin) {
       this.logger.warn('Admin access denied', {
         userId: user.userId,

@@ -890,7 +890,7 @@ export class UsersController {
             level,
             COALESCE(salary, 0) as salary,
             COALESCE(seniority_start_date::text, CURRENT_DATE::text) as seniority_start_date,
-            CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
+            CASE WHEN email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com') THEN true ELSE false END as is_super_admin
           FROM hierarchy
           ORDER BY level, name
         `);
@@ -934,7 +934,7 @@ export class UsersController {
               level,
               0 as salary,
               CURRENT_DATE::text as seniority_start_date,
-              CASE WHEN email = 'navesarussi@gmail.com' THEN true ELSE false END as is_super_admin
+              CASE WHEN email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com') THEN true ELSE false END as is_super_admin
             FROM hierarchy
             ORDER BY level, name
           `);
@@ -1442,10 +1442,11 @@ export class UsersController {
         updateValues.push(updateData.firebase_uid);
       }
       if (updateData.roles !== undefined) {
-        // STATIC PROTECTION: Prevent modifying navesarussi@gmail.com roles
-        if (existingUser.email?.toLowerCase() === 'navesarussi@gmail.com') {
+        // STATIC PROTECTION: Prevent modifying super admin roles
+        const superAdminEmails = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'];
+        if (superAdminEmails.includes(existingUser.email?.toLowerCase() || '')) {
           // Instead of throwing error, we just ignore the roles update for this user to be safe but not break other updates
-          console.warn('Attempted to modify roles of Super Admin (navesarussi@gmail.com) - Ignoring role update.');
+          console.warn(`Attempted to modify roles of Super Admin (${existingUser.email}) - Ignoring role update.`);
         } else {
           updateFields.push(`roles = $${paramCount++}::text[]`);
           updateValues.push(updateData.roles);

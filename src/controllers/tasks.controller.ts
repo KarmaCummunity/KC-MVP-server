@@ -253,7 +253,7 @@ export class TasksController {
 
       // Check if manager is super admin
       const { rows: superCheck } = await this.pool.query(
-        `SELECT 1 FROM user_profiles WHERE id = $1 AND email = 'navesarussi@gmail.com'`,
+        `SELECT 1 FROM user_profiles WHERE id = $1 AND email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com')`,
         [managerId]
       );
       if (superCheck.length > 0) {

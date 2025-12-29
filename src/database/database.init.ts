@@ -933,12 +933,32 @@ export class DatabaseInit implements OnModuleInit {
           updated_at = NOW()
       `);
 
-      // Ensure super admin always has the correct roles
+      // Ensure super admins always have the correct roles
+      // navesarussi@gmail.com is the top-level super admin
       await client.query(`
         UPDATE user_profiles 
         SET roles = ARRAY['super_admin', 'admin', 'user']::TEXT[]
         WHERE email = 'navesarussi@gmail.com'
           AND (roles IS NULL OR NOT (roles @> ARRAY['super_admin']::TEXT[]))
+      `);
+      
+      // karmacommunity2.0@gmail.com is the organization super admin (under navesarussi@gmail.com)
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = ARRAY['super_admin', 'admin', 'user']::TEXT[]
+        WHERE email = 'karmacommunity2.0@gmail.com'
+          AND (roles IS NULL OR NOT (roles @> ARRAY['super_admin']::TEXT[]))
+      `);
+      
+      // Ensure karmacommunity2.0@gmail.com has navesarussi@gmail.com as parent_manager_id if not set
+      await client.query(`
+        UPDATE user_profiles kc
+        SET parent_manager_id = (
+          SELECT id FROM user_profiles WHERE email = 'navesarussi@gmail.com' LIMIT 1
+        )
+        WHERE kc.email = 'karmacommunity2.0@gmail.com'
+          AND kc.parent_manager_id IS NULL
+          AND EXISTS (SELECT 1 FROM user_profiles WHERE email = 'navesarussi@gmail.com')
       `);
 
       console.log('✅ Default data initialized');

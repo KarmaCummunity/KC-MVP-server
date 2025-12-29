@@ -120,60 +120,134 @@ export class PostsController {
         try {
             console.log('📝 Ensuring likes and comments tables exist...');
 
-            // Drop existing tables in correct order (to handle foreign key dependencies)
-            console.log('🗑️ Dropping existing tables if they exist...');
-            await this.pool.query(`DROP TABLE IF EXISTS comment_likes CASCADE;`);
-            await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
-            await this.pool.query(`DROP TABLE IF EXISTS post_likes CASCADE;`);
-
-            // Create post_likes table
-            console.log('📝 Creating post_likes table...');
-            await this.pool.query(`
-                CREATE TABLE post_likes (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(post_id, user_id)
-                );
+            // Check if post_likes table exists and has correct structure
+            const likesTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_likes'
+                ) AS exists;
             `);
-            await this.pool.query(`CREATE INDEX idx_post_likes_post_id ON post_likes(post_id);`);
-            await this.pool.query(`CREATE INDEX idx_post_likes_user_id ON post_likes(user_id);`);
-            await this.pool.query(`CREATE INDEX idx_post_likes_created_at ON post_likes(created_at DESC);`);
-            console.log('✅ post_likes table created');
 
-            // Create post_comments table
-            console.log('📝 Creating post_comments table...');
-            await this.pool.query(`
-                CREATE TABLE post_comments (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
-                    likes_count INTEGER DEFAULT 0,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                );
-            `);
-            await this.pool.query(`CREATE INDEX idx_post_comments_post_id ON post_comments(post_id);`);
-            await this.pool.query(`CREATE INDEX idx_post_comments_user_id ON post_comments(user_id);`);
-            await this.pool.query(`CREATE INDEX idx_post_comments_created_at ON post_comments(created_at DESC);`);
-            console.log('✅ post_comments table created');
+            if (!likesTableCheck.rows[0]?.exists) {
+                console.log('📝 Creating post_likes table...');
+                await this.pool.query(`
+                    CREATE TABLE post_likes (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(post_id, user_id)
+                    );
+                `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
+                console.log('✅ post_likes table created');
+            } else {
+                // Check if id column exists
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_likes' AND column_name = 'id'
+                    ) AS exists;
+                `);
+                if (!idColumnCheck.rows[0]?.exists) {
+                    console.log('⚠️ post_likes table exists but missing id column - recreating...');
+                    await this.pool.query(`DROP TABLE IF EXISTS post_likes CASCADE;`);
+                    await this.pool.query(`
+                        CREATE TABLE post_likes (
+                            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                            post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                            user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            UNIQUE(post_id, user_id)
+                        );
+                    `);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
+                    console.log('✅ post_likes table recreated');
+                }
+            }
 
-            // Create comment_likes table
-            console.log('📝 Creating comment_likes table...');
-            await this.pool.query(`
-                CREATE TABLE comment_likes (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
-                    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(comment_id, user_id)
-                );
+            // Check if post_comments table exists and has correct structure
+            const commentsTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_comments'
+                ) AS exists;
             `);
-            await this.pool.query(`CREATE INDEX idx_comment_likes_comment_id ON comment_likes(comment_id);`);
-            await this.pool.query(`CREATE INDEX idx_comment_likes_user_id ON comment_likes(user_id);`);
-            console.log('✅ comment_likes table created');
+
+            if (!commentsTableCheck.rows[0]?.exists) {
+                console.log('📝 Creating post_comments table...');
+                await this.pool.query(`
+                    CREATE TABLE post_comments (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                        text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+                        likes_count INTEGER DEFAULT 0,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
+                console.log('✅ post_comments table created');
+            } else {
+                // Check if id column exists
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_comments' AND column_name = 'id'
+                    ) AS exists;
+                `);
+                if (!idColumnCheck.rows[0]?.exists) {
+                    console.log('⚠️ post_comments table exists but missing id column - recreating...');
+                    await this.pool.query(`DROP TABLE IF EXISTS comment_likes CASCADE;`);
+                    await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
+                    await this.pool.query(`
+                        CREATE TABLE post_comments (
+                            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                            post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                            user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                            text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+                            likes_count INTEGER DEFAULT 0,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    `);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
+                    console.log('✅ post_comments table recreated');
+                }
+            }
+
+            // Check if comment_likes table exists
+            const commentLikesTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'comment_likes'
+                ) AS exists;
+            `);
+
+            if (!commentLikesTableCheck.rows[0]?.exists) {
+                console.log('📝 Creating comment_likes table...');
+                await this.pool.query(`
+                    CREATE TABLE comment_likes (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
+                        user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(comment_id, user_id)
+                    );
+                `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);`);
+                console.log('✅ comment_likes table created');
+            }
 
             // Create SQL functions for updating counts
             console.log('📝 Ensuring SQL functions exist...');
@@ -335,9 +409,21 @@ export class PostsController {
             })));
 
             // Build query with optional user_id for checking if user liked each post
+            // Use explicit column names to avoid conflicts in JOIN queries
             let query = `
                 SELECT 
-                    p.*,
+                    p.id,
+                    p.author_id,
+                    p.task_id,
+                    p.title,
+                    p.description,
+                    p.images,
+                    p.likes,
+                    p.comments,
+                    p.post_type,
+                    p.metadata,
+                    p.created_at,
+                    p.updated_at,
                     CASE 
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
@@ -345,7 +431,15 @@ export class PostsController {
                     CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
             `;
 
-            if (userId) {
+            // Check if post_likes table exists before using it
+            const postLikesExists = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_likes'
+                ) AS exists;
+            `);
+            
+            if (userId && postLikesExists.rows[0]?.exists) {
                 query += `,
                     EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
                 `;
@@ -424,9 +518,21 @@ export class PostsController {
 
             const limit = parseInt(limitArg) || 20;
 
+            // Use explicit column names to avoid conflicts in JOIN queries
             let query = `
                 SELECT 
-                    p.*,
+                    p.id,
+                    p.author_id,
+                    p.task_id,
+                    p.title,
+                    p.description,
+                    p.images,
+                    p.likes,
+                    p.comments,
+                    p.post_type,
+                    p.metadata,
+                    p.created_at,
+                    p.updated_at,
                     CASE 
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
@@ -434,7 +540,15 @@ export class PostsController {
                     CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
             `;
 
-            if (viewerId) {
+            // Check if post_likes table exists before using it
+            const postLikesExists = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_likes'
+                ) AS exists;
+            `);
+            
+            if (viewerId && postLikesExists.rows[0]?.exists) {
                 query += `,
                     EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
                 `;
