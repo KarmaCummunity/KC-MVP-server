@@ -69,7 +69,24 @@ export class DedicatedItemsService {
       );
       const ownerName = ownerResult.rows[0]?.name || 'ללא שם';
 
-      console.log('📝 Creating item:', dto.id, dto.title, '- Owner:', ownerName, `(${ownerUuid})`);
+      // Generate ID if not provided or if provided ID is a timestamp
+      // This ensures we always have a proper ID format like "item_1234567890_abc123"
+      // Similar to how rides work - the backend generates the ID, not the frontend
+      let itemId = dto.id;
+      if (!itemId || /^\d{10,13}$/.test(itemId)) {
+        // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
+        itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log('🔧 Generated new item ID (was timestamp or missing):', itemId);
+      } else {
+        console.log('✅ Using provided item ID:', itemId);
+      }
+
+      // Verify ID format before using
+      if (!itemId || itemId.length < 10) {
+        throw new Error('Invalid item ID format - ID must be at least 10 characters');
+      }
+
+      console.log('📝 Creating item:', itemId, dto.title, '- Owner:', ownerName, `(${ownerUuid})`);
 
       const result = await client.query(
         `INSERT INTO items (
@@ -79,7 +96,7 @@ export class DedicatedItemsService {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
         RETURNING *`,
         [
-          dto.id,
+          itemId,
           ownerUuid,
           dto.title,
           dto.description || '',

@@ -156,6 +156,17 @@ export class UsersController {
         }
       }
 
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING, cannot be changed
+      const { rows: targetUserCheck } = await this.pool.query(
+        'SELECT email FROM user_profiles WHERE id = $1',
+        [id]
+      );
+      
+      if (targetUserCheck.length > 0 && targetUserCheck[0].email === 'karmacommunity2.0@gmail.com') {
+        console.log(`[setManager] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
+      }
+
       // If managerId is null or undefined, we're removing the manager assignment
       if (managerId === null || managerId === undefined || managerId === 'null' || managerId === '') {
         // Check current state
@@ -169,20 +180,28 @@ export class UsersController {
           return { success: false, error: 'User not found' };
         }
 
-        // Logic: When removing a manager, also remove the 'admin' role.
-        // Users without a manager should not be admins (unless they are super_admin).
+        // Logic: When removing a manager assignment:
+        // - If user is NOT an admin, remove 'volunteer' role (becomes regular user)
+        // - If user IS an admin, keep 'admin' role but remove 'volunteer' (admin doesn't need manager)
         const currentManagerId = currentUser[0].parent_manager_id;
         console.log(`[setManager] Removing manager assignment for user ${id}, current manager: ${currentManagerId}`);
 
-        // Update to remove manager AND remove 'admin' role
-        // We use array_remove to remove 'admin' from the roles array
-        // NOTE: This will not remove 'super_admin' if present
+        // Check if user is an admin
+        const { rows: userRoles } = await this.pool.query(
+          'SELECT roles FROM user_profiles WHERE id = $1',
+          [id]
+        );
+        const isAdmin = userRoles.length > 0 && 
+          (userRoles[0].roles || []).includes('admin') || 
+          (userRoles[0].roles || []).includes('super_admin');
+
+        // Update: remove manager, and remove 'volunteer' role (but keep 'admin' if exists)
         await this.pool.query(`
           UPDATE user_profiles 
           SET 
             parent_manager_id = NULL, 
             updated_at = NOW(),
-            roles = array_remove(roles, 'admin')
+            roles = array_remove(roles, 'volunteer')
           WHERE id = $1
         `, [id]);
 
@@ -267,19 +286,19 @@ export class UsersController {
 
       console.log(`[setManager] 📝 Before UPDATE: user=${id}, new parent_manager_id=${managerId}`);
 
-      // Logic: Start of "Manager Assignment".
-      // When a user is assigned a manager, they automatically become an 'admin'.
-      // This allows them to effectively manage employees under them (if they are assigned any).
-      // Update to set manager AND ensure 'admin' role
+      // Logic: When a user is assigned a manager, they automatically become a 'volunteer'.
+      // If they're already an admin, they keep admin role (every manager is also a volunteer).
+      // Update to set manager AND ensure 'volunteer' role (keep admin if exists)
       await this.pool.query(`
         UPDATE user_profiles 
         SET 
           parent_manager_id = $1, 
           updated_at = NOW(),
-          roles = CASE 
-            WHEN NOT (roles::text[] @> ARRAY['admin']) THEN array_append(roles, 'admin')
-            ELSE roles
-          END
+          roles = (
+            SELECT array_agg(DISTINCT role)
+            FROM unnest(roles || ARRAY['volunteer']::text[]) AS role
+            WHERE role IS NOT NULL
+          )
         WHERE id = $2
       `, [managerId, id]);
 
@@ -311,6 +330,18 @@ export class UsersController {
     try {
       const { action, managerId } = body;
       await client.query('BEGIN');
+
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      const { rows: subordinateCheck } = await client.query(
+        'SELECT email FROM user_profiles WHERE id = $1',
+        [subordinateId]
+      );
+      
+      if (subordinateCheck.length > 0 && subordinateCheck[0].email === 'karmacommunity2.0@gmail.com') {
+        await client.query('ROLLBACK');
+        console.log(`[manageHierarchy] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
+      }
 
       if (action === 'add') {
         // Full cycle detection using recursive CTE
@@ -552,11 +583,14 @@ export class UsersController {
         return { success: false, error: 'User not found' };
       }
 
-      const targetIsSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(targetUser[0].email);
-      if (targetIsSuperAdmin) {
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
         await client.query('ROLLBACK');
-        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי' };
+        console.log(`[promoteToAdmin] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
+      
+      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
 
       const targetIsAlreadyAdmin = (targetUser[0].roles || []).includes('admin') ||
         (targetUser[0].roles || []).includes('super_admin');
@@ -597,12 +631,13 @@ export class UsersController {
         }
       }
 
-      // 5. All checks passed - promote the user
-      // Add 'admin' role and set parent_manager_id
+      // 5. All checks passed - promote the user to admin
+      // Add 'admin' role (and 'volunteer' if not exists - every manager is also a volunteer)
       const currentRoles = Array.isArray(targetUser[0].roles) ? targetUser[0].roles : [];
-      // Ensure unique roles and add admin
+      // Ensure unique roles and add admin + volunteer
       const uniqueRoles = new Set(currentRoles);
       uniqueRoles.add('admin');
+      uniqueRoles.add('volunteer'); // Every manager is also a volunteer
       const newRoles = Array.from(uniqueRoles);
 
       await client.query(`
@@ -708,11 +743,14 @@ export class UsersController {
         return { success: false, error: 'User not found' };
       }
 
-      const targetIsSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(targetUser[0].email);
-      if (targetIsSuperAdmin) {
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
         await client.query('ROLLBACK');
-        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי' };
+        console.log(`[demoteAdmin] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
+      
+      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
 
       // 3. Check authorization - can only demote your own subordinates
       if (!isSuperAdmin) {
@@ -736,18 +774,31 @@ export class UsersController {
       }
 
       // 4. Remove admin role
+      // If user has parent_manager_id, they become a volunteer (keep volunteer role)
+      // If user has no parent_manager_id, remove volunteer role too (becomes regular user)
       const currentRoles = Array.isArray(targetUser[0].roles) ? targetUser[0].roles : [];
+      const hasParentManager = !!targetUser[0].parent_manager_id;
+      
       // Remove admin and super_admin roles
-      const newRoles = currentRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
+      let newRoles = currentRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
+      
+      // If no parent_manager_id, also remove volunteer (becomes regular user)
+      if (!hasParentManager) {
+        newRoles = newRoles.filter((r: string) => r !== 'volunteer');
+      }
+      // If has parent_manager_id, keep volunteer role (they're still a volunteer)
 
-      console.log(`[demoteAdmin] 📝 Before UPDATE: target=${targetUserId}, currentRoles=${JSON.stringify(currentRoles)}, newRoles=${JSON.stringify(newRoles)}`);
+      console.log(`[demoteAdmin] 📝 Before UPDATE: target=${targetUserId}, hasParent=${hasParentManager}, currentRoles=${JSON.stringify(currentRoles)}, newRoles=${JSON.stringify(newRoles)}`);
 
-      // Also clear parent_manager_id since they're no longer an admin
+      // Clear parent_manager_id only if they don't have one (they're being demoted from admin)
+      // If they have parent_manager_id, keep it (they become volunteer under that manager)
       await client.query(`
         UPDATE user_profiles 
-        SET roles = $1::text[], parent_manager_id = NULL, updated_at = NOW()
-        WHERE id = $2
-      `, [newRoles, targetUserId]);
+        SET roles = $1::text[], 
+            parent_manager_id = CASE WHEN $2 THEN parent_manager_id ELSE NULL END,
+            updated_at = NOW()
+        WHERE id = $3
+      `, [newRoles, hasParentManager, targetUserId]);
 
       await client.query('COMMIT');
 
@@ -769,6 +820,176 @@ export class UsersController {
       await client.query('ROLLBACK');
       console.error('Demote admin error:', error);
       return { success: false, error: 'Failed to demote admin' };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Promote a user to volunteer role
+   * POST /api/users/:id/promote-volunteer
+   * Body: { requestingAdminId: string }
+   * 
+   * Rules:
+   * 1. The requesting admin must be a manager (hierarchy_level >= 1)
+   * 2. The target user must NOT already be a volunteer under someone else
+   * 3. The target user will be set as subordinate of the requesting admin
+   * 4. Adds 'volunteer' role (keeps 'admin' if exists)
+   */
+  @Post(':id/promote-volunteer')
+  @UseGuards(JwtAuthGuard)
+  async promoteToVolunteer(@Param('id') targetUserId: string, @Body() body: { requestingAdminId: string }) {
+    const client = await this.pool.connect();
+    try {
+      const { requestingAdminId } = body;
+
+      console.log(`[promoteToVolunteer] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
+
+      if (!requestingAdminId) {
+        return { success: false, error: 'requestingAdminId is required' };
+      }
+
+      await client.query('BEGIN');
+
+      // 1. Verify requesting user exists and is a manager
+      let requestingUser: any[];
+      try {
+        const result = await client.query(
+          `SELECT id, email, roles, hierarchy_level FROM user_profiles WHERE id = $1`,
+          [requestingAdminId]
+        );
+        requestingUser = result.rows;
+      } catch (error: any) {
+        // Fallback: if hierarchy_level column doesn't exist yet
+        if (error.message && error.message.includes('hierarchy_level')) {
+          const result = await client.query(
+            `SELECT id, email, roles FROM user_profiles WHERE id = $1`,
+            [requestingAdminId]
+          );
+          requestingUser = result.rows.map((row: any) => ({ ...row, hierarchy_level: null }));
+        } else {
+          throw error;
+        }
+      }
+
+      if (requestingUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Requesting user not found' };
+      }
+
+      const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(requestingUser[0].email);
+      const isAdmin = (requestingUser[0].roles || []).includes('admin') ||
+        (requestingUser[0].roles || []).includes('super_admin') ||
+        isSuperAdmin;
+      const hierarchyLevel = requestingUser[0].hierarchy_level;
+
+      // Only managers (hierarchy_level >= 1) can promote to volunteer
+      // If hierarchy_level is null (migration not run), allow if isAdmin
+      if (!isAdmin || (hierarchyLevel === null && !isSuperAdmin && !isAdmin)) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
+      }
+
+      // 2. Get target user info
+      let targetUser: any[];
+      try {
+        const result = await client.query(
+          `SELECT id, name, email, roles, parent_manager_id, hierarchy_level FROM user_profiles WHERE id = $1`,
+          [targetUserId]
+        );
+        targetUser = result.rows;
+      } catch (error: any) {
+        // Fallback: if hierarchy_level column doesn't exist yet
+        if (error.message && error.message.includes('hierarchy_level')) {
+          const result = await client.query(
+            `SELECT id, name, email, roles, parent_manager_id FROM user_profiles WHERE id = $1`,
+            [targetUserId]
+          );
+          targetUser = result.rows.map((row: any) => ({ ...row, hierarchy_level: null }));
+        } else {
+          throw error;
+        }
+      }
+
+      if (targetUser.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'User not found' };
+      }
+
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
+        await client.query('ROLLBACK');
+        console.log(`[promoteToVolunteer] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
+      }
+      
+      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
+
+      // 3. Check if target is already a volunteer under someone else
+      const targetIsVolunteer = (targetUser[0].roles || []).includes('volunteer');
+      if (targetIsVolunteer && targetUser[0].parent_manager_id && targetUser[0].parent_manager_id !== requestingAdminId) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'משתמש זה כבר מתנדב תחת מישהו אחר - לא ניתן להעביר' };
+      }
+
+      // 4. Check for cycles (same as promoteToAdmin)
+      if (!isSuperAdmin) {
+        const { rows: chainCheck } = await client.query(`
+          WITH RECURSIVE manager_chain AS (
+            SELECT id, parent_manager_id, 1 as depth
+            FROM user_profiles
+            WHERE id = $1
+            
+            UNION ALL
+            
+            SELECT u.id, u.parent_manager_id, mc.depth + 1
+            FROM user_profiles u
+            INNER JOIN manager_chain mc ON u.id = mc.parent_manager_id
+            WHERE mc.depth < 100
+          )
+          SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
+        `, [requestingAdminId, targetUserId]);
+
+        if (chainCheck.length > 0) {
+          await client.query('ROLLBACK');
+          return { success: false, error: 'לא ניתן להפוך את המנהל שלך או מנהלים מעליו למתנדב תחתיך' };
+        }
+      }
+
+      // 5. All checks passed - promote to volunteer
+      const currentRoles = Array.isArray(targetUser[0].roles) ? targetUser[0].roles : [];
+      const uniqueRoles = new Set(currentRoles);
+      uniqueRoles.add('volunteer');
+      const newRoles = Array.from(uniqueRoles);
+
+      // Set parent_manager_id and add volunteer role
+      // hierarchy_level will be calculated automatically by trigger
+      await client.query(`
+        UPDATE user_profiles 
+        SET roles = $1::text[], parent_manager_id = $2, updated_at = NOW()
+        WHERE id = $3
+      `, [newRoles, requestingAdminId, targetUserId]);
+
+      await client.query('COMMIT');
+
+      // Invalidate caches
+      await this.redisCache.delete(`user_profile_${targetUserId}`);
+      await this.redisCache.delete(`user_profile_${requestingAdminId}`);
+      await this.redisCache.invalidatePattern('users_list*');
+      console.log(`[promoteToVolunteer] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+
+      console.log(`✅ User ${targetUserId} promoted to volunteer under ${requestingAdminId}`);
+      console.log(`[promoteToVolunteer] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
+
+      return {
+        success: true,
+        message: `${targetUser[0].name || targetUser[0].email} הפך למתנדב תחתיך`
+      };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Promote to volunteer error:', error);
+      return { success: false, error: 'Failed to promote user to volunteer' };
     } finally {
       client.release();
     }
@@ -876,32 +1097,34 @@ export class UsersController {
       // Ensure columns exist before querying
       await this.ensureSalarySeniorityColumns();
 
-      // First, get the super admin (root of the tree)
-      const { rows: superAdminRows } = await this.pool.query(`
+      // First, get the ROOT admin (karmacommunity2.0@gmail.com) - the KING
+      const { rows: rootAdminRows } = await this.pool.query(`
         SELECT id, name, email, avatar_url, roles
         FROM user_profiles
-        WHERE email = 'navesarussi@gmail.com'
+        WHERE email = 'karmacommunity2.0@gmail.com'
         LIMIT 1
       `);
 
-      if (superAdminRows.length === 0) {
-        return { success: false, error: 'Super admin not found' };
+      if (rootAdminRows.length === 0) {
+        return { success: false, error: 'Root admin (karmacommunity2.0@gmail.com) not found' };
       }
 
-      const superAdmin = superAdminRows[0];
+      const rootAdmin = rootAdminRows[0];
 
       // Try query with salary/seniority fields, fallback if columns don't exist
       let allUsers: any[];
       try {
         const result = await this.pool.query(`
           WITH RECURSIVE hierarchy AS (
-            -- Base case: super admin (root)
+            -- Base case: ROOT admin (karmacommunity2.0@gmail.com) - the KING
             SELECT 
-              id, name, email, avatar_url, parent_manager_id, roles, salary, seniority_start_date,
+              id, name, email, avatar_url, 
+              NULL::UUID as parent_manager_id,  -- CRITICAL: Root admin ALWAYS has NULL
+              roles, salary, seniority_start_date,
               0 as level,
               ARRAY[id] as path
             FROM user_profiles
-            WHERE email = 'navesarussi@gmail.com'
+            WHERE email = 'karmacommunity2.0@gmail.com'
             
             UNION ALL
             
@@ -913,6 +1136,7 @@ export class UsersController {
             FROM user_profiles u
             INNER JOIN hierarchy h ON u.parent_manager_id = h.id
             WHERE h.level < 10  -- Max depth to prevent infinite loops
+              AND u.email != 'karmacommunity2.0@gmail.com'  -- Prevent root admin from appearing twice
           )
           SELECT 
             id::text as id, 
@@ -924,7 +1148,9 @@ export class UsersController {
             level,
             COALESCE(salary, 0) as salary,
             COALESCE(seniority_start_date::text, CURRENT_DATE::text) as seniority_start_date,
-            CASE WHEN email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com') THEN true ELSE false END as is_super_admin
+            CASE WHEN email = 'karmacommunity2.0@gmail.com' THEN true 
+                 WHEN email = 'navesarussi@gmail.com' THEN true 
+                 ELSE false END as is_super_admin
           FROM hierarchy
           ORDER BY level, name
         `);
@@ -935,15 +1161,17 @@ export class UsersController {
           console.warn('Salary/seniority columns not found, using fallback query');
           const result = await this.pool.query(`
             WITH RECURSIVE hierarchy AS (
-              -- Base case: super admin (root)
+              -- Base case: ROOT admin (karmacommunity2.0@gmail.com) - the KING
               SELECT 
-                id, name, email, avatar_url, parent_manager_id, roles,
+                id, name, email, avatar_url, 
+                NULL::UUID as parent_manager_id,  -- CRITICAL: Root admin ALWAYS has NULL
+                roles,
                 0::DECIMAL(10,2) as salary,
                 CURRENT_DATE::DATE as seniority_start_date,
                 0 as level,
                 ARRAY[id] as path
               FROM user_profiles
-              WHERE email = 'navesarussi@gmail.com'
+              WHERE email = 'karmacommunity2.0@gmail.com'
               
               UNION ALL
               
@@ -957,6 +1185,7 @@ export class UsersController {
               FROM user_profiles u
               INNER JOIN hierarchy h ON u.parent_manager_id = h.id
               WHERE h.level < 10  -- Max depth to prevent infinite loops
+                AND u.email != 'karmacommunity2.0@gmail.com'  -- Prevent root admin from appearing twice
             )
             SELECT 
               id::text as id, 
@@ -968,7 +1197,9 @@ export class UsersController {
               level,
               0 as salary,
               CURRENT_DATE::text as seniority_start_date,
-              CASE WHEN email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com') THEN true ELSE false END as is_super_admin
+              CASE WHEN email = 'karmacommunity2.0@gmail.com' THEN true 
+                   WHEN email = 'navesarussi@gmail.com' THEN true 
+                   ELSE false END as is_super_admin
             FROM hierarchy
             ORDER BY level, name
           `);
@@ -987,7 +1218,8 @@ export class UsersController {
         return allUsers
           .filter(user => {
             if (level === 0) {
-              return user.email === 'navesarussi@gmail.com';
+              // Root level: only the ROOT admin (karmacommunity2.0@gmail.com) - the KING
+              return user.email === 'karmacommunity2.0@gmail.com';
             }
             return user.parent_manager_id === parentId;
           })
@@ -1322,7 +1554,11 @@ export class UsersController {
             phone,
             COALESCE(avatar_url, '') as avatar_url,
             COALESCE(bio, '') as bio,
-            parent_manager_id,
+            -- CRITICAL: Root admin ALWAYS has parent_manager_id = NULL
+            CASE 
+              WHEN email = 'karmacommunity2.0@gmail.com' THEN NULL
+              ELSE parent_manager_id
+            END as parent_manager_id,
             COALESCE(karma_points, 0) as karma_points,
             COALESCE(join_date, created_at) as join_date,
             COALESCE(is_active, true) as is_active,
@@ -1359,7 +1595,11 @@ export class UsersController {
               phone,
               COALESCE(avatar_url, '') as avatar_url,
               COALESCE(bio, '') as bio,
-              parent_manager_id,
+              -- CRITICAL: Root admin ALWAYS has parent_manager_id = NULL
+              CASE 
+                WHEN email = 'karmacommunity2.0@gmail.com' THEN NULL
+                ELSE parent_manager_id
+              END as parent_manager_id,
               COALESCE(karma_points, 0) as karma_points,
               COALESCE(join_date, created_at) as join_date,
               COALESCE(is_active, true) as is_active,
@@ -1440,6 +1680,16 @@ export class UsersController {
 
       const existingUser = existingRows[0];
       const userId = existingUser.id;
+
+      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      if (existingUser.email === 'karmacommunity2.0@gmail.com') {
+        // Allow updates to name, avatar, etc. but block changes to roles, parent_manager_id, hierarchy_level
+        if (updateData.roles !== undefined || updateData.parent_manager_id !== undefined || updateData.hierarchy_level !== undefined) {
+          await client.query('ROLLBACK');
+          console.log(`[updateUser] ❌ BLOCKED: Attempt to modify root admin roles/hierarchy (karmacommunity2.0@gmail.com)`);
+          return { success: false, error: 'לא ניתן לשנות הרשאות או היררכיה למנהל הראשי - הוא המנהל הראשי' };
+        }
+      }
 
       // Build update query dynamically
       const updateFields: string[] = [];
@@ -1636,38 +1886,100 @@ export class UsersController {
 
     // Main query: Get users from user_profiles only (legacy users table no longer used)
     // Includes manager details (name, email, avatar) via subquery
-    const query = `
-      SELECT 
-        u.id::text as id,
-        COALESCE(u.name, 'ללא שם') as name,
-        COALESCE(u.avatar_url, '') as avatar_url,
-        COALESCE(u.city, '') as city,
-        COALESCE(u.karma_points, 0) as karma_points,
-        COALESCE(u.last_active, u.updated_at) as last_active,
-        COALESCE(u.total_donations_amount, 0) as total_donations_amount,
-        COALESCE(u.total_volunteer_hours, 0) as total_volunteer_hours,
-        COALESCE(u.join_date, u.created_at) as join_date,
-        COALESCE(u.bio, '') as bio,
-        COALESCE(u.roles, ARRAY['user']::text[]) as roles,
-        u.email,
-        u.is_active,
-        u.created_at,
-        u.parent_manager_id::text as parent_manager_id,
-        (SELECT json_build_object(
-          'id', m.id::text,
-          'name', COALESCE(m.name, 'ללא שם'),
-          'email', m.email,
-          'avatar_url', COALESCE(m.avatar_url, '')
-        ) FROM user_profiles m WHERE m.id = u.parent_manager_id) as manager_details
-      FROM user_profiles u
-      WHERE u.email IS NOT NULL AND u.email <> ''
-        ${whereConditions}
-      ORDER BY u.karma_points DESC, u.last_active DESC, u.join_date DESC
-      ${limitClause}
-      ${offsetClause}
-    `;
-
-    const { rows } = await this.pool.query(query, params);
+    // Includes hierarchy_level for hierarchy management (if column exists)
+    // CRITICAL: Root admin (karmacommunity2.0@gmail.com) ALWAYS has parent_manager_id = NULL
+    let query: string;
+    try {
+      // Try query with hierarchy_level (if migration ran)
+      query = `
+        SELECT 
+          u.id::text as id,
+          COALESCE(u.name, 'ללא שם') as name,
+          COALESCE(u.avatar_url, '') as avatar_url,
+          COALESCE(u.city, '') as city,
+          COALESCE(u.karma_points, 0) as karma_points,
+          COALESCE(u.last_active, u.updated_at) as last_active,
+          COALESCE(u.total_donations_amount, 0) as total_donations_amount,
+          COALESCE(u.total_volunteer_hours, 0) as total_volunteer_hours,
+          COALESCE(u.join_date, u.created_at) as join_date,
+          COALESCE(u.bio, '') as bio,
+          COALESCE(u.roles, ARRAY['user']::text[]) as roles,
+          u.email,
+          u.is_active,
+          u.created_at,
+          -- CRITICAL: Root admin ALWAYS has parent_manager_id = NULL (enforced)
+          CASE 
+            WHEN u.email = 'karmacommunity2.0@gmail.com' THEN NULL::text
+            ELSE u.parent_manager_id::text
+          END as parent_manager_id,
+          u.hierarchy_level,
+          -- Only show manager_details if NOT root admin and has parent_manager_id
+          CASE 
+            WHEN u.email = 'karmacommunity2.0@gmail.com' THEN NULL
+            ELSE (SELECT json_build_object(
+              'id', m.id::text,
+              'name', COALESCE(m.name, 'ללא שם'),
+              'email', m.email,
+              'avatar_url', COALESCE(m.avatar_url, '')
+            )::jsonb FROM user_profiles m WHERE m.id = u.parent_manager_id)
+          END::jsonb as manager_details
+        FROM user_profiles u
+        WHERE u.email IS NOT NULL AND u.email <> ''
+          ${whereConditions}
+        ORDER BY u.karma_points DESC, u.last_active DESC, u.join_date DESC
+        ${limitClause}
+        ${offsetClause}
+      `;
+      var { rows } = await this.pool.query(query, params);
+    } catch (error: any) {
+      // Fallback: if hierarchy_level column doesn't exist yet (migration not run)
+      // OR if there's a type conversion error (jsonb/json)
+      if (error.message && (error.message.includes('hierarchy_level') || error.message.includes('could not convert type jsonb'))) {
+        console.warn('[getUsers] Using fallback query:', error.message);
+        query = `
+          SELECT 
+            u.id::text as id,
+            COALESCE(u.name, 'ללא שם') as name,
+            COALESCE(u.avatar_url, '') as avatar_url,
+            COALESCE(u.city, '') as city,
+            COALESCE(u.karma_points, 0) as karma_points,
+            COALESCE(u.last_active, u.updated_at) as last_active,
+            COALESCE(u.total_donations_amount, 0) as total_donations_amount,
+            COALESCE(u.total_volunteer_hours, 0) as total_volunteer_hours,
+            COALESCE(u.join_date, u.created_at) as join_date,
+            COALESCE(u.bio, '') as bio,
+            COALESCE(u.roles, ARRAY['user']::text[]) as roles,
+            u.email,
+            u.is_active,
+            u.created_at,
+            -- CRITICAL: Root admin ALWAYS has parent_manager_id = NULL (enforced)
+            CASE 
+              WHEN u.email = 'karmacommunity2.0@gmail.com' THEN NULL::text
+              ELSE u.parent_manager_id::text
+            END as parent_manager_id,
+            NULL::INTEGER as hierarchy_level,  -- Not available yet
+            -- Only show manager_details if NOT root admin and has parent_manager_id
+            CASE 
+              WHEN u.email = 'karmacommunity2.0@gmail.com' THEN NULL
+              ELSE (SELECT json_build_object(
+                'id', m.id::text,
+                'name', COALESCE(m.name, 'ללא שם'),
+                'email', m.email,
+                'avatar_url', COALESCE(m.avatar_url, '')
+              )::jsonb FROM user_profiles m WHERE m.id = u.parent_manager_id)
+            END::jsonb as manager_details
+          FROM user_profiles u
+          WHERE u.email IS NOT NULL AND u.email <> ''
+            ${whereConditions}
+          ORDER BY u.karma_points DESC, u.last_active DESC, u.join_date DESC
+          ${limitClause}
+          ${offsetClause}
+        `;
+        var { rows } = await this.pool.query(query, params);
+      } else {
+        throw error;
+      }
+    }
 
     // Log for debugging
     console.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);

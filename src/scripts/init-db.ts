@@ -568,17 +568,22 @@ async function run() {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      // Add foreign key constraint to tasks if tasks table exists
+      // Add foreign key constraint to tasks if tasks table exists and has id column
       await client.query(`
         DO $$
         BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'tasks') THEN
-            IF NOT EXISTS (
-              SELECT 1 FROM information_schema.table_constraints 
-              WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+            IF EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'tasks' AND column_name = 'id'
             ) THEN
-              ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey 
-                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
+              IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'posts_task_id_fkey' AND table_name = 'posts'
+              ) THEN
+                ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey 
+                  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
+              END IF;
             END IF;
           END IF;
         END$$;

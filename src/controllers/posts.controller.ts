@@ -478,7 +478,10 @@ export class PostsController {
     async getPosts(
         @Query('limit') limitArg: string,
         @Query('offset') offsetArg: string,
-        @Query('user_id') userId?: string
+        @Query('user_id') userId?: string,
+        @Query('post_type') postType?: string,
+        @Query('item_id') itemId?: string,
+        @Query('ride_id') rideId?: string
     ) {
         try {
             await this.ensurePostsTable();
@@ -562,10 +565,37 @@ export class PostsController {
                 // Ignore
             }
 
+            // Build WHERE conditions first to know param count
+            const whereConditions: string[] = [];
+            const params: any[] = [limit, offset];
+            let paramIndex = 3;
+
+            if (postType) {
+                whereConditions.push(`p.post_type = $${paramIndex}`);
+                params.push(postType);
+                paramIndex++;
+            }
+
+            if (itemId) {
+                whereConditions.push(`p.item_id = $${paramIndex}`);
+                params.push(itemId);
+                paramIndex++;
+            }
+
+            if (rideId) {
+                whereConditions.push(`p.ride_id = $${paramIndex}`);
+                params.push(rideId);
+                paramIndex++;
+            }
+
+            // Now we know the param index for userId
+            const userIdParamIndex = paramIndex;
+
             if (userId && postLikesExists) {
                 query += `,
-                    EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
+                    EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $${userIdParamIndex}) as is_liked
                 `;
+                params.push(userId);
             } else {
                 query += `,
                     false as is_liked
@@ -578,11 +608,16 @@ export class PostsController {
                 LEFT JOIN tasks t ON p.task_id = t.id
                 LEFT JOIN rides r ON p.ride_id = r.id
                 LEFT JOIN items i ON p.item_id = i.id
+            `;
+
+            if (whereConditions.length > 0) {
+                query += ` WHERE ${whereConditions.join(' AND ')}`;
+            }
+
+            query += `
                 ORDER BY p.created_at DESC
                 LIMIT $1 OFFSET $2
             `;
-
-            const params = userId ? [limit, offset, userId] : [limit, offset];
 
             console.log('📝 [getPosts] Executing query with params:', { limit, offset, userId, hasUserId: !!userId });
 
