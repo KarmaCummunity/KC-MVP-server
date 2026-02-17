@@ -293,6 +293,9 @@ export class DatabaseInit implements OnModuleInit {
 
       // Run challenges schema
       await this.runChallengesSchema(client);
+
+      // Run community group challenges schema
+      await this.runCommunityGroupChallengesSchema(client);
     } catch (err) {
       console.error('❌ Schema creation failed:', err);
       throw err;
@@ -1012,6 +1015,73 @@ export class DatabaseInit implements OnModuleInit {
       console.log(`✅ Challenges schema tables created successfully from: ${schemaPath}`);
     } catch (err) {
       console.error('❌ Challenges schema creation failed:', err);
+      // Don't throw here as it's not critical
+    }
+  }
+
+  private async runCommunityGroupChallengesSchema(client: any) {
+    try {
+      // Support both build (dist) and dev (src) paths
+      const candidates = [
+        path.join(__dirname, 'community-group-challenges-schema.sql'),
+        path.join(process.cwd(), 'dist', 'database', 'community-group-challenges-schema.sql'),
+        path.join(process.cwd(), 'src', 'database', 'community-group-challenges-schema.sql'),
+        path.resolve(__dirname, '../../src/database/community-group-challenges-schema.sql'),
+      ];
+
+      let schemaPath = '';
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          schemaPath = p;
+          break;
+        }
+      }
+
+      if (!schemaPath) {
+        console.warn('⚠️ community-group-challenges-schema.sql not found, skipping community challenges tables');
+        return;
+      }
+
+      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+
+      // Split SQL statements intelligently, handling DO $$ blocks
+      const statements = this.splitSqlStatements(schemaSql);
+
+      for (let i = 0; i < statements.length; i++) {
+        const statement = statements[i];
+        if (statement.trim()) {
+          try {
+            await client.query(statement.trim());
+          } catch (err: any) {
+            console.error(`❌ Failed at COMMUNITY CHALLENGES statement #${i + 1} of ${statements.length}:`);
+            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            throw err;
+          }
+        }
+      }
+
+      // Additional migration: Ensure image_url column exists
+      try {
+        await client.query(`
+          DO $$ 
+          BEGIN
+              IF NOT EXISTS (
+                  SELECT 1 FROM information_schema.columns 
+                  WHERE table_name = 'community_group_challenges' AND column_name = 'image_url'
+              ) THEN
+                  ALTER TABLE community_group_challenges ADD COLUMN image_url TEXT;
+                  RAISE NOTICE 'Column image_url added to community_group_challenges';
+              END IF;
+          END $$;
+        `);
+        console.log('✅ Verified image_url column exists in community_group_challenges');
+      } catch (err) {
+        console.error('⚠️ Could not verify image_url column:', err);
+      }
+
+      console.log(`✅ Community Group Challenges schema tables created successfully from: ${schemaPath}`);
+    } catch (err) {
+      console.error('❌ Community Group Challenges schema creation failed:', err);
       // Don't throw here as it's not critical
     }
   }

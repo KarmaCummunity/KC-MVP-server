@@ -10,7 +10,7 @@
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "rm -f *.tsbuildinfo && tsc -p tsconfig.build.json && npm run copy:schema",
-    "copy:schema": "mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ && cp -f src/database/challenges-schema.sql dist/database/ 2>/dev/null || true",
+    "copy:schema": "mkdir -p dist/database && cp -f src/database/schema.sql dist/database/ && cp -f src/database/challenges-schema.sql dist/database/ && cp -f src/database/community-group-challenges-schema.sql dist/database/ 2>/dev/null || true",
     "start": "node dist/main.js",
     "start:local": "REDIS_URL=redis://localhost:6379 POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_USER=kc POSTGRES_PASSWORD=kc_password POSTGRES_DB=kc_db EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com node dist/main.js",
     "start:dev": "GOOGLE_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com DATABASE_URL=postgresql://kc:kc_password@localhost:5432/kc_db REDIS_URL=redis://localhost:6379 NODE_ENV=development nest start --watch",

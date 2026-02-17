@@ -32,10 +32,14 @@ export const PG_POOL = 'PG_POOL';
           const sslEnabled =
             (sslFlag && /^(1|true|require)$/i.test(sslFlag)) || /sslmode=require/i.test(connectionString);
 
-          return new Pool({
-            connectionString,
-            ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
-          });
+        return new Pool({
+          connectionString,
+          ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
+          // Disable prepared statements to avoid schema caching issues
+          max: 20, // Maximum number of clients in the pool
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 2000,
+        });
         }
 
         // 2) Fall back to discrete env vars. Support both POSTGRES_* and PG* (Railway style)
@@ -54,6 +58,10 @@ export const PG_POOL = 'PG_POOL';
           password,
           database,
           ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
+          // Disable prepared statements to avoid schema caching issues
+          max: 20, // Maximum number of clients in the pool
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 2000,
         });
       },
     },

@@ -570,6 +570,9 @@ export class PostsController {
             const params: any[] = [limit, offset];
             let paramIndex = 3;
 
+            // Filter out hidden posts by default (unless viewing own profile)
+            whereConditions.push(`(p.status IS NULL OR p.status != 'hidden')`);
+
             if (postType) {
                 whereConditions.push(`p.post_type = $${paramIndex}`);
                 params.push(postType);
@@ -1581,6 +1584,298 @@ export class PostsController {
             return {
                 success: false,
                 error: `Failed to toggle comment like: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST UPDATE ENDPOINT
+    // ============================================
+
+    /**
+     * Update a post (title, description, image)
+     * PUT /api/posts/:postId
+     * 
+     * Rules:
+     * 1. Only post owner can update
+     * 2. Can update: title, description, image_url
+     */
+    @Put(':postId')
+    @UseGuards(JwtAuthGuard)
+    async updatePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string; title?: string; description?: string; image?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Permission denied. You can only update your own posts.' };
+            }
+
+            // Build update query dynamically
+            const updates: string[] = [];
+            const values: any[] = [];
+            let paramIndex = 1;
+
+            if (body.title !== undefined) {
+                updates.push(`title = $${paramIndex++}`);
+                values.push(body.title);
+            }
+
+            if (body.description !== undefined) {
+                updates.push(`description = $${paramIndex++}`);
+                values.push(body.description);
+            }
+
+            if (body.image !== undefined) {
+                updates.push(`image_url = $${paramIndex++}`);
+                values.push(body.image);
+            }
+
+            if (updates.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'No fields to update' };
+            }
+
+            // Add updated_at
+            updates.push(`updated_at = NOW()`);
+            values.push(postId);
+
+            // Execute update
+            const updateQuery = `
+                UPDATE posts 
+                SET ${updates.join(', ')}
+                WHERE id = $${paramIndex}
+                RETURNING *
+            `;
+
+            const result = await client.query(updateQuery, values);
+
+            // Track update activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_updated',
+                JSON.stringify({
+                    post_id: postId,
+                    updated_fields: Object.keys(body).filter(k => k !== 'user_id')
+                })
+            ]);
+
+            await client.query('COMMIT');
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: result.rows[0]
+            };
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Update post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to update post: ${errorMessage}`
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST HIDE/UNHIDE ENDPOINTS
+    // ============================================
+
+    /**
+     * Hide a post (soft delete - sets status to 'hidden')
+     * POST /api/posts/:postId/hide
+     * 
+     * Rules:
+     * 1. Only post owner can hide their posts
+     */
+    @Post(':postId/hide')
+    @UseGuards(JwtAuthGuard)
+    async hidePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                return { success: false, error: 'Permission denied. You can only hide your own posts.' };
+            }
+
+            // Update post status to 'hidden'
+            await client.query(
+                `UPDATE posts 
+                 SET status = 'hidden', updated_at = NOW()
+                 WHERE id = $1`,
+                [postId]
+            );
+
+            // Track hide activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_hidden',
+                JSON.stringify({ post_id: postId })
+            ]);
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: { status: 'hidden', post_id: postId }
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Hide post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to hide post: ${errorMessage}`
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Unhide a post (restore from hidden status)
+     * POST /api/posts/:postId/unhide
+     * 
+     * Rules:
+     * 1. Only post owner can unhide their posts
+     */
+    @Post(':postId/unhide')
+    @UseGuards(JwtAuthGuard)
+    async unhidePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                return { success: false, error: 'Permission denied. You can only unhide your own posts.' };
+            }
+
+            // Update post status back to 'active' or original status
+            await client.query(
+                `UPDATE posts 
+                 SET status = 'active', updated_at = NOW()
+                 WHERE id = $1`,
+                [postId]
+            );
+
+            // Track unhide activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_unhidden',
+                JSON.stringify({ post_id: postId })
+            ]);
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: { status: 'active', post_id: postId }
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Unhide post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to unhide post: ${errorMessage}`
             };
         } finally {
             client.release();
