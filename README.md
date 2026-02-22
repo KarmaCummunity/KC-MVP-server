@@ -70,7 +70,18 @@ JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters-long
 # DATABASE_URL=postgres://user:pass@host:5432/dbname
 # REDIS_URL=redis://default:pass@host:6379
 # JWT_SECRET=your-production-jwt-secret-minimum-32-characters
+
+# מנהל ראשי - המייל היחיד שמוגדר בקונפיג (כל שאר המנהלים נשמרים בדאטהבייס)
+ROOT_ADMIN_EMAIL=your-admin@gmail.com
 ```
+
+## 🔐 מערכת הרשאות (Permissions)
+
+- **הרשאות נשמרות בדאטהבייס** בטבלת `user_profiles`: שדה `roles` (מערך: `user`, `volunteer`, `admin`, `super_admin`) ו-`parent_manager_id` (היררכיה).
+- **המייל היחיד בקוד/קונפיג:** `ROOT_ADMIN_EMAIL` ב-`.env` – משמש רק כדי:
+  - להעניק ל-user הזה את התפקיד `super_admin` באתחול (ב-`DatabaseInit`),
+  - ולהגן עליו מפני שינוי/הורדה (לא ניתן להסיר לו מנהל או להוריד תפקיד).
+- **כל שאר המנהלים והמתנדבים:** מקודמים/משויכים דרך ה-API (למשל `POST /api/users/:id/promote-admin`, `setManager`) והנתונים נשמרים ב-DB. אין רשימת מיילים בקוד.
 
 ## 📡 Endpoints
 

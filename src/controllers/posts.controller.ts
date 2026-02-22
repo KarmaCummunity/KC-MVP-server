@@ -114,6 +114,12 @@ export class PostsController {
                         await this.pool.query("ALTER TABLE posts ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;");
                     }
 
+                    if (!columns.includes('status')) {
+                        console.log('📝 Adding status column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN status VARCHAR(50) DEFAULT 'active';");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);");
+                    }
+
                     // Ensure item_id is TEXT (fix for previous failed migrations)
                     try {
                         await this.pool.query("ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_item_id_fkey;");
@@ -141,6 +147,7 @@ export class PostsController {
                     likes INTEGER DEFAULT 0,
                     comments INTEGER DEFAULT 0,
                     post_type VARCHAR(50) DEFAULT 'task_completion',
+                    status VARCHAR(50) DEFAULT 'active',
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -154,7 +161,8 @@ export class PostsController {
                 'idx_posts_ride_id ON posts(ride_id)',
                 'idx_posts_item_id ON posts(item_id)',
                 'idx_posts_created_at ON posts(created_at DESC)',
-                'idx_posts_post_type ON posts(post_type)'
+                'idx_posts_post_type ON posts(post_type)',
+                'idx_posts_status ON posts(status)'
             ];
 
             for (const idx of indexes) {

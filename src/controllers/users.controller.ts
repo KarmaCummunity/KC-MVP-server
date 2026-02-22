@@ -20,6 +20,7 @@
 // TODO: Optimize database queries - many N+1 query problems
 import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -38,8 +39,18 @@ export class UsersController {
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) { }
 
+  /** Root admin email from env - the only protected user (cannot be demoted/modified). */
+  private getRootAdminEmail(): string {
+    return (this.configService.get<string>('ROOT_ADMIN_EMAIL') || '').toLowerCase().trim();
+  }
+
+  // ================================================================
+  // Phase 2+ Methods: Admin Hierarchy, Complex RBAC, Analytics
+  // Disabled for MVP — DO NOT DELETE. Re-enable per roadmap phases.
+  // ================================================================
   /**
    * Ensure salary and seniority_start_date columns exist in user_profiles table
    * Creates them if missing (idempotent)
@@ -144,10 +155,8 @@ export class UsersController {
         );
 
         if (reqUser.length > 0) {
-          const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(reqUser[0].email);
           const isAdmin = (reqUser[0].roles || []).includes('admin') ||
-            (reqUser[0].roles || []).includes('super_admin') ||
-            isSuperAdmin;
+            (reqUser[0].roles || []).includes('super_admin');
 
           if (!isAdmin) {
             console.log(`[setManager] Permission denied for user ${requestingUserId}`);
@@ -156,14 +165,15 @@ export class UsersController {
         }
       }
 
-      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING, cannot be changed
+      // CRITICAL: Protect root admin (from env) - cannot be changed
+      const rootEmail = this.getRootAdminEmail();
       const { rows: targetUserCheck } = await this.pool.query(
         'SELECT email FROM user_profiles WHERE id = $1',
         [id]
       );
-      
-      if (targetUserCheck.length > 0 && targetUserCheck[0].email === 'karmacommunity2.0@gmail.com') {
-        console.log(`[setManager] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+
+      if (rootEmail && targetUserCheck.length > 0 && (targetUserCheck[0].email || '').toLowerCase().trim() === rootEmail) {
+        console.log(`[setManager] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
       }
 
@@ -191,17 +201,17 @@ export class UsersController {
           'SELECT roles, email FROM user_profiles WHERE id = $1',
           [id]
         );
-        const isAdmin = userData.length > 0 && 
-          ((userData[0].roles || []).includes('admin') || 
-           (userData[0].roles || []).includes('super_admin'));
-        const isRootAdmin = userData.length > 0 && userData[0].email === 'karmacommunity2.0@gmail.com';
+        const isAdmin = userData.length > 0 &&
+          ((userData[0].roles || []).includes('admin') ||
+            (userData[0].roles || []).includes('super_admin'));
+        const isRootAdmin = userData.length > 0 && rootEmail && (userData[0].email || '').toLowerCase().trim() === rootEmail;
 
         // Build new roles array
         let newRoles = Array.isArray(userData[0]?.roles) ? [...userData[0].roles] : [];
-        
+
         // Remove volunteer role
         newRoles = newRoles.filter((r: string) => r !== 'volunteer');
-        
+
         // If admin (and not root admin), remove admin roles too (admin must have a manager)
         if (isAdmin && !isRootAdmin) {
           newRoles = newRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
@@ -241,10 +251,10 @@ export class UsersController {
       const managerEmail = checkManager[0].email;
       const managerCurrentParent = checkManager[0].parent_manager_id;
 
-      // CRITICAL FIX: If the proposed manager is the root admin (karmacommunity2.0@gmail.com),
-      // ensure it has NO parent_manager_id (it's the KING, cannot be subordinate to anyone)
-      if (managerEmail === 'karmacommunity2.0@gmail.com' && managerCurrentParent !== null) {
-        console.log(`[setManager] 🔧 FIXING: Root admin (karmacommunity2.0@gmail.com) has parent_manager_id=${managerCurrentParent}, removing it...`);
+      // CRITICAL FIX: If the proposed manager is the root admin (from env),
+      // ensure it has NO parent_manager_id (cannot be subordinate to anyone)
+      if (rootEmail && (managerEmail || '').toLowerCase().trim() === rootEmail && managerCurrentParent !== null) {
+        console.log(`[setManager] 🔧 FIXING: Root admin has parent_manager_id=${managerCurrentParent}, removing it...`);
         await this.pool.query(`
           UPDATE user_profiles 
           SET parent_manager_id = NULL, updated_at = NOW()
@@ -256,23 +266,22 @@ export class UsersController {
         await this.redisCache.invalidatePattern('users_list*');
       }
 
-      // SPECIAL CASE: If assigning to root admin (karmacommunity2.0@gmail.com), skip cycle check
-      // because root admin cannot be subordinate to anyone, so no cycle is possible
-      if (managerEmail === 'karmacommunity2.0@gmail.com') {
-        console.log(`[setManager] ✅ Assigning to root admin - skipping cycle check (root admin cannot be subordinate)`);
+      // SPECIAL CASE: If assigning to root admin (from env), skip cycle check
+      if (rootEmail && (managerEmail || '').toLowerCase().trim() === rootEmail) {
+        console.log(`[setManager] ✅ Assigning to root admin - skipping cycle check`);
         // Proceed directly to assignment (skip cycle detection)
       } else {
         // Full cycle detection using recursive CTE
         // Check if 'id' (subordinate) appears anywhere in managerId's hierarchy chain
         // This prevents: user → ... → manager → user (circular)
-        
+
         // First, get current hierarchy info for debugging
         const { rows: currentHierarchy } = await this.pool.query(`
           SELECT id, name, email, parent_manager_id 
           FROM user_profiles 
           WHERE id IN ($1, $2)
         `, [id, managerId]);
-        
+
         console.log(`[setManager] 🔍 Current hierarchy state:`, {
           userId: id,
           managerId: managerId,
@@ -283,7 +292,7 @@ export class UsersController {
             parent_manager_id: u.parent_manager_id
           }))
         });
-        
+
         // Get the full chain from managerId going up to see what we're checking
         const { rows: managerChainDebug } = await this.pool.query(`
           WITH RECURSIVE manager_chain AS (
@@ -300,11 +309,11 @@ export class UsersController {
           )
           SELECT id, parent_manager_id, depth FROM manager_chain ORDER BY depth
         `, [managerId]);
-        
-        console.log(`[setManager] 🔍 Manager chain (going up from ${managerId}):`, 
+
+        console.log(`[setManager] 🔍 Manager chain (going up from ${managerId}):`,
           managerChainDebug.map((m: any) => ({ id: m.id, parent: m.parent_manager_id, depth: m.depth }))
         );
-        
+
         const { rows: cycleCheck } = await this.pool.query(`
           WITH RECURSIVE manager_chain AS (
             -- Base case: start from the proposed manager
@@ -334,16 +343,16 @@ export class UsersController {
           );
           const userInfo = userDetails.find((u: any) => u.id === id) || { name: null, email: null };
           const managerInfo = userDetails.find((u: any) => u.id === managerId) || { name: null, email: null };
-          
+
           const userName = userInfo.name || userInfo.email || id;
           const managerName = managerInfo.name || managerInfo.email || managerId;
-          
+
           console.log(`❌ [setManager] CYCLE DETECTED: Cannot assign ${managerName} as manager of ${userName}`);
           console.log(`   Reason: ${userName} is already in the management chain above ${managerName}`);
           console.log(`   This would create a circular chain: ${userName} → ... → ${managerName} → ${userName}`);
-          return { 
-            success: false, 
-            error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - זה יוצר מחזור בהיררכיה כי ${userName} כבר נמצא בשרשרת הניהול מעל ${managerName}` 
+          return {
+            success: false,
+            error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - זה יוצר מחזור בהיררכיה כי ${userName} כבר נמצא בשרשרת הניהול מעל ${managerName}`
           };
         }
 
@@ -351,8 +360,7 @@ export class UsersController {
       }
 
       // Check reverse direction - if manager is subordinate of user
-      // Skip this check if manager is root admin (root admin cannot be subordinate)
-      if (managerEmail !== 'karmacommunity2.0@gmail.com') {
+      if (!rootEmail || (managerEmail || '').toLowerCase().trim() !== rootEmail) {
         const { rows: reverseCheck } = await this.pool.query(`
           WITH RECURSIVE subordinate_tree AS (
             -- Base case: direct subordinates of user
@@ -374,22 +382,22 @@ export class UsersController {
         console.log(`[setManager] 🔄 Checking reverse: Is ${managerId} a subordinate of ${id}?`);
 
         if (reverseCheck.length > 0) {
-        // Get user details for better error message
-        const { rows: userDetails } = await this.pool.query(
-          'SELECT id, name, email FROM user_profiles WHERE id IN ($1, $2)',
-          [id, managerId]
-        );
-        const userInfo = userDetails.find((u: any) => u.id === id) || { name: null, email: null };
-        const managerInfo = userDetails.find((u: any) => u.id === managerId) || { name: null, email: null };
-        
-        const userName = userInfo.name || userInfo.email || id;
-        const managerName = managerInfo.name || managerInfo.email || managerId;
-        
-        console.log(`❌ [setManager] REVERSE CYCLE DETECTED: ${managerName} is currently a subordinate of ${userName}`);
-        console.log(`   Cannot assign ${managerName} as manager of ${userName} - would create cycle`);
-          return { 
-            success: false, 
-            error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - ${managerName} כבר כפוף ל-${userName}` 
+          // Get user details for better error message
+          const { rows: userDetails } = await this.pool.query(
+            'SELECT id, name, email FROM user_profiles WHERE id IN ($1, $2)',
+            [id, managerId]
+          );
+          const userInfo = userDetails.find((u: any) => u.id === id) || { name: null, email: null };
+          const managerInfo = userDetails.find((u: any) => u.id === managerId) || { name: null, email: null };
+
+          const userName = userInfo.name || userInfo.email || id;
+          const managerName = managerInfo.name || managerInfo.email || managerId;
+
+          console.log(`❌ [setManager] REVERSE CYCLE DETECTED: ${managerName} is currently a subordinate of ${userName}`);
+          console.log(`   Cannot assign ${managerName} as manager of ${userName} - would create cycle`);
+          return {
+            success: false,
+            error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - ${managerName} כבר כפוף ל-${userName}`
           };
         }
 
@@ -407,18 +415,18 @@ export class UsersController {
         'SELECT roles, email FROM user_profiles WHERE id = $1',
         [id]
       );
-      
+
       if (userCheck.length > 0) {
         const userRoles = Array.isArray(userCheck[0].roles) ? userCheck[0].roles : [];
         const isAdmin = userRoles.includes('admin') || userRoles.includes('super_admin');
-        const isRootAdmin = userCheck[0].email === 'karmacommunity2.0@gmail.com';
-        
+        const isRootAdmin = rootEmail && (userCheck[0].email || '').toLowerCase().trim() === rootEmail;
+
         // If user is an admin (and not root admin), they MUST have a manager
         if (isAdmin && !isRootAdmin && !managerId) {
           console.log(`[setManager] ❌ BLOCKED: Admin ${id} cannot exist without a manager (except root admin)`);
-          return { 
-            success: false, 
-            error: 'מנהל חייב להיות משויך למנהל מעליו (חוץ מהמנהל הראשי). אם ברצונך להסיר את השיוך, המשתמש יהפוך למשתמש רגיל.' 
+          return {
+            success: false,
+            error: 'מנהל חייב להיות משויך למנהל מעליו (חוץ מהמנהל הראשי). אם ברצונך להסיר את השיוך, המשתמש יהפוך למשתמש רגיל.'
           };
         }
       }
@@ -468,15 +476,16 @@ export class UsersController {
       const { action, managerId } = body;
       await client.query('BEGIN');
 
-      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
+      // CRITICAL: Protect root admin (from env)
+      const rootEmail = this.getRootAdminEmail();
       const { rows: subordinateCheck } = await client.query(
         'SELECT email FROM user_profiles WHERE id = $1',
         [subordinateId]
       );
-      
-      if (subordinateCheck.length > 0 && subordinateCheck[0].email === 'karmacommunity2.0@gmail.com') {
+
+      if (rootEmail && subordinateCheck.length > 0 && (subordinateCheck[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[manageHierarchy] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        console.log(`[manageHierarchy] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
       }
 
@@ -691,10 +700,8 @@ export class UsersController {
         return { success: false, error: 'Requesting user not found' };
       }
 
-      const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(requestingUser[0].email);
-      const isAdmin = (requestingUser[0].roles || []).includes('admin') ||
-        (requestingUser[0].roles || []).includes('super_admin') ||
-        isSuperAdmin;
+      const isSuperAdmin = (requestingUser[0].roles || []).includes('super_admin');
+      const isAdmin = (requestingUser[0].roles || []).includes('admin') || isSuperAdmin;
 
       console.log(`[promoteToAdmin] 🔐 Authorization check:`, {
         email: requestingUser[0].email,
@@ -720,14 +727,15 @@ export class UsersController {
         return { success: false, error: 'User not found' };
       }
 
-      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
-      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
+      // CRITICAL: Protect root admin (from env)
+      const rootEmail = this.getRootAdminEmail();
+      if (rootEmail && (targetUser[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[promoteToAdmin] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        console.log(`[promoteToAdmin] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
-      
-      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
+
+      const targetIsSuperAdmin = (targetUser[0].roles || []).includes('super_admin');
 
       const targetIsAlreadyAdmin = (targetUser[0].roles || []).includes('admin') ||
         (targetUser[0].roles || []).includes('super_admin');
@@ -852,10 +860,8 @@ export class UsersController {
         return { success: false, error: 'Requesting user not found' };
       }
 
-      const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(requestingUser[0].email);
-      const isAdmin = (requestingUser[0].roles || []).includes('admin') ||
-        (requestingUser[0].roles || []).includes('super_admin') ||
-        isSuperAdmin;
+      const isSuperAdmin = (requestingUser[0].roles || []).includes('super_admin');
+      const isAdmin = (requestingUser[0].roles || []).includes('admin') || isSuperAdmin;
 
       console.log(`[demoteAdmin] 🔐 Authorization check:`, {
         email: requestingUser[0].email,
@@ -881,14 +887,15 @@ export class UsersController {
         return { success: false, error: 'User not found' };
       }
 
-      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
-      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
+      // CRITICAL: Protect root admin (from env)
+      const rootEmail = this.getRootAdminEmail();
+      if (rootEmail && (targetUser[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[demoteAdmin] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        console.log(`[demoteAdmin] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
-      
-      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
+
+      const targetIsSuperAdmin = (targetUser[0].roles || []).includes('super_admin');
 
       // 3. Check authorization - can only demote your own subordinates
       if (!isSuperAdmin) {
@@ -914,12 +921,12 @@ export class UsersController {
       // 4. Remove admin role and handle conversion
       const currentRoles = Array.isArray(targetUser[0].roles) ? targetUser[0].roles : [];
       const hasParentManager = !!targetUser[0].parent_manager_id;
-      
+
       // Remove admin and super_admin roles
       let newRoles = currentRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
-      
+
       let newParentManagerId: string | null = null;
-      
+
       if (convertToVolunteer) {
         // Convert to volunteer: set parent_manager_id to requesting admin and add volunteer role
         newParentManagerId = requestingAdminId;
@@ -964,7 +971,7 @@ export class UsersController {
       console.log(`✅ User ${targetUserId} demoted from admin by ${requestingAdminId}`);
       console.log(`[demoteAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${newParentManagerId}`);
 
-      const message = convertToVolunteer 
+      const message = convertToVolunteer
         ? `הרשאות מנהל הוסרו מ-${targetUser[0].name || targetUser[0].email} והוא הפך למתנדב`
         : `הרשאות מנהל הוסרו מ-${targetUser[0].name || targetUser[0].email}`;
 
@@ -1079,7 +1086,7 @@ export class UsersController {
         console.log(`[promoteToVolunteer] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
-      
+
       const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
 
       // 3. Check if target is already a volunteer under someone else
@@ -1450,6 +1457,9 @@ export class UsersController {
       return { success: false, error: 'Failed to get hierarchy' };
     }
   }
+  // ================================================================
+  // End Phase 2+ Admin Hierarchy & RBAC block
+  // ================================================================
 
 
 
@@ -2148,6 +2158,10 @@ export class UsersController {
     return { success: true, data: rows };
   }
 
+  // ================================================================
+  // Phase 2+ Analytics Methods (kept active — non-breaking for MVP)
+  // ================================================================
+
   @Get(':id/activities')
   async getUserActivities(@Param('id') userId: string, @Query('limit') limit?: string) {
     const cacheKey = `user_activities_${userId}_${limit || '50'}`;
@@ -2165,15 +2179,12 @@ export class UsersController {
       LIMIT $2
     `, [userId, parseInt(limit || '50')]);
 
-    await this.redisCache.set(cacheKey, rows, 5 * 60); // 5 minutes
+    await this.redisCache.set(cacheKey, rows, 5 * 60);
     return { success: true, data: rows };
   }
 
   /**
    * Get user statistics with partial caching optimization
-   * Each statistic type (donations, rides, bookings) is cached separately
-   * This allows partial cache hits - if only one stat changes, others remain cached
-   * Cache TTL: 15 minutes
    */
   @Get(':id/stats')
   async getUserStats(@Param('id') userId: string) {
@@ -2257,6 +2268,7 @@ export class UsersController {
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
     return { success: true, data: stats };
   }
+  // End Phase 2+ Analytics block (getUserActivities, getUserStats)
 
   @Post(':id/follow')
   @UseGuards(JwtAuthGuard)
@@ -2361,6 +2373,9 @@ export class UsersController {
     }
   }
 
+  // Phase 2+ Analytics: getUsersSummary (Disabled for MVP — DO NOT DELETE)
+  // @Get('stats/summary')
+  // async getUsersSummary() { ... }
   @Get('stats/summary')
   async getUsersSummary() {
     const cacheKey = 'users_summary_stats';
@@ -2371,17 +2386,17 @@ export class UsersController {
     }
 
     const { rows } = await this.pool.query(`
-      SELECT 
-        COUNT(DISTINCT LOWER(email)) as total_users,
-        COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
-        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
-        COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active_users,
-        COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
-        AVG(karma_points) as avg_karma_points,
-        SUM(total_donations_amount) as total_platform_donations
-      FROM user_profiles
-      WHERE email IS NOT NULL AND email <> ''
-    `);
+    SELECT 
+      COUNT(DISTINCT LOWER(email)) as total_users,
+      COUNT(CASE WHEN is_active = true THEN 1 END) as active_users,
+      COUNT(CASE WHEN last_active >= NOW() - INTERVAL '7 days' THEN 1 END) as weekly_active_users,
+      COUNT(CASE WHEN last_active >= NOW() - INTERVAL '30 days' THEN 1 END) as monthly_active_users,
+      COUNT(CASE WHEN join_date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as new_users_this_month,
+      AVG(karma_points) as avg_karma_points,
+      SUM(total_donations_amount) as total_platform_donations
+    FROM user_profiles
+    WHERE email IS NOT NULL AND email <> ''
+  `);
 
     const stats = rows[0];
     await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
@@ -2389,10 +2404,6 @@ export class UsersController {
     return { success: true, data: stats };
   }
 
-  /**
-   * Resolve user ID from firebase_uid, google_id, or email to UUID
-   * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
-   */
   /**
    * Resolve user ID from firebase_uid, google_id, or email to UUID
    * This endpoint is used by the client to get the database UUID when they have Firebase UID or Google ID
