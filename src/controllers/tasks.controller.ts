@@ -11,7 +11,7 @@ import { UserResolutionService } from '../services/user-resolution.service';
 import { ItemsService } from '../items/items.service';
 import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
-type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived' | 'stuck' | 'testing';
+type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived' | 'stuck' | 'testing' | 'reports';
 type TaskPriority = 'low' | 'medium' | 'high';
 
 @Controller('/api/tasks')
@@ -196,7 +196,7 @@ export class TasksController {
             UNIQUE(task_id, user_id)
           )
         `);
-        
+
         // Create indexes for task_time_logs
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_id ON task_time_logs(task_id)`);
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id)`);
@@ -253,7 +253,7 @@ export class TasksController {
 
       // Check if manager is super admin
       const { rows: superCheck } = await this.pool.query(
-        `SELECT 1 FROM user_profiles WHERE id = $1 AND email = 'navesarussi@gmail.com'`,
+        `SELECT 1 FROM user_profiles WHERE id = $1 AND email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com')`,
         [managerId]
       );
       if (superCheck.length > 0) {
@@ -390,7 +390,7 @@ export class TasksController {
       `);
       const hasTimeLogs = tableExists.rows[0].exists;
 
-      const actualHoursSubquery = hasTimeLogs 
+      const actualHoursSubquery = hasTimeLogs
         ? `COALESCE((SELECT SUM(actual_hours)::NUMERIC FROM task_time_logs WHERE task_id = t.id), 0) as actual_hours`
         : `0::NUMERIC as actual_hours`;
 
@@ -681,7 +681,8 @@ export class TasksController {
       }
 
       // Validate status
-      if (status && !['open', 'in_progress', 'done', 'archived'].includes(status)) {
+      // Validate status
+      if (status && !['open', 'in_progress', 'done', 'archived', 'stuck', 'testing', 'reports'].includes(status)) {
         return { success: false, error: 'Invalid status value' };
       }
 
@@ -749,18 +750,18 @@ export class TasksController {
       // DEFAULT ASSIGNEES: If no assignees provided, assign to creator + super admin
       if (assigneeUUIDs.length === 0) {
         console.log('📋 No assignees provided - setting default (creator + super admin)');
-        
+
         // Add creator as assignee
         if (createdByUuid) {
           assigneeUUIDs.push(createdByUuid);
         }
-        
+
         // Add super admin if different from creator
         const superAdminId = await this.getSuperAdminId();
         if (superAdminId && superAdminId !== createdByUuid) {
           assigneeUUIDs.push(superAdminId);
         }
-        
+
         console.log('📋 Default assignees set:', assigneeUUIDs);
       }
 
@@ -770,9 +771,9 @@ export class TasksController {
           const canAssign = await this.canAssignToUser(createdByUuid!, assigneeId);
           if (!canAssign) {
             console.log(`❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`);
-            return { 
-              success: false, 
-              error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך' 
+            return {
+              success: false,
+              error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
             };
           }
         }
@@ -852,14 +853,14 @@ export class TasksController {
         // AUTO-POST: Create posts for task assignment
         // Track post creation results for response
         const postResults = { created: 0, failed: 0, errors: [] as string[] };
-        
+
         try {
           // Ensure posts table exists before creating posts
           await this.ensurePostsTable();
-          
+
           // Track who already got a post to avoid duplicates
           const postCreatedFor = new Set<string>();
-          
+
           // 1. Create post for the CREATOR first (if they exist)
           if (createdByUuid) {
             try {
@@ -870,7 +871,7 @@ export class TasksController {
                 createdByUuid,
                 newTask.id,
                 `יצרת משימה חדשה: ${newTask.title}`,
-                newTask.description 
+                newTask.description
                   ? `יצרת משימה חדשה: ${newTask.description}`
                   : `יצרת משימה חדשה: ${newTask.title}`
               ]);
@@ -884,7 +885,7 @@ export class TasksController {
               console.error(`❌ Failed to create post for creator ${createdByUuid}:`, postError);
             }
           }
-          
+
           // 2. Create posts for ASSIGNEES (skip if already got post as creator)
           console.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
           for (const assigneeId of assigneeUUIDs) {
@@ -893,7 +894,7 @@ export class TasksController {
               console.log(`⏭️ Skipping post for ${assigneeId} - already created as creator`);
               continue;
             }
-            
+
             try {
               await this.pool.query(`
                 INSERT INTO posts (author_id, task_id, title, description, post_type)
@@ -902,7 +903,7 @@ export class TasksController {
                 assigneeId,
                 newTask.id,
                 `משימה חדשה: ${newTask.title}`,
-                newTask.description 
+                newTask.description
                   ? `הוקצתה לך משימה חדשה: ${newTask.description}`
                   : `הוקצתה לך משימה חדשה: ${newTask.title}`
               ]);
@@ -916,8 +917,18 @@ export class TasksController {
               console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
             }
           }
-          
+
           console.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
+
+          // Clear posts cache after creating posts
+          if (postResults.created > 0) {
+            try {
+              await this.clearPostsCaches();
+              console.log('✅ Posts caches cleared after post creation');
+            } catch (cacheErr) {
+              console.warn('Error clearing posts caches after creation (non-fatal):', cacheErr);
+            }
+          }
         } catch (tableError) {
           console.error('❌ Failed to ensure posts table:', tableError);
           postResults.errors.push('Posts table initialization failed');
@@ -1057,7 +1068,7 @@ export class TasksController {
             AND table_name = 'task_time_logs'
           )
         `);
-        
+
         if (tableExists.rows[0].exists) {
           // Check if there's a time log for this task
           const timeLogCheck = await this.pool.query(
@@ -1191,31 +1202,31 @@ export class TasksController {
 
       if (shouldUpdateAssignees) {
         console.log('👥 Updating assignees to set:', assigneeUUIDs);
-        
+
         // HIERARCHY PERMISSION CHECK: Get the task's created_by and verify permissions
         const taskCreatorRes = await this.pool.query('SELECT created_by FROM tasks WHERE id = $1', [id]);
         const taskCreatorId = taskCreatorRes.rows[0]?.created_by;
-        
+
         if (taskCreatorId) {
           // Check permissions for new assignees only (not ones that were already there)
           const safeOldAssignees = (oldAssignees || []).filter(Boolean);
           const newlyAddedAssignees = assigneeUUIDs.filter((uid: string) => !safeOldAssignees.includes(uid));
-          
+
           for (const assigneeId of newlyAddedAssignees) {
             if (assigneeId !== taskCreatorId) {
               const canAssign = await this.canAssignToUser(taskCreatorId, assigneeId);
               if (!canAssign) {
                 console.log(`❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`);
-                return { 
-                  success: false, 
-                  error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך' 
+                return {
+                  success: false,
+                  error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
                 };
               }
             }
           }
           console.log('✅ Hierarchy permission check passed for updated assignees');
         }
-        
+
         params.push(assigneeUUIDs);
         sets.push(`assignees = $${params.length}::UUID[]`);
       }
@@ -1283,11 +1294,11 @@ export class TasksController {
 
           // AUTO-POST: Create posts for newly assigned users
           const assignPostResults = { created: 0, failed: 0 };
-          
+
           try {
             // Ensure posts table exists before creating posts
             await this.ensurePostsTable();
-            
+
             console.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
             for (const assigneeId of addedAssignees) {
               try {
@@ -1298,7 +1309,7 @@ export class TasksController {
                   assigneeId,
                   updatedTask.id,
                   `משימה חדשה: ${updatedTask.title}`,
-                  updatedTask.description 
+                  updatedTask.description
                     ? `הוקצתה לך משימה חדשה: ${updatedTask.description}`
                     : `הוקצתה לך משימה חדשה: ${updatedTask.title}`
                 ]);
@@ -1310,6 +1321,16 @@ export class TasksController {
               }
             }
             console.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
+
+            // Clear posts cache after creating posts
+            if (assignPostResults.created > 0) {
+              try {
+                await this.clearPostsCaches();
+                console.log('✅ Posts caches cleared after assignment post creation');
+              } catch (cacheErr) {
+                console.warn('Error clearing posts caches after assignment (non-fatal):', cacheErr);
+              }
+            }
           } catch (tableError) {
             console.error('❌ Failed to ensure posts table for assignment posts:', tableError);
           }
@@ -1329,13 +1350,13 @@ export class TasksController {
         const task = rows[0];
         // AUTO-POST: Create posts for task completion
         const completionPostResults = { created: 0, failed: 0 };
-        
+
         try {
           // Ensure posts table exists before creating posts
           await this.ensurePostsTable();
-          
+
           console.log(`📝 Creating completion posts for task ${task.id}...`);
-          
+
           // 1. Post for creator
           if (task.created_by) {
             try {
@@ -1343,10 +1364,10 @@ export class TasksController {
                 INSERT INTO posts (author_id, task_id, title, description, post_type)
                 VALUES ($1, $2, $3, $4, 'task_completion')
               `, [
-                task.created_by, 
-                task.id, 
-                `משימה הושלמה: ${task.title}`, 
-                task.description 
+                task.created_by,
+                task.id,
+                `משימה הושלמה: ${task.title}`,
+                task.description
                   ? `המשימה "${task.title}" הושלמה בהצלחה! ${task.description}`
                   : `המשימה "${task.title}" הושלמה בהצלחה!`
               ]);
@@ -1367,10 +1388,10 @@ export class TasksController {
                     INSERT INTO posts (author_id, task_id, title, description, post_type)
                     VALUES ($1, $2, $3, $4, 'task_completion')
                   `, [
-                    assigneeId, 
-                    task.id, 
-                    `ביצעתי משימה: ${task.title}`, 
-                    task.description 
+                    assigneeId,
+                    task.id,
+                    `ביצעתי משימה: ${task.title}`,
+                    task.description
                       ? `השלמתי את המשימה "${task.title}" בהצלחה! ${task.description}`
                       : `השלמתי את המשימה "${task.title}" בהצלחה!`
                   ]);
@@ -1384,6 +1405,16 @@ export class TasksController {
             }
           }
           console.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
+
+          // Clear posts cache after creating posts
+          if (completionPostResults.created > 0) {
+            try {
+              await this.clearPostsCaches();
+              console.log('✅ Posts caches cleared after completion post creation');
+            } catch (cacheErr) {
+              console.warn('Error clearing posts caches after completion (non-fatal):', cacheErr);
+            }
+          }
         } catch (tableError) {
           console.error('❌ Failed to ensure posts table for completion posts:', tableError);
         }
@@ -1444,6 +1475,19 @@ export class TasksController {
       await this.redisCache.invalidatePattern('tasks_list_*');
     } catch (cacheError) {
       console.warn('Redis cache invalidation error (non-fatal):', cacheError);
+    }
+  }
+
+  /**
+   * Clear all posts-related caches
+   * Called after creating posts to ensure data consistency
+   */
+  private async clearPostsCaches() {
+    try {
+      await this.redisCache.invalidatePattern('posts_list_*');
+      await this.redisCache.invalidatePattern('user_posts_*');
+    } catch (cacheError) {
+      console.warn('Redis cache invalidation error for posts (non-fatal):', cacheError);
     }
   }
 

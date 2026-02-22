@@ -98,6 +98,26 @@ export class RidesController {
 
       const ride = rows[0];
 
+      // Create a corresponding post for the ride (enables likes/comments)
+      await client.query(`
+        INSERT INTO posts (author_id, ride_id, title, description, post_type, metadata, images)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        driverUuid,
+        ride.id,
+        ride.title,
+        ride.description || `נסיעה מ${rideData.from_location?.name || 'כאן'} ל${rideData.to_location?.name || 'שם'}`,
+        'ride',
+        JSON.stringify({
+          from_location: rideData.from_location,
+          to_location: rideData.to_location,
+          departure_time: rideData.departure_time,
+          available_seats: rideData.available_seats,
+          price_per_seat: rideData.price_per_seat
+        }),
+        rideData.images || []
+      ]);
+
       // Track user activity
       await client.query(`
         INSERT INTO user_activities (user_id, activity_type, activity_data)
@@ -150,10 +170,12 @@ export class RidesController {
     @Query('status') status?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
-    @Query('include_past') include_past?: string
+    @Query('include_past') include_past?: string,
+    @Query('sort_by') sort_by?: string,
+    @Query('sort_order') sort_order?: string
   ) {
-    // Cache key includes include_past
-    const cacheKey = `rides_${fromCity || 'all'}_${toCity || 'all'}_${date || 'all'}_${status || 'active'}_${limit || '50'}_${offset || '0'}_${include_past || 'false'}`;
+    // Cache key includes include_past and sort params
+    const cacheKey = `rides_${fromCity || 'all'}_${toCity || 'all'}_${date || 'all'}_${status || 'active'}_${limit || '50'}_${offset || '0'}_${include_past || 'false'}_${sort_by || 'dep'}_${sort_order || 'asc'}`;
 
     const cached = await this.redisCache.get(cacheKey);
     if (cached) {
@@ -195,7 +217,8 @@ export class RidesController {
       query += ` AND DATE(r.departure_time) = $${paramCount}`;
       params.push(date);
     } else {
-      // Only show future rides by default unless include_past is true
+      // Only show future rides by default unless include_past is true, AND we are not sorting by created_at (feed mode)
+      // If sorting by created_at, we typically want history too, but let's stick to explicit include_past for safety
       if (include_past !== 'true') {
         query += ` AND r.departure_time > NOW()`;
       }
@@ -209,7 +232,12 @@ export class RidesController {
       query += ` AND r.status = 'active'`;
     }
 
-    query += ` ORDER BY r.departure_time ASC`;
+    // Sorting logic
+    const allowedSortColumns = ['departure_time', 'created_at', 'price_per_seat'];
+    const sortCol = (sort_by && allowedSortColumns.includes(sort_by)) ? sort_by : 'departure_time';
+    const sortDir = (sort_order && ['asc', 'desc'].includes(sort_order.toLowerCase())) ? sort_order.toUpperCase() : 'ASC';
+
+    query += ` ORDER BY r.${sortCol} ${sortDir}`;
 
     if (limit) {
       paramCount++;

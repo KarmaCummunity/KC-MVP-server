@@ -53,6 +53,13 @@ class GoogleAuthDto {
   firebaseUid?: string; // Firebase UID from Firebase Auth (different from Google ID)
 }
 
+// DTO for token refresh
+class RefreshTokenDto {
+  @IsString()
+  @Length(10, 2000, { message: 'Refresh token length is invalid' })
+  refreshToken!: string;
+}
+
 // DTO for login with validation
 // Automatically transforms email to lowercase for consistent storage
 class LoginDto {
@@ -801,6 +808,62 @@ export class AuthController {
       }
 
       throw new InternalServerErrorException('Google authentication failed');
+    }
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * 
+   * Security:
+   * - Rate limited to prevent abuse
+   * - Validates refresh token before issuing new access token
+   * - No sensitive data in logs
+   * 
+   * @param refreshTokenDto - Refresh token data
+   * @returns New access token and expiration time
+   */
+  @Post('refresh')
+  @Throttle({ default: { limit: 20, ttl: 60000 } }) // 20 refresh attempts per minute
+  async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
+    try {
+      // Validate input
+      const errors = await validate(refreshTokenDto);
+      if (errors.length > 0) {
+        throw new BadRequestException('Invalid refresh token format');
+      }
+
+      this.logger.log('Token refresh attempt', {
+        timestamp: new Date().toISOString()
+      });
+
+      // Use JwtService to refresh the token
+      const result = await this.jwtService.refreshAccessToken(refreshTokenDto.refreshToken);
+
+      this.logger.log('Token refreshed successfully');
+
+      return {
+        success: true,
+        accessToken: result.accessToken,
+        expiresIn: result.expiresIn,
+      };
+    } catch (error: any) {
+      // SECURITY: Generic error message, log details separately
+      this.logger.error('Token refresh failed', {
+        error: error?.message || String(error),
+        // Only include stack trace in development
+        stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+      });
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      // If it's an UnauthorizedException from JwtService, return as 401
+      if (error?.status === 401 || error?.message?.includes('Unauthorized')) {
+        throw new BadRequestException('Invalid or expired refresh token');
+      }
+
+      throw new InternalServerErrorException('Token refresh failed');
     }
   }
 }

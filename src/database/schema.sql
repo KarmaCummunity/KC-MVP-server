@@ -501,12 +501,14 @@ CREATE TABLE IF NOT EXISTS posts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     author_id UUID NOT NULL, -- Foreign key constraint added below in DO block
     task_id UUID, -- Foreign key constraint added below in DO block
+    ride_id UUID, -- Foreign key constraint added below in DO block
+    item_id TEXT, -- Foreign key constraint added below in DO block
     title VARCHAR(255) NOT NULL,
     description TEXT,
     images TEXT[],
     likes INTEGER DEFAULT 0,
     comments INTEGER DEFAULT 0,
-    post_type VARCHAR(50) DEFAULT 'task_completion', -- task_completion, task_assignment, general_update, donation, etc.
+    post_type VARCHAR(50) DEFAULT 'task_completion', -- task_completion, task_assignment, general_update, donation, ride, item, etc.
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -567,6 +569,59 @@ BEGIN
         ALTER TABLE posts ADD CONSTRAINT posts_task_id_fkey FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL;
     END IF;
     
+    -- Add ride_id if missing
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'ride_id'
+    ) THEN
+        ALTER TABLE posts ADD COLUMN ride_id UUID;
+    END IF;
+    
+    -- Add foreign key constraint for ride_id
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'rides') THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints 
+            WHERE constraint_name = 'posts_ride_id_fkey' AND table_name = 'posts'
+        ) THEN
+            ALTER TABLE posts ADD CONSTRAINT posts_ride_id_fkey FOREIGN KEY (ride_id) REFERENCES rides(id) ON DELETE CASCADE;
+        END IF;
+    END IF;
+    
+    -- Check if item_id exists and is UUID (fix for previous failed schema update)
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'item_id' AND data_type = 'uuid'
+    ) THEN
+        -- Drop foreign key if exists
+        IF EXISTS (
+            SELECT 1 FROM information_schema.table_constraints 
+            WHERE constraint_name = 'posts_item_id_fkey' AND table_name = 'posts'
+        ) THEN
+            ALTER TABLE posts DROP CONSTRAINT posts_item_id_fkey;
+        END IF;
+        
+        -- Convert column to TEXT
+        ALTER TABLE posts ALTER COLUMN item_id TYPE TEXT;
+    END IF;
+
+    -- Add item_id if missing
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'item_id'
+    ) THEN
+        ALTER TABLE posts ADD COLUMN item_id TEXT;
+    END IF;
+    
+    -- Add foreign key constraint for item_id
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'items') THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.table_constraints 
+            WHERE constraint_name = 'posts_item_id_fkey' AND table_name = 'posts'
+        ) THEN
+            ALTER TABLE posts ADD CONSTRAINT posts_item_id_fkey FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE;
+        END IF;
+    END IF;
+    
     -- Add post_type if missing
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -599,6 +654,20 @@ BEGIN
         WHERE table_name = 'posts' AND column_name = 'task_id'
     ) THEN
         CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'ride_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_ride_id ON posts(ride_id);
+    END IF;
+    
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'item_id'
+    ) THEN
+        CREATE INDEX IF NOT EXISTS idx_posts_item_id ON posts(item_id);
     END IF;
     
     IF EXISTS (

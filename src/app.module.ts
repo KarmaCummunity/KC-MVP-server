@@ -49,6 +49,7 @@ import { StatsController } from './controllers/stats.controller';
 import { RedisTestController } from './controllers/redis-test.controller';
 import { TasksController } from './controllers/tasks.controller';
 import { ChallengesController } from './controllers/challenges.controller';
+import { CommunityGroupChallengesController } from './controllers/community-group-challenges.controller';
 import { ItemsDeliveryController } from './controllers/items-delivery.controller';
 import { ItemsDeliveryService } from './controllers/items-delivery.service';
 import { CommunityMembersController } from './controllers/community-members.controller';
@@ -108,6 +109,7 @@ import { AdminTablesService } from './services/admin-tables.service';
     RateLimitController,   // Rate limit status endpoint
     TasksController,       // Task management
     ChallengesController,  // Personal challenges/timers for admins
+    CommunityGroupChallengesController, // Community group challenges
     CommunityMembersController, // Community members management
     SyncController,        // Firebase users sync
     CrmController,         // CRM / Relationship management

@@ -22,13 +22,35 @@ export class ItemsDeliveryService {
   async createItem(createItemDto: CreateItemDto) {
     const client = await this.pool.connect();
     try {
+      await client.query('BEGIN');
+
+      // Generate ID if not provided or if provided ID is a timestamp
+      // This ensures we always have a proper ID format like "item_1234567890_abc123"
+      // Similar to how rides work - the backend generates the ID, not the frontend
+      let itemId = (createItemDto as any).id;
+      if (!itemId || /^\d{10,13}$/.test(itemId)) {
+        // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
+        itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log('🔧 Generated new item ID (was timestamp or missing):', itemId);
+      } else {
+        console.log('✅ Using provided item ID:', itemId);
+      }
+
+      // Verify ID format before using
+      if (!itemId || itemId.length < 10) {
+        throw new Error('Invalid item ID format - ID must be at least 10 characters');
+      }
+
+      console.log('🔧 Creating item with ID:', itemId, 'Type:', typeof itemId);
+
       const { rows } = await client.query(`
         INSERT INTO items (
-          owner_id, title, description, category, condition, location,
+          id, owner_id, title, description, category, condition, location,
           price, images, tags, quantity, delivery_method, metadata, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
       `, [
+        itemId,
         createItemDto.owner_id,
         createItemDto.title,
         createItemDto.description || null,
@@ -44,11 +66,72 @@ export class ItemsDeliveryService {
         createItemDto.expires_at ? new Date(createItemDto.expires_at) : null,
       ]);
 
+      const createdItem = rows[0];
+      console.log('✅ Created item - ID:', createdItem.id, 'Type:', typeof createdItem.id, 'Length:', createdItem.id?.length);
+      
+      // CRITICAL: Verify the ID is correct before using it
+      if (!createdItem.id || createdItem.id.length < 10) {
+        console.error('❌ CRITICAL: Item ID is invalid!', createdItem);
+        throw new Error('Failed to create item - invalid ID returned from database');
+      }
+
+      // Auto-create a corresponding post for this item
+      // This allows likes/comments to work on items in the feed
+      try {
+        const price = createItemDto.price ?? 0;
+        const postType = price > 0 ? 'item' : 'donation';
+        const postTitle = createItemDto.title;
+        const postDescription = createItemDto.description || '';
+
+        // Ensure item_id is the full item ID, not just timestamp
+        const itemIdForPost = createdItem.id;
+        console.log('📝 Creating post with item_id:', itemIdForPost, 'Type:', typeof itemIdForPost);
+
+        await client.query(`
+          INSERT INTO posts (author_id, item_id, title, description, images, post_type, metadata)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [
+          createItemDto.owner_id,
+          itemIdForPost, // Use the full item ID
+          postTitle,
+          postDescription,
+          createItemDto.images || [],
+          postType,
+          JSON.stringify({
+            item_id: itemIdForPost, // Store full ID in metadata too
+            category: createItemDto.category,
+            price: price,
+            condition: createItemDto.condition,
+          })
+        ]);
+
+        // Verify the post was created correctly
+        const { rows: verifyRows } = await client.query(`
+          SELECT id, item_id, post_type FROM posts 
+          WHERE item_id = $1 AND post_type = $2
+          ORDER BY created_at DESC LIMIT 1
+        `, [itemIdForPost, postType]);
+        
+        if (verifyRows.length > 0) {
+          console.log('✅ Verified post created with item_id:', verifyRows[0].item_id, 'Post ID:', verifyRows[0].id);
+        } else {
+          console.error('❌ Failed to verify post creation - post not found!');
+        }
+
+        console.log('✅ Auto-created post for item:', createdItem.id);
+      } catch (postError) {
+        console.error('⚠️ Failed to auto-create post for item (continuing anyway):', postError);
+        // Don't fail the item creation if post creation fails
+      }
+
+      await client.query('COMMIT');
+
       // Invalidate cache
       await this.invalidateItemCaches();
 
-      return { success: true, data: rows[0] };
+      return { success: true, data: createdItem };
     } catch (error) {
+      await client.query('ROLLBACK');
       console.error('Create item error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to create item' };
     } finally {

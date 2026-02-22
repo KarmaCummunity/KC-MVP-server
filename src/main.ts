@@ -21,17 +21,14 @@
 // TODO: Configure proper timeouts and request size limits
 // TODO: Add CSRF protection for state-changing operations
 
-// IMMEDIATE LOG - before any imports that might fail
-console.log('========================================');
-console.log('🚀 STARTING KC-MVP-SERVER');
-console.log('📍 Node version:', process.version);
-console.log('📍 Platform:', process.platform);
-console.log('📍 CWD:', process.cwd());
-console.log('========================================');
-
-// #region agent log
-console.log('[DEBUG-H1-H4] Server startup initiated:', JSON.stringify({ nodeVersion: process.version, platform: process.platform, cwd: process.cwd(), port: process.env.PORT, hasDbUrl: !!process.env.DATABASE_URL, hasRedisUrl: !!process.env.REDIS_URL, hasJwtSecret: !!process.env.JWT_SECRET, hasGoogleClientId: !!(process.env.GOOGLE_CLIENT_ID || process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) }));
-// #endregion
+// MVP: Reduced startup logging (verbose debug banners commented out)
+// console.log('========================================');
+// console.log('🚀 STARTING KC-MVP-SERVER');
+// console.log('📍 Node version:', process.version);
+// console.log('📍 Platform:', process.platform);
+// console.log('📍 CWD:', process.cwd());
+// console.log('========================================');
+// console.log('[DEBUG-H1-H4] Server startup initiated:', JSON.stringify({...}));
 
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
@@ -43,9 +40,10 @@ import helmet from 'helmet';
 import * as bodyParser from 'body-parser';
 import './sanity';
 
-console.log("🔥🔥🔥 PROCESS STARTING: src/main.ts LOADED 🔥🔥🔥");
-console.log(`Env PORT: ${process.env.PORT}`);
-console.log(`Env DATABASE_URL exists: ${!!process.env.DATABASE_URL}`);
+// MVP: Reduced startup logging
+// console.log("🔥🔥🔥 PROCESS STARTING: src/main.ts LOADED 🔥🔥🔥");
+// console.log(`Env PORT: ${process.env.PORT}`);
+// console.log(`Env DATABASE_URL exists: ${!!process.env.DATABASE_URL}`);
 
 /**
  * Validate required environment variables before server startup
@@ -96,9 +94,7 @@ function validateEnvironment(): void {
   }
 
   if (missing.length > 0) {
-    // #region agent log
-    console.log('[DEBUG-H1] Missing environment variables - server will exit:', JSON.stringify({ missing: missing }));
-    // #endregion
+    // [MVP] Agent debug log removed
     logger.error(`❌ Missing REQUIRED environment variables: ${missing.join(', ')}`);
     logger.error('💡 Set these variables in your .env file or environment');
     logger.error('⚠️  Server cannot start without proper configuration');
@@ -188,27 +184,20 @@ function validateEnvironment(): void {
  * 6. Starts listening on the configured port
  */
 async function bootstrap(): Promise<void> {
-  console.log('🔥 bootstrap() function called');
   const logger = new Logger('Bootstrap');
 
   try {
-    console.log('📝 Loading .env file...');
     // Load environment variables from .env file
     dotenv.config();
-    console.log('✅ .env loaded');
 
     // Validate critical environment variables
     validateEnvironment();
 
-    // #region agent log
-    console.log('[DEBUG-H1] Environment validation passed');
-    // #endregion
+    // [MVP] Agent debug log removed
 
     logger.log('🚀 Starting Karma Community Server...');
 
-    // #region agent log
-    console.log('[DEBUG-H2-H3] Creating NestJS app...');
-    // #endregion
+    // [MVP] Agent debug log removed
 
     // Create NestJS application instance with Express adapter
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -217,9 +206,7 @@ async function bootstrap(): Promise<void> {
       bodyParser: false, // Disable default body parser so we can configure it manually
     });
 
-    // #region agent log
-    console.log('[DEBUG-H2-H3] NestJS app created successfully');
-    // #endregion
+    // [MVP] Agent debug log removed
 
     // Configure body parser with 50MB limit for base64 image uploads
     app.use(bodyParser.json({ limit: '50mb' }));
@@ -365,9 +352,7 @@ async function bootstrap(): Promise<void> {
     }));
 
     // Start the HTTP server
-    console.log(`[DEBUG-CRITICAL] Attempting to bind to PORT: ${port} (HOST: 0.0.0.0)`);
     await app.listen(port, '0.0.0.0');
-    console.log(`[DEBUG-CRITICAL] Server is now LISTENING on PORT: ${port}`);
 
     // Log successful startup with configuration summary
     const isDevelopment = environment === 'development';
@@ -412,16 +397,12 @@ async function bootstrap(): Promise<void> {
       logger.warn('⚠️  WARNING: Running in production mode but ENVIRONMENT is not explicitly set to "production"');
     }
 
-    // #region agent log
-    console.log('[DEBUG-ALL] Server startup completed successfully:', JSON.stringify({ port: port, environment: environment }));
-    // #endregion
+    // [MVP] Agent debug log removed
 
     logger.log('═══════════════════════════════════════════════════');
 
   } catch (error) {
-    // #region agent log
-    console.log('[DEBUG-ALL-FATAL] Server startup failed:', JSON.stringify({ errorMessage: error instanceof Error ? error.message : 'unknown', errorStack: error instanceof Error ? error.stack : 'none' }));
-    // #endregion
+    // [MVP] Agent debug log removed
 
     // Handle startup errors gracefully
     if (error instanceof Error) {
@@ -440,7 +421,6 @@ async function bootstrap(): Promise<void> {
 }
 
 // Start the application
-console.log('🎬 Calling bootstrap()...');
 bootstrap().catch(error => {
   console.error('❌ Unhandled bootstrap error:', error);
   console.error('Stack:', error?.stack);

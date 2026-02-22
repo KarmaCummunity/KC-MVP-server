@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards, Req } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -25,22 +25,28 @@ export class PostsController {
     constructor(
         @Inject(PG_POOL) private readonly pool: Pool,
         private readonly redisCache: RedisCacheService,
-    ) { }
+    ) {
+        console.log('🔄 PostsController initialized');
+    }
 
     /**
      * Ensure posts table exists with correct schema, create/migrate if needed
      */
     private async ensurePostsTable() {
         try {
-            // Check if posts table exists and has correct structure
+            // Ensure uuid-ossp extension exists (required for uuid_generate_v4)
+            await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
+
+            // Check if posts table exists
             const tableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'posts'
+                    WHERE table_name = 'posts' AND table_schema = 'public'
                 ) AS exists;
             `);
 
             if (tableCheck.rows[0]?.exists) {
+<<<<<<< HEAD
                 // Check if it has the correct structure (both id and author_id columns)
                 const idColumnCheck = await this.pool.query(`
                     SELECT EXISTS (
@@ -68,22 +74,110 @@ export class PostsController {
                 } else {
                     // Table exists with correct structure
                     console.log('✅ Posts table exists with correct schema');
+=======
+                // Check for critical columns
+                const columnsCheck = await this.pool.query(`
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'posts' AND table_schema = 'public'
+                `);
+
+                const columns = columnsCheck.rows.map(r => r.column_name);
+
+                // If id or author_id is missing, the table structure is fundamentally wrong (legacy)
+                // We can't add id column later since it's the primary key
+                if (!columns.includes('id') || !columns.includes('author_id')) {
+                    console.log('⚠️  Detected legacy posts table structure - recreating...');
+                    console.log(`   - Has id column: ${columns.includes('id')}`);
+                    console.log(`   - Has author_id column: ${columns.includes('author_id')}`);
+                    await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
+                } else {
+                    // Check for new columns and add them if missing
+                    if (!columns.includes('post_type')) {
+                        console.log('📝 Adding post_type column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN post_type VARCHAR(50) DEFAULT 'task_completion';");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type);");
+                    }
+
+                    if (!columns.includes('task_id')) {
+                        console.log('📝 Adding task_id column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);");
+                    }
+
+                    if (!columns.includes('ride_id')) {
+                        console.log('📝 Adding ride_id column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN ride_id UUID REFERENCES rides(id) ON DELETE CASCADE;");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_ride_id ON posts(ride_id);");
+
+                        // Migrate existing ride posts from metadata to ride_id column
+                        console.log('📝 Migrating existing ride posts to use ride_id column...');
+                        await this.pool.query(`
+                            UPDATE posts
+                            SET ride_id = (metadata->>'ride_id')::uuid
+                            WHERE post_type = 'ride'
+                            AND metadata->>'ride_id' IS NOT NULL
+                            AND ride_id IS NULL;
+                        `);
+                    }
+
+                    if (!columns.includes('item_id')) {
+                        console.log('📝 Adding item_id column to posts table...');
+                        // item_id must be TEXT because items.id is TEXT (to support various ID formats)
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN item_id TEXT;");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_item_id ON posts(item_id);");
+
+                        // Migrate existing item/donation posts from metadata to item_id column
+                        console.log('📝 Migrating existing item/donation posts to use item_id column...');
+                        await this.pool.query(`
+                            UPDATE posts
+                            SET item_id = metadata->>'item_id'
+                            WHERE post_type IN ('item', 'donation')
+                            AND metadata->>'item_id' IS NOT NULL
+                            AND item_id IS NULL;
+                        `);
+                    }
+
+                    if (!columns.includes('metadata')) {
+                        console.log('📝 Adding metadata column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;");
+                    }
+
+                    if (!columns.includes('status')) {
+                        console.log('📝 Adding status column to posts table...');
+                        await this.pool.query("ALTER TABLE posts ADD COLUMN status VARCHAR(50) DEFAULT 'active';");
+                        await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);");
+                    }
+
+                    // Ensure item_id is TEXT (fix for previous failed migrations)
+                    try {
+                        await this.pool.query("ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_item_id_fkey;");
+                        await this.pool.query("ALTER TABLE posts ALTER COLUMN item_id TYPE TEXT;");
+                    } catch (e) {
+                        console.log('ℹ️  Note: item_id fix check:', (e as any).message);
+                    }
+
+                    // Table exists and is patched
+>>>>>>> dev
                     return;
                 }
             }
 
-            // Create posts table with correct schema
+            // Create posts table with correct schema (if dropped or didn't exist)
             await this.pool.query(`
                 CREATE TABLE IF NOT EXISTS posts (
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     author_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
                     task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+                    ride_id UUID REFERENCES rides(id) ON DELETE CASCADE,
+                    item_id TEXT, -- No FK to items table as it uses composite PK and text IDs
                     title VARCHAR(255) NOT NULL,
                     description TEXT,
                     images TEXT[],
                     likes INTEGER DEFAULT 0,
                     comments INTEGER DEFAULT 0,
                     post_type VARCHAR(50) DEFAULT 'task_completion',
+                    status VARCHAR(50) DEFAULT 'active',
                     metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -94,8 +188,11 @@ export class PostsController {
             const indexes = [
                 'idx_posts_author_id ON posts(author_id)',
                 'idx_posts_task_id ON posts(task_id)',
+                'idx_posts_ride_id ON posts(ride_id)',
+                'idx_posts_item_id ON posts(item_id)',
                 'idx_posts_created_at ON posts(created_at DESC)',
-                'idx_posts_post_type ON posts(post_type)'
+                'idx_posts_post_type ON posts(post_type)',
+                'idx_posts_status ON posts(status)'
             ];
 
             for (const idx of indexes) {
@@ -131,11 +228,20 @@ export class PostsController {
      */
     private async ensureLikesCommentsTable() {
         try {
+<<<<<<< HEAD
+=======
+            console.log('📝 Ensuring likes and comments tables exist...');
+
+>>>>>>> dev
             // First, verify that posts table exists (required for foreign keys)
             const postsTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
+<<<<<<< HEAD
                     WHERE table_name = 'posts'
+=======
+                    WHERE table_name = 'posts' AND table_schema = 'public'
+>>>>>>> dev
                 ) AS exists;
             `);
 
@@ -144,11 +250,15 @@ export class PostsController {
                 return;
             }
 
+<<<<<<< HEAD
             // Check if post_likes table exists
+=======
+            // Check if post_likes table exists and has correct structure
+>>>>>>> dev
             const likesTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'post_likes'
+                    WHERE table_name = 'post_likes' AND table_schema = 'public'
                 ) AS exists;
             `);
 
@@ -182,24 +292,50 @@ export class PostsController {
             if (!likesTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating post_likes table...');
                 await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS post_likes (
+                    CREATE TABLE post_likes (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
                         user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         UNIQUE(post_id, user_id)
                     );
-                    CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);
                 `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
                 console.log('✅ post_likes table created');
+            } else {
+                // Check if id column exists
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_likes' AND column_name = 'id' AND table_schema = 'public'
+                    ) AS exists;
+                `);
+                if (!idColumnCheck.rows[0]?.exists) {
+                    console.log('⚠️ post_likes table exists but missing id column - recreating...');
+                    await this.pool.query(`DROP TABLE IF EXISTS post_likes CASCADE;`);
+                    await this.pool.query(`
+                        CREATE TABLE post_likes (
+                            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                            post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                            user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            UNIQUE(post_id, user_id)
+                        );
+                    `);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
+                    console.log('✅ post_likes table recreated');
+                }
             }
 
-            // Check if post_comments table exists
+            // Check if post_comments table exists and has correct structure
             const commentsTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'post_comments'
+                    WHERE table_name = 'post_comments' AND table_schema = 'public'
                 ) AS exists;
             `);
 
@@ -233,7 +369,7 @@ export class PostsController {
             if (!commentsTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating post_comments table...');
                 await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS post_comments (
+                    CREATE TABLE post_comments (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
                         user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
@@ -242,18 +378,46 @@ export class PostsController {
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW()
                     );
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);
-                    CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);
                 `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
                 console.log('✅ post_comments table created');
+            } else {
+                // Check if id column exists
+                const idColumnCheck = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'post_comments' AND column_name = 'id' AND table_schema = 'public'
+                    ) AS exists;
+                `);
+                if (!idColumnCheck.rows[0]?.exists) {
+                    console.log('⚠️ post_comments table exists but missing id column - recreating...');
+                    await this.pool.query(`DROP TABLE IF EXISTS comment_likes CASCADE;`);
+                    await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
+                    await this.pool.query(`
+                        CREATE TABLE post_comments (
+                            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                            post_id UUID NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                            user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+                            text TEXT NOT NULL CHECK (char_length(text) > 0 AND char_length(text) <= 2000),
+                            likes_count INTEGER DEFAULT 0,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    `);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
+                    await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
+                    console.log('✅ post_comments table recreated');
+                }
             }
 
             // Check if comment_likes table exists
             const commentLikesTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
-                    WHERE table_name = 'comment_likes'
+                    WHERE table_name = 'comment_likes' AND table_schema = 'public'
                 ) AS exists;
             `);
 
@@ -287,17 +451,49 @@ export class PostsController {
             if (!commentLikesTableCheck2.rows[0]?.exists) {
                 console.log('📝 Creating comment_likes table...');
                 await this.pool.query(`
-                    CREATE TABLE IF NOT EXISTS comment_likes (
+                    CREATE TABLE comment_likes (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                         comment_id UUID NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
                         user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         UNIQUE(comment_id, user_id)
                     );
-                    CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);
-                    CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);
                 `);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);`);
                 console.log('✅ comment_likes table created');
+            }
+
+            // Check if user_notifications table exists (required for notifications)
+            const notificationsTableCheck = await this.pool.query(`
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'user_notifications' AND table_schema = 'public'
+                ) AS exists;
+            `);
+
+            if (!notificationsTableCheck.rows[0]?.exists) {
+                console.log('📝 Creating user_notifications table...');
+                await this.pool.query(`
+                    CREATE TABLE user_notifications (
+                        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                        user_id UUID,
+                        title VARCHAR(255),
+                        content TEXT,
+                        notification_type VARCHAR(50),
+                        related_id UUID,
+                        is_read BOOLEAN DEFAULT false,
+                        read_at TIMESTAMPTZ,
+                        metadata JSONB,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                `);
+
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_user_notifications_user_id ON user_notifications(user_id);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_user_notifications_created_at ON user_notifications(created_at DESC);`);
+                await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_user_notifications_is_read ON user_notifications(user_id, is_read) WHERE is_read = false;`);
+
+                console.log('✅ user_notifications table created');
             }
 
             // Create SQL functions for updating counts
@@ -412,7 +608,10 @@ export class PostsController {
     async getPosts(
         @Query('limit') limitArg: string,
         @Query('offset') offsetArg: string,
-        @Query('user_id') userId?: string
+        @Query('user_id') userId?: string,
+        @Query('post_type') postType?: string,
+        @Query('item_id') itemId?: string,
+        @Query('ride_id') rideId?: string
     ) {
         try {
             await this.ensurePostsTable();
@@ -422,20 +621,114 @@ export class PostsController {
             const offset = parseInt(offsetArg) || 0;
 
             // Build query with optional user_id for checking if user liked each post
+            // Use explicit column names to avoid conflicts in JOIN queries
             let query = `
                 SELECT 
-                    p.*,
+                    p.id,
+                    p.author_id,
+                    p.task_id,
+                    p.ride_id,
+                    p.item_id,
+                    p.title,
+                    p.description,
+                    p.images,
+                    p.likes,
+                    p.comments,
+                    p.post_type,
+                    p.metadata,
+                    p.created_at,
+                    p.updated_at,
                     CASE 
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
                     END as author,
-                    CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
+                    CASE WHEN t.id IS NOT NULL THEN json_build_object(
+                        'id', t.id, 
+                        'title', t.title, 
+                        'description', t.description,
+                        'status', t.status,
+                        'estimated_hours', t.estimated_hours,
+                        'due_date', t.due_date,
+                        'assignees', (
+                            SELECT json_agg(json_build_object(
+                                'id', u_assignee.id, 
+                                'name', u_assignee.name, 
+                                'avatar', u_assignee.avatar_url
+                            ))
+                            FROM user_profiles u_assignee
+                            WHERE u_assignee.id = ANY(t.assignees)
+                        )
+                    ) ELSE NULL END as task,
+                    CASE 
+                        WHEN r.id IS NOT NULL THEN json_build_object(
+                            'id', r.id, 
+                            'from_location', r.from_location,
+                            'to_location', r.to_location,
+                            'departure_time', r.departure_time,
+                            'available_seats', r.available_seats,
+                            'price_per_seat', r.price_per_seat,
+                            'status', r.status
+                        ) 
+                        ELSE NULL 
+                    END as ride_data,
+                    CASE 
+                        WHEN i.id IS NOT NULL THEN json_build_object(
+                            'id', i.id,
+                            'title', i.title,
+                            'status', i.status
+                        )
+                        ELSE NULL
+                    END as item_data
             `;
 
-            if (userId) {
+            // Check if post_likes table exists before using it
+            let postLikesExists = false;
+            try {
+                const res = await this.pool.query(`
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables 
+                        WHERE table_name = 'post_likes' AND table_schema = 'public'
+                    ) AS exists;
+                `);
+                postLikesExists = res.rows[0]?.exists;
+            } catch (e) {
+                // Ignore
+            }
+
+            // Build WHERE conditions first to know param count
+            const whereConditions: string[] = [];
+            const params: any[] = [limit, offset];
+            let paramIndex = 3;
+
+            // Filter out hidden posts by default (unless viewing own profile)
+            whereConditions.push(`(p.status IS NULL OR p.status != 'hidden')`);
+
+            if (postType) {
+                whereConditions.push(`p.post_type = $${paramIndex}`);
+                params.push(postType);
+                paramIndex++;
+            }
+
+            if (itemId) {
+                whereConditions.push(`p.item_id = $${paramIndex}`);
+                params.push(itemId);
+                paramIndex++;
+            }
+
+            if (rideId) {
+                whereConditions.push(`p.ride_id = $${paramIndex}`);
+                params.push(rideId);
+                paramIndex++;
+            }
+
+            // Now we know the param index for userId
+            const userIdParamIndex = paramIndex;
+
+            if (userId && postLikesExists) {
                 query += `,
-                    EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
+                    EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $${userIdParamIndex}) as is_liked
                 `;
+                params.push(userId);
             } else {
                 query += `,
                     false as is_liked
@@ -446,18 +739,96 @@ export class PostsController {
                 FROM posts p
                 LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
+                LEFT JOIN rides r ON p.ride_id = r.id
+                LEFT JOIN items i ON p.item_id = i.id
+            `;
+
+            if (whereConditions.length > 0) {
+                query += ` WHERE ${whereConditions.join(' AND ')}`;
+            }
+
+            query += `
                 ORDER BY p.created_at DESC
                 LIMIT $1 OFFSET $2
             `;
 
-            const params = userId ? [limit, offset, userId] : [limit, offset];
-            const { rows } = await this.pool.query(query, params);
+            console.log('📝 [getPosts] Executing query with params:', { limit, offset, userId, hasUserId: !!userId });
 
-            return { success: true, data: rows };
+            try {
+                const { rows } = await this.pool.query(query, params);
+                console.log(`✅ [getPosts] Query returned ${rows.length} posts (limit: ${limit}, offset: ${offset})`);
+
+                // Count task-related posts in results
+                const taskPostsInResults = rows.filter(p =>
+                    p.post_type === 'task_assignment' || p.post_type === 'task_completion'
+                ).length;
+                console.log(`📊 Task-related posts in results: ${taskPostsInResults}/${rows.length}`);
+
+                if (rows.length > 0) {
+                    // Show first few posts for debugging
+                    const samplePosts = rows.slice(0, 3).map(p => ({
+                        id: p.id?.substring(0, 8),
+                        title: p.title?.substring(0, 30),
+                        post_type: p.post_type,
+                        author_id: p.author_id?.substring(0, 8),
+                        has_author: !!p.author,
+                        author_id_in_author: p.author?.id?.substring(0, 8)
+                    }));
+                    console.log('📋 Sample posts:', samplePosts);
+                } else {
+                    console.warn('⚠️ getPosts returned 0 posts!');
+                }
+
+                return { success: true, data: rows };
+            } catch (queryError) {
+                console.error(`❌ [getPosts] Primary query failed:`, queryError);
+
+                // Fallback query if main query fails (e.g. issues with joins or columns)
+                // Try simplest possible query without joins first to diagnose
+                console.log('⚠️ [getPosts] Attempting fallback query...');
+
+                try {
+                    const fallbackQuery = `
+                        SELECT 
+                            id, author_id, title, description, images, likes, comments, created_at,
+                            post_type, metadata, ride_id, item_id
+                        FROM posts
+                        ORDER BY created_at DESC
+                        LIMIT $1 OFFSET $2
+                    `;
+                    const fallbackParams = [limit, offset];
+                    const fallbackRes = await this.pool.query(fallbackQuery, fallbackParams);
+
+                    // Map fallback results to expected format
+                    const mappedRows = fallbackRes.rows.map(row => ({
+                        ...row,
+                        author: { id: row.author_id, name: 'משתמש', avatar_url: '' },
+                        task: null,
+                        is_liked: false,
+                        ride_data: null,
+                        item_data: null
+                    }));
+
+                    console.log(`✅[getPosts] Fallback query returned ${mappedRows.length} posts`);
+                    return { success: true, data: mappedRows };
+                } catch (fallbackError) {
+                    console.warn('⚠️ [getPosts] Fallback query also failed');
+                    throw queryError;
+                }
+            }
         } catch (error) {
+<<<<<<< HEAD
             console.error('Get posts error:', error);
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return { success: false, error: `Failed to get posts: ${errorMessage}` };
+=======
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Get posts error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to get posts: ${errorMessage} `
+            };
+>>>>>>> dev
         }
     }
 
@@ -473,17 +844,75 @@ export class PostsController {
 
             const limit = parseInt(limitArg) || 20;
 
+            // Use explicit column names to avoid conflicts in JOIN queries
             let query = `
-                SELECT 
-                    p.*,
+                SELECT
+                p.id,
+                    p.author_id,
+                    p.task_id,
+                    p.ride_id,
+                    p.item_id,
+                    p.title,
+                    p.description,
+                    p.images,
+                    p.likes,
+                    p.comments,
+                    p.post_type,
+                    p.metadata,
+                    p.created_at,
+                    p.updated_at,
                     CASE 
                         WHEN u.id IS NOT NULL THEN json_build_object('id', u.id, 'name', COALESCE(u.name, 'ללא שם'), 'avatar_url', COALESCE(u.avatar_url, ''))
                         ELSE json_build_object('id', p.author_id, 'name', 'משתמש לא נמצא', 'avatar_url', '')
-                    END as author,
-                    CASE WHEN t.id IS NOT NULL THEN json_build_object('id', t.id, 'title', t.title, 'status', t.status) ELSE NULL END as task
-            `;
+                END as author,
+                    CASE WHEN t.id IS NOT NULL THEN json_build_object(
+                        'id', t.id, 
+                        'title', t.title, 
+                        'description', t.description,
+                        'status', t.status,
+                        'estimated_hours', t.estimated_hours,
+                        'due_date', t.due_date,
+                        'assignees', (
+                            SELECT json_agg(json_build_object(
+                                'id', u_assignee.id, 
+                                'name', u_assignee.name, 
+                                'avatar', u_assignee.avatar_url
+                            ))
+                            FROM user_profiles u_assignee
+                            WHERE u_assignee.id = ANY(t.assignees)
+                        )
+                    ) ELSE NULL END as task,
+                    CASE 
+                        WHEN r.id IS NOT NULL THEN json_build_object(
+                            'id', r.id, 
+                            'from_location', r.from_location,
+                            'to_location', r.to_location,
+                            'departure_time', r.departure_time,
+                            'available_seats', r.available_seats,
+                            'price_per_seat', r.price_per_seat,
+                            'status', r.status
+                        ) 
+                        ELSE NULL 
+                    END as ride_data,
+                    CASE 
+                        WHEN i.id IS NOT NULL THEN json_build_object(
+                            'id', i.id,
+                            'title', i.title,
+                            'status', i.status
+                        )
+                        ELSE NULL
+                    END as item_data
+                `;
 
-            if (viewerId) {
+            // Check if post_likes table exists before using it
+            const postLikesExists = await this.pool.query(`
+                SELECT EXISTS(
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = 'post_likes' AND table_schema = 'public'
+                ) AS exists;
+                `);
+
+            if (viewerId && postLikesExists.rows[0]?.exists) {
                 query += `,
                     EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $3) as is_liked
                 `;
@@ -497,6 +926,8 @@ export class PostsController {
                 FROM posts p
                 LEFT JOIN user_profiles u ON p.author_id = u.id
                 LEFT JOIN tasks t ON p.task_id = t.id
+                LEFT JOIN rides r ON p.ride_id = r.id
+                LEFT JOIN items i ON p.item_id = i.id
                 WHERE p.author_id = $1
                 ORDER BY p.created_at DESC
                 LIMIT $2
@@ -507,8 +938,19 @@ export class PostsController {
 
             return { success: true, data: rows };
         } catch (error) {
-            console.error('Get user posts error:', error);
-            return { success: false, error: 'Failed to get user posts' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get user posts error:', {
+                message: errorMessage,
+                stack: errorStack,
+                userId,
+                limit: limitArg,
+                viewerId
+            });
+            return {
+                success: false,
+                error: `Failed to get user posts: ${errorMessage} `
+            };
         }
     }
 
@@ -586,13 +1028,13 @@ export class PostsController {
                     const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
 
                     await client.query(`
-                        INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
+                VALUES($1, $2, $3, $4, $5, $6)
                         ON CONFLICT DO NOTHING
                     `, [
                         post.author_id,
                         'לייק חדש!',
-                        `${likerName} אהב/ה את ה${postType} שלך: "${post.title}"`,
+                        `${likerName} אהב / ה את ה${postType} שלך: "${post.title}"`,
                         'like',
                         postId,
                         { liker_id: user_id, post_id: postId }
@@ -616,7 +1058,7 @@ export class PostsController {
             await client.query('COMMIT');
 
             // Clear cache
-            await this.redisCache.delete(`post_likes_${postId}`);
+            await this.redisCache.delete(`post_likes_${postId} `);
 
             return {
                 success: true,
@@ -627,10 +1069,30 @@ export class PostsController {
                 }
             };
         } catch (error) {
+<<<<<<< HEAD
             await client.query('ROLLBACK');
             console.error('Toggle like error:', { error, postId, userId: body.user_id });
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return { success: false, error: `Failed to toggle like: ${errorMessage}` };
+=======
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to toggle like: ${errorMessage} `
+            };
+>>>>>>> dev
         } finally {
             client.release();
         }
@@ -653,8 +1115,8 @@ export class PostsController {
             const offset = parseInt(offsetArg) || 0;
 
             const { rows } = await this.pool.query(`
-                SELECT 
-                    pl.id,
+                SELECT
+                pl.id,
                     pl.created_at,
                     json_build_object(
                         'id', u.id,
@@ -680,8 +1142,19 @@ export class PostsController {
                 total: parseInt(countResult.rows[0]?.total || '0')
             };
         } catch (error) {
-            console.error('Get post likes error:', error);
-            return { success: false, error: 'Failed to get likes' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post likes error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg
+            });
+            return {
+                success: false,
+                error: `Failed to get likes: ${errorMessage} `
+            };
         }
     }
 
@@ -708,8 +1181,18 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            console.error('Check user liked error:', error);
-            return { success: false, error: 'Failed to check like status' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Check user liked error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId
+            });
+            return {
+                success: false,
+                error: `Failed to check like status: ${errorMessage} `
+            };
         }
     }
 
@@ -742,14 +1225,26 @@ export class PostsController {
                 return { success: false, error: 'Comment text is too long (max 2000 characters)' };
             }
 
+            // Ensure schema is up to date (Just in case getPosts wasn't called yet or schema is stale)
+            await this.ensurePostsTable();
+
             await client.query('BEGIN');
+
+            console.log(`[addComment] Checking existence of post ${postId}`);
 
             // Check if post exists
             const postCheck = await client.query(
                 'SELECT id, author_id, title, post_type FROM posts WHERE id = $1',
                 [postId]
             );
+
+            console.log(`[addComment] Post check result: ${postCheck.rows.length} rows found`);
+
             if (postCheck.rows.length === 0) {
+                // Debugging: Check if post exists with whitespace or case issues?
+                const debugCheck = await client.query('SELECT id FROM posts LIMIT 5');
+                console.log('[addComment] Debug - First 5 posts in DB:', debugCheck.rows);
+
                 await client.query('ROLLBACK');
                 return { success: false, error: 'Post not found' };
             }
@@ -766,17 +1261,22 @@ export class PostsController {
 
             // Insert comment
             const { rows } = await client.query(`
-                INSERT INTO post_comments (post_id, user_id, text)
-                VALUES ($1, $2, $3)
-                RETURNING *
-            `, [postId, user_id, text.trim()]);
+                INSERT INTO post_comments(post_id, user_id, text)
+                VALUES($1, $2, $3)
+                RETURNING id, post_id, user_id, text, likes_count, created_at, updated_at
+                    `, [postId, user_id, text.trim()]);
+
+            if (!rows || rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Failed to create comment' };
+            }
 
             const comment = rows[0];
 
             // Get user info for the response
             const userResult = await client.query(`
                 SELECT id, name, avatar_url FROM user_profiles WHERE id = $1
-            `, [user_id]);
+                    `, [user_id]);
 
             // Calculate comments count from post_comments table (more reliable than reading from posts.comments)
             const countResult = await client.query(
@@ -800,12 +1300,12 @@ export class PostsController {
                 const postType = post.post_type === 'task_completion' ? 'השלמת משימה' : 'פוסט';
 
                 await client.query(`
-                    INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
+                VALUES($1, $2, $3, $4, $5, $6)
                 `, [
                     post.author_id,
                     'תגובה חדשה!',
-                    `${commenterName} הגיב/ה על ה${postType} שלך: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`,
+                    `${commenterName} הגיב / ה על ה${postType} שלך: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`,
                     'comment',
                     postId,
                     { commenter_id: user_id, post_id: postId, comment_id: comment.id }
@@ -815,7 +1315,7 @@ export class PostsController {
             await client.query('COMMIT');
 
             // Clear cache
-            await this.redisCache.delete(`post_comments_${postId}`);
+            await this.redisCache.delete(`post_comments_${postId} `);
 
             return {
                 success: true,
@@ -826,10 +1326,30 @@ export class PostsController {
                 }
             };
         } catch (error) {
+<<<<<<< HEAD
             await client.query('ROLLBACK');
             console.error('Add comment error:', { error, postId, userId: body.user_id });
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return { success: false, error: `Failed to add comment: ${errorMessage}` };
+=======
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Add comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to add comment: ${errorMessage} `
+            };
+>>>>>>> dev
         } finally {
             client.release();
         }
@@ -853,8 +1373,8 @@ export class PostsController {
             const offset = parseInt(offsetArg) || 0;
 
             let query = `
-                SELECT 
-                    c.id,
+                SELECT
+                c.id,
                     c.post_id,
                     c.user_id,
                     c.text,
@@ -866,7 +1386,7 @@ export class PostsController {
                         'name', u.name,
                         'avatar_url', u.avatar_url
                     ) as user
-            `;
+                `;
 
             // Add is_liked if viewer_id is provided
             if (viewerId) {
@@ -902,8 +1422,20 @@ export class PostsController {
                 total: parseInt(countResult.rows[0]?.total || '0')
             };
         } catch (error) {
-            console.error('Get post comments error:', error);
-            return { success: false, error: 'Failed to get comments' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Get post comments error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                limit: limitArg,
+                offset: offsetArg,
+                viewerId
+            });
+            return {
+                success: false,
+                error: `Failed to get comments: ${errorMessage} `
+            };
         }
     }
 
@@ -955,15 +1487,26 @@ export class PostsController {
                 SET text = $1, updated_at = NOW()
                 WHERE id = $2
                 RETURNING *
-            `, [text.trim(), commentId]);
+                    `, [text.trim(), commentId]);
 
             // Clear cache
-            await this.redisCache.delete(`post_comments_${postId}`);
+            await this.redisCache.delete(`post_comments_${postId} `);
 
             return { success: true, data: rows[0] };
         } catch (error) {
-            console.error('Update comment error:', error);
-            return { success: false, error: 'Failed to update comment' };
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Update comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to update comment: ${errorMessage} `
+            };
         }
     }
 
@@ -1026,7 +1569,7 @@ export class PostsController {
             await client.query('COMMIT');
 
             // Clear cache
-            await this.redisCache.delete(`post_comments_${postId}`);
+            await this.redisCache.delete(`post_comments_${postId} `);
 
             return {
                 success: true,
@@ -1036,9 +1579,24 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Delete comment error:', error);
-            return { success: false, error: 'Failed to delete comment' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Delete comment error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId
+            });
+            return {
+                success: false,
+                error: `Failed to delete comment: ${errorMessage} `
+            };
         } finally {
             client.release();
         }
@@ -1121,13 +1679,13 @@ export class PostsController {
                     const likerName = user.name || 'משתמש';
 
                     await client.query(`
-                        INSERT INTO user_notifications (user_id, title, content, notification_type, related_id, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO user_notifications(user_id, title, content, notification_type, related_id, metadata)
+                VALUES($1, $2, $3, $4, $5, $6)
                         ON CONFLICT DO NOTHING
                     `, [
                         comment.user_id,
                         'לייק לתגובה!',
-                        `${likerName} אהב/ה את התגובה שלך: "${comment.text.substring(0, 30)}${comment.text.length > 30 ? '...' : ''}"`,
+                        `${likerName} אהב / ה את התגובה שלך: "${comment.text.substring(0, 30)}${comment.text.length > 30 ? '...' : ''}"`,
                         'like',
                         postId,
                         { liker_id: user_id, post_id: postId, comment_id: commentId }
@@ -1159,9 +1717,500 @@ export class PostsController {
                 }
             };
         } catch (error) {
-            await client.query('ROLLBACK');
-            console.error('Toggle comment like error:', error);
-            return { success: false, error: 'Failed to toggle comment like' };
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Toggle comment like error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                commentId,
+                userId: body?.user_id
+            });
+            return {
+                success: false,
+                error: `Failed to toggle comment like: ${errorMessage} `
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST UPDATE ENDPOINT
+    // ============================================
+
+    /**
+     * Update a post (title, description, image)
+     * PUT /api/posts/:postId
+     * 
+     * Rules:
+     * 1. Only post owner can update
+     * 2. Can update: title, description, image_url
+     */
+    @Put(':postId')
+    @UseGuards(JwtAuthGuard)
+    async updatePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string; title?: string; description?: string; image?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Permission denied. You can only update your own posts.' };
+            }
+
+            // Build update query dynamically
+            const updates: string[] = [];
+            const values: any[] = [];
+            let paramIndex = 1;
+
+            if (body.title !== undefined) {
+                updates.push(`title = $${paramIndex++}`);
+                values.push(body.title);
+            }
+
+            if (body.description !== undefined) {
+                updates.push(`description = $${paramIndex++}`);
+                values.push(body.description);
+            }
+
+            if (body.image !== undefined) {
+                updates.push(`image_url = $${paramIndex++}`);
+                values.push(body.image);
+            }
+
+            if (updates.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'No fields to update' };
+            }
+
+            // Add updated_at
+            updates.push(`updated_at = NOW()`);
+            values.push(postId);
+
+            // Execute update
+            const updateQuery = `
+                UPDATE posts 
+                SET ${updates.join(', ')}
+                WHERE id = $${paramIndex}
+                RETURNING *
+            `;
+
+            const result = await client.query(updateQuery, values);
+
+            // Track update activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_updated',
+                JSON.stringify({
+                    post_id: postId,
+                    updated_fields: Object.keys(body).filter(k => k !== 'user_id')
+                })
+            ]);
+
+            await client.query('COMMIT');
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: result.rows[0]
+            };
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Update post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to update post: ${errorMessage}`
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST HIDE/UNHIDE ENDPOINTS
+    // ============================================
+
+    /**
+     * Hide a post (soft delete - sets status to 'hidden')
+     * POST /api/posts/:postId/hide
+     * 
+     * Rules:
+     * 1. Only post owner can hide their posts
+     */
+    @Post(':postId/hide')
+    @UseGuards(JwtAuthGuard)
+    async hidePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                return { success: false, error: 'Permission denied. You can only hide your own posts.' };
+            }
+
+            // Update post status to 'hidden'
+            await client.query(
+                `UPDATE posts 
+                 SET status = 'hidden', updated_at = NOW()
+                 WHERE id = $1`,
+                [postId]
+            );
+
+            // Track hide activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_hidden',
+                JSON.stringify({ post_id: postId })
+            ]);
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: { status: 'hidden', post_id: postId }
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Hide post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to hide post: ${errorMessage}`
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Unhide a post (restore from hidden status)
+     * POST /api/posts/:postId/unhide
+     * 
+     * Rules:
+     * 1. Only post owner can unhide their posts
+     */
+    @Post(':postId/unhide')
+    @UseGuards(JwtAuthGuard)
+    async unhidePost(
+        @Param('postId') postId: string,
+        @Body() body: { user_id?: string },
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            // Get user_id from authenticated request
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+
+            if (!user_id) {
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                'SELECT * FROM posts WHERE id = $1',
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check if user is the owner
+            if (post.author_id !== user_id) {
+                return { success: false, error: 'Permission denied. You can only unhide your own posts.' };
+            }
+
+            // Update post status back to 'active' or original status
+            await client.query(
+                `UPDATE posts 
+                 SET status = 'active', updated_at = NOW()
+                 WHERE id = $1`,
+                [postId]
+            );
+
+            // Track unhide activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_unhidden',
+                JSON.stringify({ post_id: postId })
+            ]);
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: { status: 'active', post_id: postId }
+            };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error('Unhide post error:', errorMessage);
+            return {
+                success: false,
+                error: `Failed to unhide post: ${errorMessage}`
+            };
+        } finally {
+            client.release();
+        }
+    }
+
+    // ============================================
+    // POST DELETION ENDPOINT
+    // ============================================
+
+    /**
+     * Delete a post and its related entity (ride/item/task)
+     * DELETE /api/posts/:postId
+     * 
+     * Rules:
+     * 1. User can delete their own posts
+     * 2. Super admin can delete any post
+     * 3. Deleting a post cascades based on post_type:
+     *    - ride: Deletes the ride (post auto-deleted via CASCADE)
+     *    - item/donation: Deletes the item (post auto-deleted via CASCADE)
+     *    - task: Only deletes the post, not the task
+     *    - general: Only deletes the post
+     */
+    @Delete(':postId')
+    @UseGuards(JwtAuthGuard)
+    async deletePost(
+        @Param('postId') postId: string,
+        @Req() req: any
+    ) {
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // Get user_id from authenticated request (more secure/reliable than body)
+            // JwtAuthGuard populates req.user with SessionTokenPayload which uses 'userId'
+            const user_id = req.user?.userId || req.user?.id || req.user?.sub;
+
+            if (!user_id) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not authenticated' };
+            }
+
+            // Get post details
+            const postResult = await client.query(
+                `SELECT p.*, u.roles 
+                 FROM posts p
+                 LEFT JOIN user_profiles u ON p.author_id = u.id
+                 WHERE p.id = $1`,
+                [postId]
+            );
+
+            if (postResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'Post not found' };
+            }
+
+            const post = postResult.rows[0];
+
+            // Check permissions
+            const userResult = await client.query(
+                'SELECT roles FROM user_profiles WHERE id = $1',
+                [user_id]
+            );
+
+            if (userResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return { success: false, error: 'User not found' };
+            }
+
+            const userRoles = userResult.rows[0].roles || [];
+            const isSuperAdmin = userRoles.includes('super_admin');
+            const isOwner = post.author_id === user_id;
+
+            if (!isOwner && !isSuperAdmin) {
+                await client.query('ROLLBACK');
+                return {
+                    success: false,
+                    error: 'Permission denied. You can only delete your own posts or be a super admin.'
+                };
+            }
+
+            console.log(`🗑️ Deleting post ${postId} (type: ${post.post_type}) by user ${user_id} (owner: ${isOwner}, admin: ${isSuperAdmin})`);
+
+            // Handle deletion based on post type
+            let deletionStrategy = 'post_only';
+            let relatedEntityDeleted = false;
+
+            switch (post.post_type) {
+                case 'ride':
+                    if (post.ride_id) {
+                        // Delete the ride - post will be auto-deleted via CASCADE
+                        await client.query('DELETE FROM rides WHERE id = $1', [post.ride_id]);
+                        deletionStrategy = 'ride_cascade';
+                        relatedEntityDeleted = true;
+                        console.log(`✅ Deleted ride ${post.ride_id} (post auto-deleted via CASCADE)`);
+                    } else {
+                        // Orphaned ride post - delete post only
+                        await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                        deletionStrategy = 'post_only';
+                    }
+                    break;
+
+                case 'item':
+                case 'donation':
+                    if (post.item_id) {
+                        // Delete the item - post will be auto-deleted via CASCADE
+                        await client.query('DELETE FROM items WHERE id = $1', [post.item_id]);
+                        deletionStrategy = 'item_cascade';
+                        relatedEntityDeleted = true;
+                        console.log(`✅ Deleted item ${post.item_id} (post auto-deleted via CASCADE)`);
+                    } else {
+                        // Orphaned item post - delete post only
+                        await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                        deletionStrategy = 'post_only';
+                    }
+                    break;
+
+                case 'task_completion':
+                case 'task_assignment':
+                    // For tasks, only delete the post, not the task itself
+                    // Tasks can have multiple posts and should be managed separately
+                    await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                    deletionStrategy = 'post_only';
+                    console.log(`✅ Deleted task post ${postId} (task ${post.task_id} preserved)`);
+                    break;
+
+                default:
+                    // General posts or unknown types - delete post only
+                    await client.query('DELETE FROM posts WHERE id = $1', [postId]);
+                    deletionStrategy = 'post_only';
+                    console.log(`✅ Deleted general post ${postId}`);
+            }
+
+            // Track deletion activity
+            await client.query(`
+                INSERT INTO user_activities (user_id, activity_type, activity_data)
+                VALUES ($1, $2, $3)
+            `, [
+                user_id,
+                'post_deleted',
+                JSON.stringify({
+                    post_id: postId,
+                    post_type: post.post_type,
+                    deletion_strategy: deletionStrategy,
+                    related_entity_deleted: relatedEntityDeleted,
+                    is_admin_action: isSuperAdmin && !isOwner
+                })
+            ]);
+
+            await client.query('COMMIT');
+
+            // Clear relevant caches
+            await this.redisCache.delete(`post_${postId}`);
+            await this.redisCache.invalidatePattern('posts_*');
+            await this.redisCache.invalidatePattern('user_posts_*');
+
+            return {
+                success: true,
+                data: {
+                    post_id: postId,
+                    post_type: post.post_type,
+                    deletion_strategy: deletionStrategy,
+                    message: relatedEntityDeleted
+                        ? `Post and related ${post.post_type} deleted successfully`
+                        : 'Post deleted successfully'
+                }
+            };
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback error:', rollbackError);
+            }
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : undefined;
+            console.error('Delete post error:', {
+                message: errorMessage,
+                stack: errorStack,
+                postId,
+                userId: req?.user?.id
+            });
+            return {
+                success: false,
+                error: `Failed to delete post: ${errorMessage}`
+            };
         } finally {
             client.release();
         }

@@ -2,8 +2,9 @@
 import { IsString, IsOptional, IsNumber, IsBoolean } from 'class-validator';
 
 export class CreateItemDto {
+  @IsOptional()
   @IsString()
-  id!: string;
+  id?: string;
 
   @IsString()
   owner_id!: string;
