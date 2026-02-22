@@ -46,35 +46,6 @@ export class PostsController {
             `);
 
             if (tableCheck.rows[0]?.exists) {
-<<<<<<< HEAD
-                // Check if it has the correct structure (both id and author_id columns)
-                const idColumnCheck = await this.pool.query(`
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'posts' AND column_name = 'id'
-                    ) AS exists;
-                `);
-
-                const authorIdColumnCheck = await this.pool.query(`
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'posts' AND column_name = 'author_id'
-                    ) AS exists;
-                `);
-
-                const hasIdColumn = idColumnCheck.rows[0]?.exists;
-                const hasAuthorIdColumn = authorIdColumnCheck.rows[0]?.exists;
-
-                if (!hasIdColumn || !hasAuthorIdColumn) {
-                    // Legacy table exists with wrong structure - drop and recreate
-                    console.log('⚠️  Detected legacy posts table structure - recreating with correct schema');
-                    console.log(`   - Has id column: ${hasIdColumn}`);
-                    console.log(`   - Has author_id column: ${hasAuthorIdColumn}`);
-                    await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
-                } else {
-                    // Table exists with correct structure
-                    console.log('✅ Posts table exists with correct schema');
-=======
                 // Check for critical columns
                 const columnsCheck = await this.pool.query(`
                     SELECT column_name
@@ -158,7 +129,7 @@ export class PostsController {
                     }
 
                     // Table exists and is patched
->>>>>>> dev
+
                     return;
                 }
             }
@@ -228,20 +199,14 @@ export class PostsController {
      */
     private async ensureLikesCommentsTable() {
         try {
-<<<<<<< HEAD
-=======
             console.log('📝 Ensuring likes and comments tables exist...');
 
->>>>>>> dev
             // First, verify that posts table exists (required for foreign keys)
             const postsTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
-<<<<<<< HEAD
-                    WHERE table_name = 'posts'
-=======
                     WHERE table_name = 'posts' AND table_schema = 'public'
->>>>>>> dev
+
                 ) AS exists;
             `);
 
@@ -250,11 +215,8 @@ export class PostsController {
                 return;
             }
 
-<<<<<<< HEAD
-            // Check if post_likes table exists
-=======
             // Check if post_likes table exists and has correct structure
->>>>>>> dev
+
             const likesTableCheck = await this.pool.query(`
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.tables 
@@ -817,18 +779,13 @@ export class PostsController {
                 }
             }
         } catch (error) {
-<<<<<<< HEAD
-            console.error('Get posts error:', error);
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            return { success: false, error: `Failed to get posts: ${errorMessage}` };
-=======
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error('Get posts error:', errorMessage);
             return {
                 success: false,
                 error: `Failed to get posts: ${errorMessage} `
             };
->>>>>>> dev
+
         }
     }
 
@@ -1069,12 +1026,6 @@ export class PostsController {
                 }
             };
         } catch (error) {
-<<<<<<< HEAD
-            await client.query('ROLLBACK');
-            console.error('Toggle like error:', { error, postId, userId: body.user_id });
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            return { success: false, error: `Failed to toggle like: ${errorMessage}` };
-=======
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
@@ -1092,7 +1043,7 @@ export class PostsController {
                 success: false,
                 error: `Failed to toggle like: ${errorMessage} `
             };
->>>>>>> dev
+
         } finally {
             client.release();
         }
@@ -1326,12 +1277,6 @@ export class PostsController {
                 }
             };
         } catch (error) {
-<<<<<<< HEAD
-            await client.query('ROLLBACK');
-            console.error('Add comment error:', { error, postId, userId: body.user_id });
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            return { success: false, error: `Failed to add comment: ${errorMessage}` };
-=======
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
@@ -1349,7 +1294,7 @@ export class PostsController {
                 success: false,
                 error: `Failed to add comment: ${errorMessage} `
             };
->>>>>>> dev
+
         } finally {
             client.release();
         }
