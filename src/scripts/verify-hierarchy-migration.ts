@@ -14,13 +14,16 @@ for (const file of envFiles) {
 }
 
 async function verifyMigration() {
-  const connectionString = process.env.DATABASE_URL || 'postgresql://kc:kc_password@localhost:5432/kc_db';
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL environment variable is required');
+  }
   const pool = new Pool({ connectionString });
   const client = await pool.connect();
-  
+
   try {
     console.log('🔍 Verifying hierarchy migration...\n');
-    
+
     // Check if hierarchy_level column exists
     const colCheck = await client.query(`
       SELECT column_name 
@@ -29,7 +32,7 @@ async function verifyMigration() {
         AND column_name = 'hierarchy_level'
     `);
     console.log('✅ hierarchy_level column exists:', colCheck.rows.length > 0);
-    
+
     // Check root admin
     const rootAdmin = await client.query(`
       SELECT email, hierarchy_level, parent_manager_id 
@@ -44,7 +47,7 @@ async function verifyMigration() {
     } else {
       console.log('⚠️ Root admin not found');
     }
-    
+
     // Check super admins
     const superAdmins = await client.query(`
       SELECT email, hierarchy_level, parent_manager_id 
@@ -57,7 +60,7 @@ async function verifyMigration() {
       console.log('     - hierarchy_level:', r.hierarchy_level, r.hierarchy_level === 1 ? '✅' : '❌');
       console.log('     - has_parent:', r.parent_manager_id !== null ? '✅' : '❌');
     });
-    
+
     // Check history table
     const historyCheck = await client.query(`
       SELECT COUNT(*) as count 
@@ -65,7 +68,7 @@ async function verifyMigration() {
       WHERE table_name = 'user_hierarchy_history'
     `);
     console.log('\n✅ History table exists:', historyCheck.rows[0].count > 0);
-    
+
     // Check trigger
     const triggerCheck = await client.query(`
       SELECT trigger_name 
@@ -73,7 +76,7 @@ async function verifyMigration() {
       WHERE trigger_name = 'trigger_update_hierarchy_level'
     `);
     console.log('✅ Trigger exists:', triggerCheck.rows.length > 0);
-    
+
     // Check function
     const functionCheck = await client.query(`
       SELECT routine_name 
@@ -81,9 +84,9 @@ async function verifyMigration() {
       WHERE routine_name = 'calculate_hierarchy_level'
     `);
     console.log('✅ Function exists:', functionCheck.rows.length > 0);
-    
+
     console.log('\n✅ Migration verification complete!');
-    
+
   } catch (error) {
     console.error('❌ Verification failed:', error);
     process.exit(1);

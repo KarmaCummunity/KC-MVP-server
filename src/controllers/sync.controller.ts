@@ -3,7 +3,7 @@
 // - Provides: Endpoint to sync users automatically (can be called from Firebase Cloud Function)
 // - Security: Should be protected with API key or admin authentication
 
-import { Controller, Post, Body, Get, Query, Headers, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, Headers, UnauthorizedException, UseGuards, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -12,6 +12,7 @@ import * as admin from 'firebase-admin';
 
 @Controller('api/sync')
 export class SyncController {
+  private readonly logger = new Logger(SyncController.name);
   // Simple API key check - in production, use proper authentication
   private readonly SYNC_API_KEY = process.env.SYNC_API_KEY || 'change-me-in-production';
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {
@@ -29,7 +30,7 @@ export class SyncController {
           });
         }
       } catch (error) {
-        console.warn('⚠️ Firebase Admin SDK not initialized - sync endpoint will not work');
+        this.logger.warn('⚠️ Firebase Admin SDK not initialized - sync endpoint will not work');
       }
     }
   }
@@ -79,7 +80,7 @@ export class SyncController {
           return { success: false, error: 'Must provide firebase_uid or email' };
         }
       } catch (error: any) {
-        console.error('❌ Error fetching user from Firebase:', error);
+        this.logger.error('❌ Error fetching user from Firebase:', error);
         return { success: false, error: 'User not found in Firebase' };
       }
 
@@ -249,13 +250,13 @@ export class SyncController {
         }
       } catch (error: any) {
         await client.query('ROLLBACK');
-        console.error('❌ Error syncing user:', error);
+        this.logger.error('❌ Error syncing user:', error);
         return { success: false, error: error.message || 'Failed to sync user' };
       } finally {
         client.release();
       }
     } catch (error: any) {
-      console.error('❌ Sync user error:', error);
+      this.logger.error('❌ Sync user error:', error);
       return { success: false, error: error.message || 'Failed to sync user' };
     }
   }
@@ -281,7 +282,7 @@ export class SyncController {
     try {
       await client.query('BEGIN');
       
-      console.log('🔄 Starting full Firebase users sync...');
+      this.logger.log('🔄 Starting full Firebase users sync...');
       
       // Get all users from Firebase Authentication
       let allUsers: admin.auth.UserRecord[] = [];
@@ -291,10 +292,10 @@ export class SyncController {
         const listUsersResult = await admin.auth().listUsers(1000, nextPageToken);
         allUsers = allUsers.concat(listUsersResult.users);
         nextPageToken = listUsersResult.pageToken;
-        console.log(`📥 Fetched ${allUsers.length} users from Firebase...`);
+        this.logger.log(`📥 Fetched ${allUsers.length} users from Firebase...`);
       } while (nextPageToken);
       
-      console.log(`✅ Total users in Firebase: ${allUsers.length}`);
+      this.logger.log(`✅ Total users in Firebase: ${allUsers.length}`);
       
       let created = 0;
       let updated = 0;
@@ -305,7 +306,7 @@ export class SyncController {
         try {
           // Skip users without email
           if (!firebaseUser.email) {
-            console.log(`⚠️ Skipping user ${firebaseUser.uid} - no email`);
+            this.logger.log(`⚠️ Skipping user ${firebaseUser.uid} - no email`);
             skipped++;
             continue;
           }
@@ -361,7 +362,7 @@ export class SyncController {
                 ]
               );
               updated++;
-              console.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+              this.logger.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
             } catch (updateError: any) {
               // If google_id column doesn't exist, try without it
               if (updateError.message && updateError.message.includes('google_id')) {
@@ -384,7 +385,7 @@ export class SyncController {
                   ]
                 );
                 updated++;
-                console.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+                this.logger.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
               } else {
                 throw updateError;
               }
@@ -424,7 +425,7 @@ export class SyncController {
                 ]
               );
               created++;
-              console.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+              this.logger.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
             } catch (insertError: any) {
               // If google_id column doesn't exist, try without it
               if (insertError.message && insertError.message.includes('google_id')) {
@@ -459,14 +460,14 @@ export class SyncController {
                   ]
                 );
                 created++;
-                console.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+                this.logger.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
               } else {
                 throw insertError;
               }
             }
           }
         } catch (error: any) {
-          console.error(`❌ Error processing user ${firebaseUser.uid}:`, error);
+          this.logger.error(`❌ Error processing user ${firebaseUser.uid}:`, error);
           errors++;
         }
       }
@@ -483,18 +484,18 @@ export class SyncController {
         total_processed: created + updated + skipped
       };
       
-      console.log('\n📊 Sync Summary:');
-      console.log(`   ✅ Created: ${created}`);
-      console.log(`   🔄 Updated: ${updated}`);
-      console.log(`   ⏭️  Skipped: ${skipped}`);
-      console.log(`   ❌ Errors: ${errors}`);
-      console.log(`   📈 Total processed: ${created + updated + skipped}`);
-      console.log('\n✅ Firebase users sync completed!');
+      this.logger.log('\n📊 Sync Summary:');
+      this.logger.log(`   ✅ Created: ${created}`);
+      this.logger.log(`   🔄 Updated: ${updated}`);
+      this.logger.log(`   ⏭️  Skipped: ${skipped}`);
+      this.logger.log(`   ❌ Errors: ${errors}`);
+      this.logger.log(`   📈 Total processed: ${created + updated + skipped}`);
+      this.logger.log('\n✅ Firebase users sync completed!');
       
       return summary;
     } catch (error: any) {
       await client.query('ROLLBACK');
-      console.error('❌ Full sync error:', error);
+      this.logger.error('❌ Full sync error:', error);
       return { success: false, error: error.message || 'Failed to sync all users' };
     } finally {
       client.release();
@@ -519,7 +520,7 @@ export class SyncController {
           nextPageToken = listUsersResult.pageToken;
         } while (nextPageToken);
       } catch (error) {
-        console.warn('⚠️ Could not count Firebase users:', error);
+        this.logger.warn('⚠️ Could not count Firebase users:', error);
       }
 
       // Count users in user_profiles
@@ -542,7 +543,7 @@ export class SyncController {
         missing_sync: Math.max(0, firebaseCount - firebaseLinked),
       };
     } catch (error: any) {
-      console.error('❌ Get sync status error:', error);
+      this.logger.error('❌ Get sync status error:', error);
       return { success: false, error: error.message || 'Failed to get sync status' };
     }
   }

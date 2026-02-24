@@ -18,7 +18,7 @@
 // TODO: Add comprehensive logging and monitoring for analytics queries
 // TODO: Add comprehensive unit tests for all statistical calculations
 // TODO: Implement proper data privacy and anonymization
-import { Controller, Get, Post, Body, Query, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Param, UseGuards, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -27,6 +27,7 @@ import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/stats')
 export class StatsController {
+  private readonly logger = new Logger(StatsController.name);
   private readonly CACHE_TTL = 10 * 60; // 10 minutes for stats
 
   constructor(
@@ -61,7 +62,7 @@ export class StatsController {
           }
         } catch (cacheError) {
           // Log cache error but continue to fetch from database
-          console.warn('Cache get error, continuing to database:', cacheError);
+          this.logger.warn('Cache get error, continuing to database:', cacheError);
         }
       } else {
         // Clear cache when force refresh is requested
@@ -70,7 +71,7 @@ export class StatsController {
           await this.redisCache.delete(cacheKey);
         } catch (cacheError) {
           // Log cache error but continue
-          console.warn('Cache delete error:', cacheError);
+          this.logger.warn('Cache delete error:', cacheError);
         }
       }
 
@@ -128,12 +129,12 @@ export class StatsController {
         await this.redisCache.set(cacheKey, stats, this.CACHE_TTL);
       } catch (cacheError) {
         // Log cache error but still return the stats
-        console.warn('Cache set error:', cacheError);
+        this.logger.warn('Cache set error:', cacheError);
       }
 
       return { success: true, data: stats };
     } catch (error) {
-      console.error('Error in getCommunityStats:', error);
+      this.logger.error('Error in getCommunityStats:', error);
       // Return a meaningful error response
       return {
         success: false,
@@ -158,7 +159,7 @@ export class StatsController {
           return { success: true, version: cached };
         }
       } catch (cacheError) {
-        console.warn('Cache get error in version check:', cacheError);
+        this.logger.warn('Cache get error in version check:', cacheError);
       }
 
       // Get the latest update timestamp from community_stats
@@ -179,12 +180,12 @@ export class StatsController {
       try {
         await this.redisCache.set(cacheKey, version, 60);
       } catch (cacheError) {
-        console.warn('Cache set error in version check:', cacheError);
+        this.logger.warn('Cache set error in version check:', cacheError);
       }
 
       return { success: true, version };
     } catch (error) {
-      console.error('Error in getCommunityStatsVersion:', error);
+      this.logger.error('Error in getCommunityStatsVersion:', error);
       return {
         success: false,
         error: 'Failed to fetch stats version',
@@ -290,7 +291,7 @@ export class StatsController {
       return { success: true, message: 'Site visit tracked successfully' };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Track site visit error:', error);
+      this.logger.error('Track site visit error:', error);
       return { success: false, error: 'Failed to track site visit' };
     } finally {
       client.release();
@@ -325,7 +326,7 @@ export class StatsController {
       return { success: true, message: 'Stat incremented successfully' };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Increment stat error:', error);
+      this.logger.error('Increment stat error:', error);
       return { success: false, error: 'Failed to increment stat' };
     } finally {
       client.release();
@@ -516,7 +517,7 @@ export class StatsController {
         hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
       }
     } catch (error) {
-      console.warn('Task time logs table check failed, using zero values:', error);
+      this.logger.warn('Task time logs table check failed, using zero values:', error);
       hoursStats = { rows: [{ total_volunteer_hours: '0', users_with_hours: 0, current_month_hours: '0' }] };
     }
 
@@ -753,7 +754,7 @@ export class StatsController {
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Get stat details error:', error);
+      this.logger.error('Get stat details error:', error);
       return { success: false, error: 'Failed to load stat details' };
     }
   }
@@ -804,7 +805,7 @@ export class StatsController {
           cacheKeys.taskMetrics,
         ]);
       } catch (cacheError) {
-        console.warn('Cache getMultiple error, continuing without cache:', cacheError);
+        this.logger.warn('Cache getMultiple error, continuing without cache:', cacheError);
       }
 
     // Helper function to get cached or execute query
@@ -1059,7 +1060,7 @@ export class StatsController {
       };
     }
     } catch (error) {
-      console.error('Error in addComputedStats:', error);
+      this.logger.error('Error in addComputedStats:', error);
       // Set default values for all computed stats to prevent undefined errors
       const defaultStats = {
         total_users: { value: 0, days_tracked: 1 },
@@ -1136,7 +1137,7 @@ export class StatsController {
 
       return { success: true, message: 'Community statistics reset successfully' };
     } catch (error) {
-      console.error('Reset community stats error:', error);
+      this.logger.error('Reset community stats error:', error);
       return { success: false, error: 'Failed to reset community statistics' };
     }
   }

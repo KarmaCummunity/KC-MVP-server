@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Inject } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Inject, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -26,6 +26,7 @@ interface UpdateContactDto {
 
 @Controller('/api/crm')
 export class CrmController {
+  private readonly logger = new Logger(CrmController.name);
     private readonly CACHE_TTL = 10 * 60; // 10 minutes
 
     constructor(
@@ -44,7 +45,7 @@ export class CrmController {
       `);
 
             if (!checkTable.rows[0].exists) {
-                console.log('📋 Creating crm_contacts table...');
+                this.logger.log('📋 Creating crm_contacts table...');
                 await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
 
                 await this.pool.query(`
@@ -80,10 +81,10 @@ export class CrmController {
            $$;
         `);
 
-                console.log('✅ crm_contacts table created successfully');
+                this.logger.log('✅ crm_contacts table created successfully');
             }
         } catch (error) {
-            console.error('❌ Error ensuring crm_contacts table:', error);
+            this.logger.error('❌ Error ensuring crm_contacts table:', error);
         }
     }
 
@@ -125,7 +126,7 @@ export class CrmController {
 
             return { success: true, data: rows };
         } catch (error) {
-            console.error('Error fetching CRM contacts:', error);
+            this.logger.error('Error fetching CRM contacts:', error);
             return { success: false, error: 'Failed to fetch contacts', data: [] };
         }
     }
@@ -161,7 +162,7 @@ export class CrmController {
             await this.redisCache.invalidatePattern('crm_contacts_list_*');
             return { success: true, data: rows[0] };
         } catch (error) {
-            console.error('Error creating CRM contact:', error);
+            this.logger.error('Error creating CRM contact:', error);
             return { success: false, error: 'Failed to create contact' };
         }
     }
@@ -196,7 +197,7 @@ export class CrmController {
             await this.redisCache.invalidatePattern('crm_contacts_list_*');
             return { success: true, data: rows[0] };
         } catch (error) {
-            console.error('Error updating CRM contact:', error);
+            this.logger.error('Error updating CRM contact:', error);
             return { success: false, error: 'Failed to update contact' };
         }
     }
@@ -212,7 +213,7 @@ export class CrmController {
             await this.redisCache.invalidatePattern('crm_contacts_list_*');
             return { success: true, message: 'Contact deleted successfully' };
         } catch (error) {
-            console.error('Error deleting CRM contact:', error);
+            this.logger.error('Error deleting CRM contact:', error);
             return { success: false, error: 'Failed to delete contact' };
         }
     }

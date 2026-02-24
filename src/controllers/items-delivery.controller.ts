@@ -2,12 +2,13 @@
 // - Purpose: Items Delivery API for creating, listing, updating, and managing item delivery requests
 // - Reached from: Routes under '/api/items'
 // - Provides: CRUD for items, search with filters, and item request workflow management
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Logger } from '@nestjs/common';
 import { ItemsDeliveryService } from './items-delivery.service';
 import { CreateItemDto, UpdateItemDto, ItemFiltersDto, CreateItemRequestDto, UpdateItemRequestDto } from './dto/items.dto';
 
 @Controller('api/items-delivery')
 export class ItemsDeliveryController {
+  private readonly logger = new Logger(ItemsDeliveryController.name);
   constructor(private readonly itemsDeliveryService: ItemsDeliveryService) { }
 
   // ==================== Items CRUD ====================
@@ -42,7 +43,7 @@ export class ItemsDeliveryController {
 
       return this.itemsDeliveryService.createItem(createItemDto);
     } catch (error) {
-      console.error('Error in createItem:', error);
+      this.logger.error('Error in createItem:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to create item',
@@ -82,7 +83,7 @@ export class ItemsDeliveryController {
     try {
       return await this.itemsDeliveryService.listItems(validatedFilters);
     } catch (error) {
-      console.error('Error in searchItems:', error);
+      this.logger.error('Error in searchItems:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to search items',
@@ -140,7 +141,7 @@ export class ItemsDeliveryController {
       };
       return this.itemsDeliveryService.listItems(validatedFilters);
     } catch (error) {
-      console.error('Error in listItems:', error);
+      this.logger.error('Error in listItems:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to list items',

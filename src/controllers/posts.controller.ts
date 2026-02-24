@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Query, Body, Inject, UseGuards, Req, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -20,13 +20,14 @@ interface UpdateCommentBody {
 
 @Controller('api/posts')
 export class PostsController {
+  private readonly logger = new Logger(PostsController.name);
     private readonly CACHE_TTL = 5 * 60; // 5 minutes cache
 
     constructor(
         @Inject(PG_POOL) private readonly pool: Pool,
         private readonly redisCache: RedisCacheService,
     ) {
-        console.log('🔄 PostsController initialized');
+        this.logger.log('🔄 PostsController initialized');
     }
 
     /**
@@ -58,31 +59,31 @@ export class PostsController {
                 // If id or author_id is missing, the table structure is fundamentally wrong (legacy)
                 // We can't add id column later since it's the primary key
                 if (!columns.includes('id') || !columns.includes('author_id')) {
-                    console.log('⚠️  Detected legacy posts table structure - recreating...');
-                    console.log(`   - Has id column: ${columns.includes('id')}`);
-                    console.log(`   - Has author_id column: ${columns.includes('author_id')}`);
+                    this.logger.log('⚠️  Detected legacy posts table structure - recreating...');
+                    this.logger.log(`   - Has id column: ${columns.includes('id')}`);
+                    this.logger.log(`   - Has author_id column: ${columns.includes('author_id')}`);
                     await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
                 } else {
                     // Check for new columns and add them if missing
                     if (!columns.includes('post_type')) {
-                        console.log('📝 Adding post_type column to posts table...');
+                        this.logger.log('📝 Adding post_type column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN post_type VARCHAR(50) DEFAULT 'task_completion';");
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type);");
                     }
 
                     if (!columns.includes('task_id')) {
-                        console.log('📝 Adding task_id column to posts table...');
+                        this.logger.log('📝 Adding task_id column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;");
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id);");
                     }
 
                     if (!columns.includes('ride_id')) {
-                        console.log('📝 Adding ride_id column to posts table...');
+                        this.logger.log('📝 Adding ride_id column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN ride_id UUID REFERENCES rides(id) ON DELETE CASCADE;");
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_ride_id ON posts(ride_id);");
 
                         // Migrate existing ride posts from metadata to ride_id column
-                        console.log('📝 Migrating existing ride posts to use ride_id column...');
+                        this.logger.log('📝 Migrating existing ride posts to use ride_id column...');
                         await this.pool.query(`
                             UPDATE posts 
                             SET ride_id = (metadata->>'ride_id')::uuid 
@@ -93,13 +94,13 @@ export class PostsController {
                     }
 
                     if (!columns.includes('item_id')) {
-                        console.log('📝 Adding item_id column to posts table...');
+                        this.logger.log('📝 Adding item_id column to posts table...');
                         // item_id must be TEXT because items.id is TEXT (to support various ID formats)
                         await this.pool.query("ALTER TABLE posts ADD COLUMN item_id TEXT;");
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_item_id ON posts(item_id);");
 
                         // Migrate existing item/donation posts from metadata to item_id column
-                        console.log('📝 Migrating existing item/donation posts to use item_id column...');
+                        this.logger.log('📝 Migrating existing item/donation posts to use item_id column...');
                         await this.pool.query(`
                             UPDATE posts 
                             SET item_id = metadata->>'item_id'
@@ -110,12 +111,12 @@ export class PostsController {
                     }
 
                     if (!columns.includes('metadata')) {
-                        console.log('📝 Adding metadata column to posts table...');
+                        this.logger.log('📝 Adding metadata column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb;");
                     }
 
                     if (!columns.includes('status')) {
-                        console.log('📝 Adding status column to posts table...');
+                        this.logger.log('📝 Adding status column to posts table...');
                         await this.pool.query("ALTER TABLE posts ADD COLUMN status VARCHAR(50) DEFAULT 'active';");
                         await this.pool.query("CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);");
                     }
@@ -125,7 +126,7 @@ export class PostsController {
                         await this.pool.query("ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_item_id_fkey;");
                         await this.pool.query("ALTER TABLE posts ALTER COLUMN item_id TYPE TEXT;");
                     } catch (e) {
-                        console.log('ℹ️  Note: item_id fix check:', (e as any).message);
+                        this.logger.log('ℹ️  Note: item_id fix check:', (e as any).message);
                     }
 
                     // Table exists and is patched
@@ -183,12 +184,12 @@ export class PostsController {
                         EXECUTE FUNCTION update_updated_at_column();
                 `);
             } catch (e) {
-                console.log('⚠️ Could not create update_posts_updated_at trigger (function might not exist)');
+                this.logger.log('⚠️ Could not create update_posts_updated_at trigger (function might not exist)');
             }
 
-            console.log('✅ Posts table ensured with correct schema');
+            this.logger.log('✅ Posts table ensured with correct schema');
         } catch (error) {
-            console.error('❌ Failed to ensure posts table:', error);
+            this.logger.error('❌ Failed to ensure posts table:', error);
             // Don't throw - allow code to continue, but log the error
         }
     }
@@ -198,7 +199,7 @@ export class PostsController {
      */
     private async ensureLikesCommentsTable() {
         try {
-            console.log('📝 Ensuring likes and comments tables exist...');
+            this.logger.log('📝 Ensuring likes and comments tables exist...');
 
             // First, verify that posts table exists (required for foreign keys)
             const postsTableCheck = await this.pool.query(`
@@ -209,7 +210,7 @@ export class PostsController {
             `);
 
             if (!postsTableCheck.rows[0]?.exists) {
-                console.log('⚠️  Posts table does not exist yet - skipping likes/comments table creation');
+                this.logger.log('⚠️  Posts table does not exist yet - skipping likes/comments table creation');
                 return;
             }
 
@@ -222,7 +223,7 @@ export class PostsController {
             `);
 
             if (!likesTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating post_likes table...');
+                this.logger.log('📝 Creating post_likes table...');
                 await this.pool.query(`
                     CREATE TABLE post_likes (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -235,7 +236,7 @@ export class PostsController {
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
-                console.log('✅ post_likes table created');
+                this.logger.log('✅ post_likes table created');
             } else {
                 // Check if id column exists
                 const idColumnCheck = await this.pool.query(`
@@ -245,7 +246,7 @@ export class PostsController {
                     ) AS exists;
                 `);
                 if (!idColumnCheck.rows[0]?.exists) {
-                    console.log('⚠️ post_likes table exists but missing id column - recreating...');
+                    this.logger.log('⚠️ post_likes table exists but missing id column - recreating...');
                     await this.pool.query(`DROP TABLE IF EXISTS post_likes CASCADE;`);
                     await this.pool.query(`
                         CREATE TABLE post_likes (
@@ -259,7 +260,7 @@ export class PostsController {
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes(post_id);`);
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON post_likes(user_id);`);
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_likes_created_at ON post_likes(created_at DESC);`);
-                    console.log('✅ post_likes table recreated');
+                    this.logger.log('✅ post_likes table recreated');
                 }
             }
 
@@ -272,7 +273,7 @@ export class PostsController {
             `);
 
             if (!commentsTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating post_comments table...');
+                this.logger.log('📝 Creating post_comments table...');
                 await this.pool.query(`
                     CREATE TABLE post_comments (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -287,7 +288,7 @@ export class PostsController {
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
-                console.log('✅ post_comments table created');
+                this.logger.log('✅ post_comments table created');
             } else {
                 // Check if id column exists
                 const idColumnCheck = await this.pool.query(`
@@ -297,7 +298,7 @@ export class PostsController {
                     ) AS exists;
                 `);
                 if (!idColumnCheck.rows[0]?.exists) {
-                    console.log('⚠️ post_comments table exists but missing id column - recreating...');
+                    this.logger.log('⚠️ post_comments table exists but missing id column - recreating...');
                     await this.pool.query(`DROP TABLE IF EXISTS comment_likes CASCADE;`);
                     await this.pool.query(`DROP TABLE IF EXISTS post_comments CASCADE;`);
                     await this.pool.query(`
@@ -314,7 +315,7 @@ export class PostsController {
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments(post_id);`);
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_user_id ON post_comments(user_id);`);
                     await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON post_comments(created_at DESC);`);
-                    console.log('✅ post_comments table recreated');
+                    this.logger.log('✅ post_comments table recreated');
                 }
             }
 
@@ -327,7 +328,7 @@ export class PostsController {
             `);
 
             if (!commentLikesTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating comment_likes table...');
+                this.logger.log('📝 Creating comment_likes table...');
                 await this.pool.query(`
                     CREATE TABLE comment_likes (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -339,7 +340,7 @@ export class PostsController {
                 `);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes(comment_id);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_comment_likes_user_id ON comment_likes(user_id);`);
-                console.log('✅ comment_likes table created');
+                this.logger.log('✅ comment_likes table created');
             }
 
             // Check if user_notifications table exists (required for notifications)
@@ -351,7 +352,7 @@ export class PostsController {
             `);
 
             if (!notificationsTableCheck.rows[0]?.exists) {
-                console.log('📝 Creating user_notifications table...');
+                this.logger.log('📝 Creating user_notifications table...');
                 await this.pool.query(`
                     CREATE TABLE user_notifications (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -371,11 +372,11 @@ export class PostsController {
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_user_notifications_created_at ON user_notifications(created_at DESC);`);
                 await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_user_notifications_is_read ON user_notifications(user_id, is_read) WHERE is_read = false;`);
 
-                console.log('✅ user_notifications table created');
+                this.logger.log('✅ user_notifications table created');
             }
 
             // Create SQL functions for updating counts
-            console.log('📝 Ensuring SQL functions exist...');
+            this.logger.log('📝 Ensuring SQL functions exist...');
 
             // Function to update post likes count
             await this.pool.query(`
@@ -428,10 +429,10 @@ export class PostsController {
                 $$ LANGUAGE plpgsql;
             `);
 
-            console.log('✅ SQL functions ensured');
+            this.logger.log('✅ SQL functions ensured');
 
             // Create triggers
-            console.log('📝 Ensuring triggers exist...');
+            this.logger.log('📝 Ensuring triggers exist...');
 
             // Trigger for post_likes
             await this.pool.query(`
@@ -469,12 +470,12 @@ export class PostsController {
                     EXECUTE FUNCTION update_updated_at_column();
             `).catch(() => {
                 // Function might not exist, that's okay
-                console.log('⚠️ update_updated_at_column function not found, skipping trigger');
+                this.logger.log('⚠️ update_updated_at_column function not found, skipping trigger');
             });
 
-            console.log('✅ Triggers ensured');
+            this.logger.log('✅ Triggers ensured');
         } catch (error) {
-            console.error('❌ Failed to ensure likes/comments tables:', error);
+            this.logger.error('❌ Failed to ensure likes/comments tables:', error);
         }
     }
 
@@ -630,17 +631,17 @@ export class PostsController {
                 LIMIT $1 OFFSET $2
             `;
 
-            console.log('📝 [getPosts] Executing query with params:', { limit, offset, userId, hasUserId: !!userId });
+            this.logger.log('📝 [getPosts] Executing query with params:', { limit, offset, userId, hasUserId: !!userId });
 
             try {
                 const { rows } = await this.pool.query(query, params);
-                console.log(`✅ [getPosts] Query returned ${rows.length} posts (limit: ${limit}, offset: ${offset})`);
+                this.logger.log(`✅ [getPosts] Query returned ${rows.length} posts (limit: ${limit}, offset: ${offset})`);
 
                 // Count task-related posts in results
                 const taskPostsInResults = rows.filter(p =>
                     p.post_type === 'task_assignment' || p.post_type === 'task_completion'
                 ).length;
-                console.log(`📊 Task-related posts in results: ${taskPostsInResults}/${rows.length}`);
+                this.logger.log(`📊 Task-related posts in results: ${taskPostsInResults}/${rows.length}`);
 
                 if (rows.length > 0) {
                     // Show first few posts for debugging
@@ -652,18 +653,18 @@ export class PostsController {
                         has_author: !!p.author,
                         author_id_in_author: p.author?.id?.substring(0, 8)
                     }));
-                    console.log('📋 Sample posts:', samplePosts);
+                    this.logger.log('📋 Sample posts:', samplePosts);
                 } else {
-                    console.warn('⚠️ getPosts returned 0 posts!');
+                    this.logger.warn('⚠️ getPosts returned 0 posts!');
                 }
 
                 return { success: true, data: rows };
             } catch (queryError) {
-                console.error(`❌ [getPosts] Primary query failed:`, queryError);
+                this.logger.error(`❌ [getPosts] Primary query failed:`, queryError);
 
                 // Fallback query if main query fails (e.g. issues with joins or columns)
                 // Try simplest possible query without joins first to diagnose
-                console.log('⚠️ [getPosts] Attempting fallback query...');
+                this.logger.log('⚠️ [getPosts] Attempting fallback query...');
 
                 try {
                     const fallbackQuery = `
@@ -687,16 +688,16 @@ export class PostsController {
                         item_data: null
                     }));
 
-                    console.log(`✅[getPosts] Fallback query returned ${mappedRows.length} posts`);
+                    this.logger.log(`✅[getPosts] Fallback query returned ${mappedRows.length} posts`);
                     return { success: true, data: mappedRows };
                 } catch (fallbackError) {
-                    console.warn('⚠️ [getPosts] Fallback query also failed');
+                    this.logger.warn('⚠️ [getPosts] Fallback query also failed');
                     throw queryError;
                 }
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('Get posts error:', errorMessage);
+            this.logger.error('Get posts error:', errorMessage);
             return {
                 success: false,
                 error: `Failed to get posts: ${errorMessage} `
@@ -812,7 +813,7 @@ export class PostsController {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Get user posts error:', {
+            this.logger.error('Get user posts error:', {
                 message: errorMessage,
                 stack: errorStack,
                 userId,
@@ -944,11 +945,11 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Toggle like error:', {
+            this.logger.error('Toggle like error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1009,7 +1010,7 @@ export class PostsController {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Get post likes error:', {
+            this.logger.error('Get post likes error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1048,7 +1049,7 @@ export class PostsController {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Check user liked error:', {
+            this.logger.error('Check user liked error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1095,7 +1096,7 @@ export class PostsController {
 
             await client.query('BEGIN');
 
-            console.log(`[addComment] Checking existence of post ${postId}`);
+            this.logger.log(`[addComment] Checking existence of post ${postId}`);
 
             // Check if post exists
             const postCheck = await client.query(
@@ -1103,12 +1104,12 @@ export class PostsController {
                 [postId]
             );
 
-            console.log(`[addComment] Post check result: ${postCheck.rows.length} rows found`);
+            this.logger.log(`[addComment] Post check result: ${postCheck.rows.length} rows found`);
 
             if (postCheck.rows.length === 0) {
                 // Debugging: Check if post exists with whitespace or case issues?
                 const debugCheck = await client.query('SELECT id FROM posts LIMIT 5');
-                console.log('[addComment] Debug - First 5 posts in DB:', debugCheck.rows);
+                this.logger.log('[addComment] Debug - First 5 posts in DB:', debugCheck.rows);
 
                 await client.query('ROLLBACK');
                 return { success: false, error: 'Post not found' };
@@ -1194,11 +1195,11 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Add comment error:', {
+            this.logger.error('Add comment error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1282,7 +1283,7 @@ export class PostsController {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Get post comments error:', {
+            this.logger.error('Get post comments error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1354,7 +1355,7 @@ export class PostsController {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Update comment error:', {
+            this.logger.error('Update comment error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1440,11 +1441,11 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Delete comment error:', {
+            this.logger.error('Delete comment error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1578,11 +1579,11 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Toggle comment like error:', {
+            this.logger.error('Toggle comment like error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,
@@ -1715,10 +1716,10 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('Update post error:', errorMessage);
+            this.logger.error('Update post error:', errorMessage);
             return {
                 success: false,
                 error: `Failed to update post: ${errorMessage}`
@@ -1801,7 +1802,7 @@ export class PostsController {
             };
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('Hide post error:', errorMessage);
+            this.logger.error('Hide post error:', errorMessage);
             return {
                 success: false,
                 error: `Failed to hide post: ${errorMessage}`
@@ -1880,7 +1881,7 @@ export class PostsController {
             };
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error('Unhide post error:', errorMessage);
+            this.logger.error('Unhide post error:', errorMessage);
             return {
                 success: false,
                 error: `Failed to unhide post: ${errorMessage}`
@@ -1965,7 +1966,7 @@ export class PostsController {
                 };
             }
 
-            console.log(`🗑️ Deleting post ${postId} (type: ${post.post_type}) by user ${user_id} (owner: ${isOwner}, admin: ${isSuperAdmin})`);
+            this.logger.log(`🗑️ Deleting post ${postId} (type: ${post.post_type}) by user ${user_id} (owner: ${isOwner}, admin: ${isSuperAdmin})`);
 
             // Handle deletion based on post type
             let deletionStrategy = 'post_only';
@@ -1978,7 +1979,7 @@ export class PostsController {
                         await client.query('DELETE FROM rides WHERE id = $1', [post.ride_id]);
                         deletionStrategy = 'ride_cascade';
                         relatedEntityDeleted = true;
-                        console.log(`✅ Deleted ride ${post.ride_id} (post auto-deleted via CASCADE)`);
+                        this.logger.log(`✅ Deleted ride ${post.ride_id} (post auto-deleted via CASCADE)`);
                     } else {
                         // Orphaned ride post - delete post only
                         await client.query('DELETE FROM posts WHERE id = $1', [postId]);
@@ -1993,7 +1994,7 @@ export class PostsController {
                         await client.query('DELETE FROM items WHERE id = $1', [post.item_id]);
                         deletionStrategy = 'item_cascade';
                         relatedEntityDeleted = true;
-                        console.log(`✅ Deleted item ${post.item_id} (post auto-deleted via CASCADE)`);
+                        this.logger.log(`✅ Deleted item ${post.item_id} (post auto-deleted via CASCADE)`);
                     } else {
                         // Orphaned item post - delete post only
                         await client.query('DELETE FROM posts WHERE id = $1', [postId]);
@@ -2007,14 +2008,14 @@ export class PostsController {
                     // Tasks can have multiple posts and should be managed separately
                     await client.query('DELETE FROM posts WHERE id = $1', [postId]);
                     deletionStrategy = 'post_only';
-                    console.log(`✅ Deleted task post ${postId} (task ${post.task_id} preserved)`);
+                    this.logger.log(`✅ Deleted task post ${postId} (task ${post.task_id} preserved)`);
                     break;
 
                 default:
                     // General posts or unknown types - delete post only
                     await client.query('DELETE FROM posts WHERE id = $1', [postId]);
                     deletionStrategy = 'post_only';
-                    console.log(`✅ Deleted general post ${postId}`);
+                    this.logger.log(`✅ Deleted general post ${postId}`);
             }
 
             // Track deletion activity
@@ -2055,11 +2056,11 @@ export class PostsController {
             try {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                this.logger.error('Rollback error:', rollbackError);
             }
             const errorMessage = error instanceof Error ? error.message : String(error);
             const errorStack = error instanceof Error ? error.stack : undefined;
-            console.error('Delete post error:', {
+            this.logger.error('Delete post error:', {
                 message: errorMessage,
                 stack: errorStack,
                 postId,

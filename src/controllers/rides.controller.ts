@@ -3,7 +3,7 @@
 // - Reached from: Routes under '/api/rides'.
 // - Provides: Create ride, list with filters, get by id, book ride, update booking status, per-user rides, summary stats; clears caches accordingly.
 // - Storage: `rides`, `ride_bookings`, `user_profiles`, `community_stats`; Redis caches with TTL.
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -11,6 +11,7 @@ import { RedisCacheService } from '../redis/redis-cache.service';
 
 @Controller('api/rides')
 export class RidesController {
+  private readonly logger = new Logger(RidesController.name);
   private readonly CACHE_TTL = 5 * 60; // 5 minutes for ride data
 
   constructor(
@@ -24,7 +25,7 @@ export class RidesController {
     try {
       await client.query('BEGIN');
 
-      console.log('🚗 Server - Creating ride with data:', JSON.stringify(rideData, null, 2));
+      this.logger.log('🚗 Server - Creating ride with data:', JSON.stringify(rideData, null, 2));
 
       // Validate required fields
       if (!rideData.driver_id) {
@@ -57,7 +58,7 @@ export class RidesController {
 
         if (existingUsers.length > 0) {
           driverUuid = existingUsers[0].id;
-          console.log(`🔄 Found existing user profile for ${rideData.driver_id}: ${driverUuid}`);
+          this.logger.log(`🔄 Found existing user profile for ${rideData.driver_id}: ${driverUuid}`);
         } else {
           // Create new user profile for legacy user
           const { rows: newUsers } = await client.query(`
@@ -71,7 +72,7 @@ export class RidesController {
           ]);
 
           driverUuid = newUsers[0].id;
-          console.log(`✨ Created new user profile for ${rideData.driver_id}: ${driverUuid}`);
+          this.logger.log(`✨ Created new user profile for ${rideData.driver_id}: ${driverUuid}`);
         }
       }
 
@@ -149,13 +150,13 @@ export class RidesController {
         await this.clearCommunityStatsCaches();
       } catch (cacheError) {
         // eslint-disable-next-line no-console
-        console.error('⚠️ Cache clear failed after ride creation:', cacheError);
+        this.logger.error('⚠️ Cache clear failed after ride creation:', cacheError);
       }
 
       return { success: true, data: ride };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Create ride error:', error);
+      this.logger.error('Create ride error:', error);
       return { success: false, error: 'Failed to create ride' };
     } finally {
       client.release();
@@ -344,7 +345,7 @@ export class RidesController {
 
         if (existingUsers.length > 0) {
           passengerUuid = existingUsers[0].id;
-          console.log(`🔄 Found existing user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
+          this.logger.log(`🔄 Found existing user profile for ${bookingData.passenger_id}: ${passengerUuid}`);
         } else {
           // User not found - this is an error, passenger must exist
           await client.query('ROLLBACK');
@@ -393,7 +394,7 @@ export class RidesController {
       return { success: true, data: booking };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Book ride error:', error);
+      this.logger.error('Book ride error:', error);
       return { success: false, error: 'Failed to book ride' };
     } finally {
       client.release();
@@ -455,7 +456,7 @@ export class RidesController {
       return { success: true, data: booking };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Update booking status error:', error);
+      this.logger.error('Update booking status error:', error);
       return { success: false, error: 'Failed to update booking status' };
     } finally {
       client.release();

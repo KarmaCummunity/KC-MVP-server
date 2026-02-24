@@ -2,7 +2,7 @@
 // - Purpose: CRUD עבור משימות קבוצתיות למנהל האפליקציה
 // - Routes: /api/tasks (GET, POST), /api/tasks/:id (GET, PATCH, DELETE)
 // - Storage: PostgreSQL טבלת tasks (schema.sql)
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -16,6 +16,7 @@ type TaskPriority = 'low' | 'medium' | 'high';
 
 @Controller('/api/tasks')
 export class TasksController {
+  private readonly logger = new Logger(TasksController.name);
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
@@ -60,7 +61,7 @@ export class TasksController {
 
         if (!columnCheck.rows[0]?.exists) {
           // Legacy table exists with wrong structure - drop and recreate
-          console.log('⚠️  Detected legacy posts table structure - recreating with correct schema');
+          this.logger.log('⚠️  Detected legacy posts table structure - recreating with correct schema');
           await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
         } else {
           // Table exists with correct structure
@@ -112,12 +113,12 @@ export class TasksController {
             EXECUTE FUNCTION update_updated_at_column();
         `);
       } catch (e) {
-        console.log('⚠️ Could not create update_posts_updated_at trigger (function might not exist)');
+        this.logger.log('⚠️ Could not create update_posts_updated_at trigger (function might not exist)');
       }
 
-      console.log('✅ Posts table ensured with correct schema');
+      this.logger.log('✅ Posts table ensured with correct schema');
     } catch (error) {
-      console.error('❌ Failed to ensure posts table:', error);
+      this.logger.error('❌ Failed to ensure posts table:', error);
       // Don't throw - allow code to continue, but log the error
     }
   }
@@ -163,7 +164,7 @@ export class TasksController {
           END $$;
         `);
       } catch (e) {
-        console.warn('⚠️ Could not ensure estimated_hours column:', e);
+        this.logger.warn('⚠️ Could not ensure estimated_hours column:', e);
       }
 
       // 3. Ensure INDEXES (Idempotent)
@@ -202,7 +203,7 @@ export class TasksController {
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id)`);
         await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_logged_at ON task_time_logs(logged_at DESC)`);
       } catch (e) {
-        console.warn('⚠️ Could not ensure task_time_logs table:', e);
+        this.logger.warn('⚠️ Could not ensure task_time_logs table:', e);
       }
 
       // 5. Ensure NOTIFICATIONS table (Idempotent)
@@ -218,23 +219,29 @@ export class TasksController {
       `);
 
     } catch (error) {
-      console.error('❌ Error ensuring tables (non-fatal):', error);
+      this.logger.error('❌ Error ensuring tables (non-fatal):', error);
       // Do not throw. If standard tables exist, we can proceed.
     }
   }
 
   /**
-   * Get the Super Admin user ID (navesarussi@gmail.com)
-   * Used for default task assignment and permission checks
+   * Get the root admin user ID from ROOT_ADMIN_EMAIL env var
+   * SEC-003.1: No hardcoded emails — uses env var
    */
   private async getSuperAdminId(): Promise<string | null> {
     try {
+      const rootEmail = process.env.ROOT_ADMIN_EMAIL;
+      if (!rootEmail) {
+        this.logger.warn('⚠️ ROOT_ADMIN_EMAIL not set — cannot resolve super admin');
+        return null;
+      }
       const { rows } = await this.pool.query(
-        `SELECT id FROM user_profiles WHERE email = 'navesarussi@gmail.com' LIMIT 1`
+        `SELECT id FROM user_profiles WHERE email = $1 LIMIT 1`,
+        [rootEmail]
       );
       return rows[0]?.id || null;
     } catch (error) {
-      console.error('❌ Error getting super admin ID:', error);
+      this.logger.error('❌ Error getting super admin ID:', error);
       return null;
     }
   }
@@ -276,10 +283,10 @@ export class TasksController {
       `, [managerId, targetUserId]);
 
       const canAssign = rows.length > 0;
-      console.log(`🔐 Manager ${managerId} ${canAssign ? 'CAN' : 'CANNOT'} assign to ${targetUserId}`);
+      this.logger.log(`🔐 Manager ${managerId} ${canAssign ? 'CAN' : 'CANNOT'} assign to ${targetUserId}`);
       return canAssign;
     } catch (error) {
-      console.error('❌ Error checking hierarchy permissions:', error);
+      this.logger.error('❌ Error checking hierarchy permissions:', error);
       // On error, deny assignment to be safe
       return false;
     }
@@ -319,11 +326,11 @@ export class TasksController {
       try {
         cached = await this.redisCache.get(cacheKey);
       } catch (cacheError) {
-        console.warn('Redis cache error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache error (non-fatal):', cacheError);
       }
 
       if (cached) {
-        console.log('✅ Returning cached tasks list');
+        this.logger.log('✅ Returning cached tasks list');
         return { success: true, data: cached };
       }
 
@@ -356,10 +363,10 @@ export class TasksController {
           // Try to resolve if not UUID (e.g. email)
           const resolved = await this.resolveUserIdToUUID(assignee);
           if (resolved) {
-            console.log(`👤 Resolved list filter assignee ${assignee} -> ${resolved}`);
+            this.logger.log(`👤 Resolved list filter assignee ${assignee} -> ${resolved}`);
             assigneeUuid = resolved;
           } else {
-            console.warn(`⚠️ Could not resolve list filter assignee: ${assignee}`);
+            this.logger.warn(`⚠️ Could not resolve list filter assignee: ${assignee}`);
           }
         }
 
@@ -419,22 +426,22 @@ export class TasksController {
       `;
       params.push(limit, offset);
 
-      console.log(`🚀 Executing LIST SQL:`, sql.replace(/\s+/g, ' ').trim());
-      console.log(`params:`, params);
+      this.logger.log(`🚀 Executing LIST SQL:`, sql.replace(/\s+/g, ' ').trim());
+      this.logger.log(`params:`, params);
 
       const { rows } = await this.pool.query(sql, params);
-      console.log(`✅ Found ${rows.length} tasks`);
+      this.logger.log(`✅ Found ${rows.length} tasks`);
 
       // Try to cache the result (but don't fail if Redis is unavailable)
       try {
         await this.redisCache.set(cacheKey, rows, 10 * 60);
       } catch (cacheError) {
-        console.warn('Redis cache set error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache set error (non-fatal):', cacheError);
       }
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Error listing tasks:', error);
+      this.logger.error('Error listing tasks:', error);
 
       // Check if error is about missing table/columns
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -467,7 +474,7 @@ export class TasksController {
         message: 'Tasks table initialized successfully'
       };
     } catch (error) {
-      console.error('Failed to initialize tasks table:', error);
+      this.logger.error('Failed to initialize tasks table:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to initialize tasks table',
@@ -499,7 +506,7 @@ export class TasksController {
       try {
         cached = await this.redisCache.get(cacheKey);
       } catch (cacheError) {
-        console.warn('Redis cache error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache error (non-fatal):', cacheError);
       }
 
       if (cached) {
@@ -529,12 +536,12 @@ export class TasksController {
       try {
         await this.redisCache.set(cacheKey, rows[0], 15 * 60);
       } catch (cacheError) {
-        console.warn('Redis cache set error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache set error (non-fatal):', cacheError);
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error getting task:', error);
+      this.logger.error('Error getting task:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get task',
@@ -576,10 +583,10 @@ export class TasksController {
           created_at DESC
       `, [parentId]);
 
-      console.log(`📋 Found ${rows.length} subtasks for task ${parentId}`);
+      this.logger.log(`📋 Found ${rows.length} subtasks for task ${parentId}`);
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Error getting subtasks:', error);
+      this.logger.error('Error getting subtasks:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get subtasks',
@@ -640,10 +647,10 @@ export class TasksController {
         ORDER BY tt.path
       `, [rootId]);
 
-      console.log(`🌳 Found ${rows.length} tasks in tree for root ${rootId}`);
+      this.logger.log(`🌳 Found ${rows.length} tasks in tree for root ${rootId}`);
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Error getting task tree:', error);
+      this.logger.error('Error getting task tree:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to get task tree',
@@ -690,23 +697,23 @@ export class TasksController {
         return { success: false, error: 'Invalid priority value' };
       }
 
-      console.log(`📝 POST /api/tasks payload:`, JSON.stringify(body));
+      this.logger.log(`📝 POST /api/tasks payload:`, JSON.stringify(body));
 
       // Resolve created_by to UUID - REQUIRED field
       let createdByUuid: string | null = null;
       if (created_by) {
         const resolutionStart = Date.now();
         createdByUuid = await this.resolveUserIdToUUID(created_by);
-        console.log(`👤 Resolved created_by ${created_by} to ${createdByUuid} in ${Date.now() - resolutionStart}ms`);
+        this.logger.log(`👤 Resolved created_by ${created_by} to ${createdByUuid} in ${Date.now() - resolutionStart}ms`);
         if (!createdByUuid) {
           return { success: false, error: 'Could not resolve created_by user - invalid user ID' };
         }
       } else {
-        console.log(`❌ No created_by provided in payload - this is required`);
+        this.logger.log(`❌ No created_by provided in payload - this is required`);
         return { success: false, error: 'created_by is required - every task must have a creator' };
       }
 
-      console.log(`👤 Final createdByUuid:`, createdByUuid);
+      this.logger.log(`👤 Final createdByUuid:`, createdByUuid);
 
 
       // Validate and parse due_date if provided
@@ -728,7 +735,7 @@ export class TasksController {
 
       // If assigneesEmails is provided (array of emails), convert to UUIDs
       if (Array.isArray(assigneesEmails) && assigneesEmails.length > 0) {
-        console.log('📧 Processing assigneesEmails (POST):', assigneesEmails);
+        this.logger.log('📧 Processing assigneesEmails (POST):', assigneesEmails);
         const emailList = assigneesEmails.filter((e) => typeof e === 'string' && e.trim());
         if (emailList.length > 0) {
           const emailQuery = `
@@ -737,18 +744,18 @@ export class TasksController {
           `;
           const { rows: userRows } = await this.pool.query(emailQuery, [emailList]);
           assigneeUUIDs = userRows.map((row) => row.id);
-          console.log('📧 Resolved emails to UUIDs:', assigneeUUIDs);
+          this.logger.log('📧 Resolved emails to UUIDs:', assigneeUUIDs);
         }
       }
       // Otherwise, use assignees if provided (should be UUIDs)
       else if (Array.isArray(assignees) && assignees.length > 0) {
-        console.log('👥 Processing assignees (POST):', assignees);
+        this.logger.log('👥 Processing assignees (POST):', assignees);
         assigneeUUIDs = assignees;
       }
 
       // DEFAULT ASSIGNEES: If no assignees provided, assign to creator + super admin
       if (assigneeUUIDs.length === 0) {
-        console.log('📋 No assignees provided - setting default (creator + super admin)');
+        this.logger.log('📋 No assignees provided - setting default (creator + super admin)');
 
         // Add creator as assignee
         if (createdByUuid) {
@@ -761,7 +768,7 @@ export class TasksController {
           assigneeUUIDs.push(superAdminId);
         }
 
-        console.log('📋 Default assignees set:', assigneeUUIDs);
+        this.logger.log('📋 Default assignees set:', assigneeUUIDs);
       }
 
       // HIERARCHY PERMISSION CHECK: Verify creator can assign to all assignees
@@ -769,7 +776,7 @@ export class TasksController {
         if (assigneeId !== createdByUuid) {
           const canAssign = await this.canAssignToUser(createdByUuid!, assigneeId);
           if (!canAssign) {
-            console.log(`❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`);
+            this.logger.log(`❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`);
             return {
               success: false,
               error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
@@ -777,7 +784,7 @@ export class TasksController {
           }
         }
       }
-      console.log('✅ Hierarchy permission check passed for all assignees');
+      this.logger.log('✅ Hierarchy permission check passed for all assignees');
 
 
       // Validate estimated_hours if provided
@@ -810,23 +817,23 @@ export class TasksController {
         parsedEstimatedHours,
       ];
 
-      console.log(`🚀 Executing INSERT SQL with params:`, JSON.stringify(params));
+      this.logger.log(`🚀 Executing INSERT SQL with params:`, JSON.stringify(params));
 
       const { rows } = await this.pool.query(sql, params);
       const newTask = rows[0];
-      console.log('✅ Task inserted successfully:', newTask.id);
+      this.logger.log('✅ Task inserted successfully:', newTask.id);
 
       // NOTIFICATION: Notify assignees
       if (assigneeUUIDs.length > 0) {
         const timestamp = new Date().toISOString();
-        console.log(`🔔 Preparing to notify ${assigneeUUIDs.length} assignees...`);
+        this.logger.log(`🔔 Preparing to notify ${assigneeUUIDs.length} assignees...`);
 
         for (const assigneeId of assigneeUUIDs) {
           try {
             // Check if notifications table exists first (quick safeguard)
             // Actually, just try to create and catch error
 
-            console.log(`🔔 Sending new task notification to ${assigneeId}`); // Log BEFORE attempt
+            this.logger.log(`🔔 Sending new task notification to ${assigneeId}`); // Log BEFORE attempt
 
             await this.itemsService.create(
               'notifications',
@@ -842,9 +849,9 @@ export class TasksController {
                 data: { taskId: newTask.id }
               }
             );
-            console.log(`✅ Notification sent to ${assigneeId}`);
+            this.logger.log(`✅ Notification sent to ${assigneeId}`);
           } catch (itemError) {
-            console.error(`❌ Failed to create notification for ${assigneeId}. It is likely the 'notifications' table does not exist.`, itemError);
+            this.logger.error(`❌ Failed to create notification for ${assigneeId}. It is likely the 'notifications' table does not exist.`, itemError);
             // Verify table existence - if it fails here, we should probably auto-create it or warn loudly
           }
         }
@@ -876,21 +883,21 @@ export class TasksController {
               ]);
               postResults.created++;
               postCreatedFor.add(createdByUuid);
-              console.log(`✅ Post created for creator ${createdByUuid}`);
+              this.logger.log(`✅ Post created for creator ${createdByUuid}`);
             } catch (postError) {
               postResults.failed++;
               const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
               postResults.errors.push(`Failed for creator ${createdByUuid}: ${errorMsg}`);
-              console.error(`❌ Failed to create post for creator ${createdByUuid}:`, postError);
+              this.logger.error(`❌ Failed to create post for creator ${createdByUuid}:`, postError);
             }
           }
 
           // 2. Create posts for ASSIGNEES (skip if already got post as creator)
-          console.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
+          this.logger.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
           for (const assigneeId of assigneeUUIDs) {
             // Skip if this assignee already got a post (e.g., they are also the creator)
             if (postCreatedFor.has(assigneeId)) {
-              console.log(`⏭️ Skipping post for ${assigneeId} - already created as creator`);
+              this.logger.log(`⏭️ Skipping post for ${assigneeId} - already created as creator`);
               continue;
             }
 
@@ -908,28 +915,28 @@ export class TasksController {
               ]);
               postResults.created++;
               postCreatedFor.add(assigneeId);
-              console.log(`✅ Post created for assignee ${assigneeId}`);
+              this.logger.log(`✅ Post created for assignee ${assigneeId}`);
             } catch (postError) {
               postResults.failed++;
               const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
               postResults.errors.push(`Failed for ${assigneeId}: ${errorMsg}`);
-              console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+              this.logger.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
             }
           }
 
-          console.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
+          this.logger.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
 
           // Clear posts cache after creating posts
           if (postResults.created > 0) {
             try {
               await this.clearPostsCaches();
-              console.log('✅ Posts caches cleared after post creation');
+              this.logger.log('✅ Posts caches cleared after post creation');
             } catch (cacheErr) {
-              console.warn('Error clearing posts caches after creation (non-fatal):', cacheErr);
+              this.logger.warn('Error clearing posts caches after creation (non-fatal):', cacheErr);
             }
           }
         } catch (tableError) {
-          console.error('❌ Failed to ensure posts table:', tableError);
+          this.logger.error('❌ Failed to ensure posts table:', tableError);
           postResults.errors.push('Posts table initialization failed');
         }
       }
@@ -937,14 +944,14 @@ export class TasksController {
       // Clear task list caches (blocking to prevent race condition)
       try {
         await this.clearTaskCaches();
-        console.log('✅ Task caches cleared after creation');
+        this.logger.log('✅ Task caches cleared after creation');
       } catch (cacheErr) {
-        console.warn('Error clearing caches after task creation (non-fatal):', cacheErr);
+        this.logger.warn('Error clearing caches after task creation (non-fatal):', cacheErr);
       }
 
       return { success: true, data: newTask };
     } catch (error) {
-      console.error('Error creating task:', error);
+      this.logger.error('Error creating task:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to create task'
@@ -1019,12 +1026,12 @@ export class TasksController {
         await this.redisCache.delete(`task_${taskId}`);
         await this.clearTaskCaches();
       } catch (cacheError) {
-        console.warn('Redis cache delete error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache delete error (non-fatal):', cacheError);
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error logging task hours:', error);
+      this.logger.error('Error logging task hours:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to log task hours',
@@ -1105,7 +1112,7 @@ export class TasksController {
         }
       }
 
-      console.log(`📝 PATCH /api/tasks/${id} payload:`, JSON.stringify(body));
+      this.logger.log(`📝 PATCH /api/tasks/${id} payload:`, JSON.stringify(body));
 
       // Build partial update dynamically
       const allowed = [
@@ -1129,7 +1136,7 @@ export class TasksController {
       let assigneeUUIDs: string[] = [];
 
       if ('assigneesEmails' in body && Array.isArray(body.assigneesEmails)) {
-        console.log('📧 Processing assigneesEmails update');
+        this.logger.log('📧 Processing assigneesEmails update');
         const emailList = body.assigneesEmails.filter((e: any) => typeof e === 'string' && e.trim());
         if (emailList.length > 0) {
           const emailQuery = `
@@ -1142,7 +1149,7 @@ export class TasksController {
         shouldUpdateAssignees = true;
       } else if ('assignees' in body) {
         // Handle assignees update explicitly if key exists
-        console.log('👥 Processing assignees update:', body.assignees);
+        this.logger.log('👥 Processing assignees update:', body.assignees);
         if (Array.isArray(body.assignees)) {
           assigneeUUIDs = body.assignees;
           shouldUpdateAssignees = true;
@@ -1200,7 +1207,7 @@ export class TasksController {
       }
 
       if (shouldUpdateAssignees) {
-        console.log('👥 Updating assignees to set:', assigneeUUIDs);
+        this.logger.log('👥 Updating assignees to set:', assigneeUUIDs);
 
         // HIERARCHY PERMISSION CHECK: Get the task's created_by and verify permissions
         const taskCreatorRes = await this.pool.query('SELECT created_by FROM tasks WHERE id = $1', [id]);
@@ -1215,7 +1222,7 @@ export class TasksController {
             if (assigneeId !== taskCreatorId) {
               const canAssign = await this.canAssignToUser(taskCreatorId, assigneeId);
               if (!canAssign) {
-                console.log(`❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`);
+                this.logger.log(`❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`);
                 return {
                   success: false,
                   error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
@@ -1223,7 +1230,7 @@ export class TasksController {
               }
             }
           }
-          console.log('✅ Hierarchy permission check passed for updated assignees');
+          this.logger.log('✅ Hierarchy permission check passed for updated assignees');
         }
 
         params.push(assigneeUUIDs);
@@ -1241,7 +1248,7 @@ export class TasksController {
         RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, estimated_hours, created_at, updated_at
       `;
 
-      console.log('🚀 Executing SQL:', sql, params);
+      this.logger.log('🚀 Executing SQL:', sql, params);
 
       const { rows } = await this.pool.query(sql, params);
       if (!rows.length) {
@@ -1257,7 +1264,7 @@ export class TasksController {
         const safeOldAssignees = (oldAssignees || []).filter(Boolean);
         const addedAssignees = newAssignees.filter((uid: string) => !safeOldAssignees.includes(uid));
 
-        console.log('🔔 Notification check:', {
+        this.logger.log('🔔 Notification check:', {
           safeOld: safeOldAssignees,
           new: newAssignees,
           added: addedAssignees
@@ -1265,11 +1272,11 @@ export class TasksController {
 
         if (addedAssignees.length > 0) {
           const timestamp = new Date().toISOString();
-          console.log(`🔔 Found ${addedAssignees.length} new assignees to notify...`);
+          this.logger.log(`🔔 Found ${addedAssignees.length} new assignees to notify...`);
 
           for (const assigneeId of addedAssignees) {
             try {
-              console.log(`🔔 Sending notification to ${assigneeId}`);
+              this.logger.log(`🔔 Sending notification to ${assigneeId}`);
 
               await this.itemsService.create(
                 'notifications',
@@ -1285,9 +1292,9 @@ export class TasksController {
                   data: { taskId: updatedTask.id }
                 }
               );
-              console.log(`✅ Notification sent to ${assigneeId}`);
+              this.logger.log(`✅ Notification sent to ${assigneeId}`);
             } catch (err) {
-              console.error(`❌ Failed to create notification for ${assigneeId}`, err);
+              this.logger.error(`❌ Failed to create notification for ${assigneeId}`, err);
             }
           }
 
@@ -1298,7 +1305,7 @@ export class TasksController {
             // Ensure posts table exists before creating posts
             await this.ensurePostsTable();
 
-            console.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
+            this.logger.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
             for (const assigneeId of addedAssignees) {
               try {
                 await this.pool.query(`
@@ -1313,25 +1320,25 @@ export class TasksController {
                     : `הוקצתה לך משימה חדשה: ${updatedTask.title}`
                 ]);
                 assignPostResults.created++;
-                console.log(`✅ Post created for newly assigned user ${assigneeId}`);
+                this.logger.log(`✅ Post created for newly assigned user ${assigneeId}`);
               } catch (postError) {
                 assignPostResults.failed++;
-                console.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+                this.logger.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
               }
             }
-            console.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
+            this.logger.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
 
             // Clear posts cache after creating posts
             if (assignPostResults.created > 0) {
               try {
                 await this.clearPostsCaches();
-                console.log('✅ Posts caches cleared after assignment post creation');
+                this.logger.log('✅ Posts caches cleared after assignment post creation');
               } catch (cacheErr) {
-                console.warn('Error clearing posts caches after assignment (non-fatal):', cacheErr);
+                this.logger.warn('Error clearing posts caches after assignment (non-fatal):', cacheErr);
               }
             }
           } catch (tableError) {
-            console.error('❌ Failed to ensure posts table for assignment posts:', tableError);
+            this.logger.error('❌ Failed to ensure posts table for assignment posts:', tableError);
           }
         }
       }
@@ -1340,9 +1347,9 @@ export class TasksController {
       try {
         await this.redisCache.delete(`task_${id}`);
         await this.clearTaskCaches();
-        console.log('✅ Task caches cleared after update');
+        this.logger.log('✅ Task caches cleared after update');
       } catch (cacheErr) {
-        console.warn('Error clearing caches after task update (non-fatal):', cacheErr);
+        this.logger.warn('Error clearing caches after task update (non-fatal):', cacheErr);
       }
 
       if (rows.length > 0 && body.status === 'done') {
@@ -1354,7 +1361,7 @@ export class TasksController {
           // Ensure posts table exists before creating posts
           await this.ensurePostsTable();
 
-          console.log(`📝 Creating completion posts for task ${task.id}...`);
+          this.logger.log(`📝 Creating completion posts for task ${task.id}...`);
 
           // 1. Post for creator
           if (task.created_by) {
@@ -1371,10 +1378,10 @@ export class TasksController {
                   : `המשימה "${task.title}" הושלמה בהצלחה!`
               ]);
               completionPostResults.created++;
-              console.log(`✅ Completion post created for creator ${task.created_by}`);
+              this.logger.log(`✅ Completion post created for creator ${task.created_by}`);
             } catch (creatorPostError) {
               completionPostResults.failed++;
-              console.error(`❌ Failed to create completion post for creator ${task.created_by}:`, creatorPostError);
+              this.logger.error(`❌ Failed to create completion post for creator ${task.created_by}:`, creatorPostError);
             }
           }
 
@@ -1395,33 +1402,33 @@ export class TasksController {
                       : `השלמתי את המשימה "${task.title}" בהצלחה!`
                   ]);
                   completionPostResults.created++;
-                  console.log(`✅ Completion post created for assignee ${assigneeId}`);
+                  this.logger.log(`✅ Completion post created for assignee ${assigneeId}`);
                 } catch (assigneePostError) {
                   completionPostResults.failed++;
-                  console.error(`❌ Failed to create completion post for assignee ${assigneeId}:`, assigneePostError);
+                  this.logger.error(`❌ Failed to create completion post for assignee ${assigneeId}:`, assigneePostError);
                 }
               }
             }
           }
-          console.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
+          this.logger.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
 
           // Clear posts cache after creating posts
           if (completionPostResults.created > 0) {
             try {
               await this.clearPostsCaches();
-              console.log('✅ Posts caches cleared after completion post creation');
+              this.logger.log('✅ Posts caches cleared after completion post creation');
             } catch (cacheErr) {
-              console.warn('Error clearing posts caches after completion (non-fatal):', cacheErr);
+              this.logger.warn('Error clearing posts caches after completion (non-fatal):', cacheErr);
             }
           }
         } catch (tableError) {
-          console.error('❌ Failed to ensure posts table for completion posts:', tableError);
+          this.logger.error('❌ Failed to ensure posts table for completion posts:', tableError);
         }
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error updating task:', error);
+      this.logger.error('Error updating task:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to update task'
@@ -1452,12 +1459,12 @@ export class TasksController {
         await this.redisCache.delete(`task_${id}`);
         await this.clearTaskCaches();
       } catch (cacheError) {
-        console.warn('Redis cache delete error (non-fatal):', cacheError);
+        this.logger.warn('Redis cache delete error (non-fatal):', cacheError);
       }
 
       return { success: true, message: 'Task deleted' };
     } catch (error) {
-      console.error('Error deleting task:', error);
+      this.logger.error('Error deleting task:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to delete task',
@@ -1473,7 +1480,7 @@ export class TasksController {
     try {
       await this.redisCache.invalidatePattern('tasks_list_*');
     } catch (cacheError) {
-      console.warn('Redis cache invalidation error (non-fatal):', cacheError);
+      this.logger.warn('Redis cache invalidation error (non-fatal):', cacheError);
     }
   }
 
@@ -1486,7 +1493,7 @@ export class TasksController {
       await this.redisCache.invalidatePattern('posts_list_*');
       await this.redisCache.invalidatePattern('user_posts_*');
     } catch (cacheError) {
-      console.warn('Redis cache invalidation error for posts (non-fatal):', cacheError);
+      this.logger.warn('Redis cache invalidation error for posts (non-fatal):', cacheError);
     }
   }
 
@@ -1623,7 +1630,7 @@ export class TasksController {
 
       return { success: true, data: report };
     } catch (error) {
-      console.error('Error getting hours report:', error);
+      this.logger.error('Error getting hours report:', error);
       // Return empty report on error instead of failing
       return {
         success: true,

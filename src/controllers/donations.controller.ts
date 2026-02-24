@@ -18,7 +18,7 @@
 // TODO: Add comprehensive unit tests for all donation operations
 // TODO: Implement proper data sanitization and validation
 // TODO: Add comprehensive API documentation with Swagger decorators
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -27,6 +27,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('api/donations')
 export class DonationsController {
+  private readonly logger = new Logger(DonationsController.name);
   // TODO: Move cache TTL to configuration service
   // TODO: Implement different TTL values for different types of data
   // TODO: Add cache invalidation strategies
@@ -163,7 +164,7 @@ export class DonationsController {
       return { success: true, data: donation };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Create donation error:', error);
+      this.logger.error('Create donation error:', error);
       return { success: false, error: 'Failed to create donation' };
     } finally {
       client.release();

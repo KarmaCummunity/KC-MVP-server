@@ -10,7 +10,7 @@ console.log("==================================================");
 const port = process.env.PORT || 3001;
 
 const server = http.createServer((req, res) => {
-    console.log('Request:', req.url);
+    console.log('Request:', req.url ? encodeURIComponent(req.url) : '');
     res.writeHead(200);
     res.end('JS Minimal Server OK');
 });

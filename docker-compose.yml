@@ -11,7 +11,7 @@ services:
       - "5435:5432"
     environment:
       POSTGRES_USER: kc
-      POSTGRES_PASSWORD: kc_password
+      POSTGRES_PASSWORD: local_secret
       POSTGRES_DB: kc_db
     volumes:
       - pgdata:/var/lib/postgresql/data
