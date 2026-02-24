@@ -2,12 +2,18 @@
 // - Purpose: Service for Items Delivery operations with database queries and Redis caching
 // - Used by: ItemsDeliveryController
 // - Provides: CRUD operations for items, search with filters, and item requests management
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { RedisCacheService } from '../redis/redis-cache.service';
-import { CreateItemDto, UpdateItemDto, ItemFiltersDto, CreateItemRequestDto, UpdateItemRequestDto } from './dto/items.dto';
-import { randomBytes } from 'crypto';
+import { Inject, Injectable, Logger } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import { RedisCacheService } from "../redis/redis-cache.service";
+import {
+  CreateItemDto,
+  UpdateItemDto,
+  ItemFiltersDto,
+  CreateItemRequestDto,
+  UpdateItemRequestDto,
+} from "./dto/items.dto";
+import { randomBytes } from "crypto";
 
 @Injectable()
 export class ItemsDeliveryService {
@@ -17,14 +23,14 @@ export class ItemsDeliveryService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) { }
+  ) {}
 
   // ==================== Items CRUD ====================
 
   async createItem(createItemDto: CreateItemDto) {
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Generate ID if not provided or if provided ID is a timestamp
       // This ensures we always have a proper ID format like "item_1234567890_abc123"
@@ -33,110 +39,138 @@ export class ItemsDeliveryService {
       if (!itemId || /^\d{10,13}$/.test(itemId)) {
         // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
         // S2245: Use crypto.randomBytes instead of Math.random for ID generation
-        itemId = `item_${Date.now()}_${randomBytes(6).toString('hex')}`;
-        this.logger.log(`Generated new item ID (was timestamp or missing): ${itemId}`);
+        itemId = `item_${Date.now()}_${randomBytes(6).toString("hex")}`;
+        this.logger.log(
+          `Generated new item ID (was timestamp or missing): ${itemId}`,
+        );
       } else {
         this.logger.log(`Using provided item ID: ${itemId}`);
       }
 
       // Verify ID format before using
       if (!itemId || itemId.length < 10) {
-        throw new Error('Invalid item ID format - ID must be at least 10 characters');
+        throw new Error(
+          "Invalid item ID format - ID must be at least 10 characters",
+        );
       }
 
-      this.logger.log(`Creating item with ID: ${itemId}, Type: ${typeof itemId}`);
+      this.logger.log(
+        `Creating item with ID: ${itemId}, Type: ${typeof itemId}`,
+      );
 
-      const { rows } = await client.query(`
+      const { rows } = await client.query(
+        `
         INSERT INTO items (
           id, owner_id, title, description, category, condition, location,
           price, images, tags, quantity, delivery_method, metadata, expires_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
-      `, [
-        itemId,
-        createItemDto.owner_id,
-        createItemDto.title,
-        createItemDto.description || null,
-        createItemDto.category,
-        createItemDto.condition || null,
-        createItemDto.location ? JSON.stringify(createItemDto.location) : null,
-        createItemDto.price ?? 0,
-        createItemDto.images || [],
-        createItemDto.tags || [],
-        createItemDto.quantity || 1,
-        createItemDto.delivery_method || null,
-        createItemDto.metadata ? JSON.stringify(createItemDto.metadata) : null,
-        createItemDto.expires_at ? new Date(createItemDto.expires_at) : null,
-      ]);
+      `,
+        [
+          itemId,
+          createItemDto.owner_id,
+          createItemDto.title,
+          createItemDto.description || null,
+          createItemDto.category,
+          createItemDto.condition || null,
+          createItemDto.location
+            ? JSON.stringify(createItemDto.location)
+            : null,
+          createItemDto.price ?? 0,
+          createItemDto.images || [],
+          createItemDto.tags || [],
+          createItemDto.quantity || 1,
+          createItemDto.delivery_method || null,
+          createItemDto.metadata
+            ? JSON.stringify(createItemDto.metadata)
+            : null,
+          createItemDto.expires_at ? new Date(createItemDto.expires_at) : null,
+        ],
+      );
 
       const createdItem = rows[0];
       this.logger.log(`Created item - ID: ${createdItem.id}`);
 
       // CRITICAL: Verify the ID is correct before using it
       if (!createdItem.id || createdItem.id.length < 10) {
-        this.logger.error('CRITICAL: Item ID is invalid!', createdItem);
-        throw new Error('Failed to create item - invalid ID returned from database');
+        this.logger.error("CRITICAL: Item ID is invalid!", createdItem);
+        throw new Error(
+          "Failed to create item - invalid ID returned from database",
+        );
       }
 
       // Auto-create a corresponding post for this item
       // This allows likes/comments to work on items in the feed
       try {
         const price = createItemDto.price ?? 0;
-        const postType = price > 0 ? 'item' : 'donation';
+        const postType = price > 0 ? "item" : "donation";
         const postTitle = createItemDto.title;
-        const postDescription = createItemDto.description || '';
+        const postDescription = createItemDto.description || "";
 
         // Ensure item_id is the full item ID, not just timestamp
         const itemIdForPost = createdItem.id;
         this.logger.log(`Creating post with item_id: ${itemIdForPost}`);
 
-        await client.query(`
+        await client.query(
+          `
           INSERT INTO posts (author_id, item_id, title, description, images, post_type, metadata)
           VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [
-          createItemDto.owner_id,
-          itemIdForPost, // Use the full item ID
-          postTitle,
-          postDescription,
-          createItemDto.images || [],
-          postType,
-          JSON.stringify({
-            item_id: itemIdForPost, // Store full ID in metadata too
-            category: createItemDto.category,
-            price: price,
-            condition: createItemDto.condition,
-          })
-        ]);
+        `,
+          [
+            createItemDto.owner_id,
+            itemIdForPost, // Use the full item ID
+            postTitle,
+            postDescription,
+            createItemDto.images || [],
+            postType,
+            JSON.stringify({
+              item_id: itemIdForPost, // Store full ID in metadata too
+              category: createItemDto.category,
+              price: price,
+              condition: createItemDto.condition,
+            }),
+          ],
+        );
 
         // Verify the post was created correctly
-        const { rows: verifyRows } = await client.query(`
+        const { rows: verifyRows } = await client.query(
+          `
           SELECT id, item_id, post_type FROM posts 
           WHERE item_id = $1 AND post_type = $2
           ORDER BY created_at DESC LIMIT 1
-        `, [itemIdForPost, postType]);
+        `,
+          [itemIdForPost, postType],
+        );
 
         if (verifyRows.length > 0) {
-          this.logger.log(`Verified post created with item_id: ${verifyRows[0].item_id}`);
+          this.logger.log(
+            `Verified post created with item_id: ${verifyRows[0].item_id}`,
+          );
         } else {
-          this.logger.error('Failed to verify post creation - post not found!');
+          this.logger.error("Failed to verify post creation - post not found!");
         }
 
         this.logger.log(`Auto-created post for item: ${createdItem.id}`);
       } catch (postError) {
-        this.logger.warn(`Failed to auto-create post for item (continuing): ${postError}`);
+        this.logger.warn(
+          `Failed to auto-create post for item (continuing): ${postError}`,
+        );
         // Don't fail the item creation if post creation fails
       }
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       // Invalidate cache
       await this.invalidateItemCaches();
 
       return { success: true, data: createdItem };
     } catch (error) {
-      await client.query('ROLLBACK');
-      this.logger.error('Create item error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to create item' };
+      await client.query("ROLLBACK");
+      this.logger.error("Create item error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to create item",
+      };
     } finally {
       client.release();
     }
@@ -149,15 +183,18 @@ export class ItemsDeliveryService {
       return { success: true, data: cached };
     }
 
-    const { rows } = await this.pool.query(`
+    const { rows } = await this.pool.query(
+      `
       SELECT i.*, up.name as owner_name, up.avatar_url as owner_avatar, up.city as owner_city
       FROM items i
       LEFT JOIN user_profiles up ON (i.owner_id::text = up.id::text OR i.owner_id::text = up.firebase_uid)
       WHERE i.id = $1
-    `, [id]);
+    `,
+      [id],
+    );
 
     if (rows.length === 0) {
-      return { success: false, error: 'Item not found' };
+      return { success: false, error: "Item not found" };
     }
 
     await this.redisCache.set(cacheKey, rows[0], this.CACHE_TTL);
@@ -243,11 +280,19 @@ export class ItemsDeliveryService {
 
     // Sorting
     // S2077: Whitelist sortBy/sortOrder to prevent SQL injection
-    const sortBy = filters.sort_by || 'created_at';
-    const sortOrder = filters.sort_order || 'desc';
-    const allowedSortColumns = ['created_at', 'price', 'title', 'quantity', 'updated_at'];
-    const safeSortBy = allowedSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const sortBy = filters.sort_by || "created_at";
+    const sortOrder = filters.sort_order || "desc";
+    const allowedSortColumns = [
+      "created_at",
+      "price",
+      "title",
+      "quantity",
+      "updated_at",
+    ];
+    const safeSortBy = allowedSortColumns.includes(sortBy)
+      ? sortBy
+      : "created_at";
+    const safeSortOrder = sortOrder.toUpperCase() === "ASC" ? "ASC" : "DESC";
     query += ` ORDER BY i.${safeSortBy} ${safeSortOrder}`;
 
     // Pagination
@@ -336,33 +381,41 @@ export class ItemsDeliveryService {
       if (updateItemDto.expires_at !== undefined) {
         paramCount++;
         updateFields.push(`expires_at = $${paramCount}`);
-        params.push(updateItemDto.expires_at ? new Date(updateItemDto.expires_at) : null);
+        params.push(
+          updateItemDto.expires_at ? new Date(updateItemDto.expires_at) : null,
+        );
       }
 
       if (updateFields.length === 0) {
-        return { success: false, error: 'No fields to update' };
+        return { success: false, error: "No fields to update" };
       }
 
       paramCount++;
       updateFields.push(`updated_at = NOW()`);
       params.push(id);
 
-      const { rows } = await client.query(`
+      const { rows } = await client.query(
+        `
         UPDATE items
-        SET ${updateFields.join(', ')}
+        SET ${updateFields.join(", ")}
         WHERE id = $${paramCount}
         RETURNING *
-      `, params);
+      `,
+        params,
+      );
 
       if (rows.length === 0) {
-        return { success: false, error: 'Item not found' };
+        return { success: false, error: "Item not found" };
       }
 
       await this.invalidateItemCaches();
       return { success: true, data: rows[0] };
     } catch (error) {
-      this.logger.error('Update item error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to update item' };
+      this.logger.error("Update item error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to update item",
+      };
     } finally {
       client.release();
     }
@@ -371,19 +424,25 @@ export class ItemsDeliveryService {
   async deleteItem(id: string) {
     const client = await this.pool.connect();
     try {
-      const { rowCount } = await client.query(`
+      const { rowCount } = await client.query(
+        `
         DELETE FROM items WHERE id = $1
-      `, [id]);
+      `,
+        [id],
+      );
 
       if (rowCount === 0) {
-        return { success: false, error: 'Item not found' };
+        return { success: false, error: "Item not found" };
       }
 
       await this.invalidateItemCaches();
-      return { success: true, message: 'Item deleted successfully' };
+      return { success: true, message: "Item deleted successfully" };
     } catch (error) {
-      this.logger.error('Delete item error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete item' };
+      this.logger.error("Delete item error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to delete item",
+      };
     } finally {
       client.release();
     }
@@ -395,58 +454,82 @@ export class ItemsDeliveryService {
     const client = await this.pool.connect();
     try {
       // Check if item exists and is available
-      const itemCheck = await client.query(`
+      const itemCheck = await client.query(
+        `
         SELECT id, status, owner_id FROM items WHERE id = $1
-      `, [createRequestDto.item_id]);
+      `,
+        [createRequestDto.item_id],
+      );
 
       if (itemCheck.rows.length === 0) {
-        return { success: false, error: 'Item not found' };
+        return { success: false, error: "Item not found" };
       }
 
-      if (itemCheck.rows[0].status !== 'available') {
-        return { success: false, error: 'Item is not available' };
+      if (itemCheck.rows[0].status !== "available") {
+        return { success: false, error: "Item is not available" };
       }
 
       // Check if requester is not the owner
       if (itemCheck.rows[0].owner_id === createRequestDto.requester_id) {
-        return { success: false, error: 'Cannot request your own item' };
+        return { success: false, error: "Cannot request your own item" };
       }
 
       // Check for existing pending request
-      const existingRequest = await client.query(`
+      const existingRequest = await client.query(
+        `
         SELECT id FROM item_requests
         WHERE item_id = $1 AND requester_id = $2 AND status = 'pending'
-      `, [createRequestDto.item_id, createRequestDto.requester_id]);
+      `,
+        [createRequestDto.item_id, createRequestDto.requester_id],
+      );
 
       if (existingRequest.rows.length > 0) {
-        return { success: false, error: 'You already have a pending request for this item' };
+        return {
+          success: false,
+          error: "You already have a pending request for this item",
+        };
       }
 
-      const { rows } = await client.query(`
+      const { rows } = await client.query(
+        `
         INSERT INTO item_requests (
           item_id, requester_id, message, proposed_time,
           delivery_method, meeting_location
         ) VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
-      `, [
-        createRequestDto.item_id,
-        createRequestDto.requester_id,
-        createRequestDto.message || null,
-        createRequestDto.proposed_time ? new Date(createRequestDto.proposed_time) : null,
-        createRequestDto.delivery_method || null,
-        createRequestDto.meeting_location ? JSON.stringify(createRequestDto.meeting_location) : null,
-      ]);
+      `,
+        [
+          createRequestDto.item_id,
+          createRequestDto.requester_id,
+          createRequestDto.message || null,
+          createRequestDto.proposed_time
+            ? new Date(createRequestDto.proposed_time)
+            : null,
+          createRequestDto.delivery_method || null,
+          createRequestDto.meeting_location
+            ? JSON.stringify(createRequestDto.meeting_location)
+            : null,
+        ],
+      );
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      this.logger.error('Create item request error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to create request' };
+      this.logger.error("Create item request error:", error);
+      return {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Failed to create request",
+      };
     } finally {
       client.release();
     }
   }
 
-  async getItemRequests(itemId?: string, userId?: string, role: 'owner' | 'requester' = 'requester') {
+  async getItemRequests(
+    itemId?: string,
+    userId?: string,
+    role: "owner" | "requester" = "requester",
+  ) {
     let query = `
       SELECT ir.*, 
              i.title as item_title, i.owner_id,
@@ -468,7 +551,7 @@ export class ItemsDeliveryService {
     }
 
     if (userId) {
-      if (role === 'owner') {
+      if (role === "owner") {
         paramCount++;
         query += ` AND i.owner_id = $${paramCount}`;
         params.push(userId);
@@ -485,22 +568,29 @@ export class ItemsDeliveryService {
     return { success: true, data: rows };
   }
 
-  async updateItemRequest(requestId: string, updateRequestDto: UpdateItemRequestDto, userId: string) {
+  async updateItemRequest(
+    requestId: string,
+    updateRequestDto: UpdateItemRequestDto,
+    userId: string,
+  ) {
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Get the request with item info
-      const requestCheck = await client.query(`
+      const requestCheck = await client.query(
+        `
         SELECT ir.*, i.owner_id, i.status as item_status
         FROM item_requests ir
         JOIN items i ON ir.item_id = i.id
         WHERE ir.id = $1
-      `, [requestId]);
+      `,
+        [requestId],
+      );
 
       if (requestCheck.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return { success: false, error: 'Request not found' };
+        await client.query("ROLLBACK");
+        return { success: false, error: "Request not found" };
       }
 
       const request = requestCheck.rows[0];
@@ -510,8 +600,8 @@ export class ItemsDeliveryService {
       const isRequester = request.requester_id === userId;
 
       if (!isOwner && !isRequester) {
-        await client.query('ROLLBACK');
-        return { success: false, error: 'Unauthorized' };
+        await client.query("ROLLBACK");
+        return { success: false, error: "Unauthorized" };
       }
 
       // Build update query
@@ -521,15 +611,24 @@ export class ItemsDeliveryService {
 
       if (updateRequestDto.status !== undefined) {
         // Only owner can approve/reject, requester can cancel
-        if (updateRequestDto.status === 'approved' || updateRequestDto.status === 'rejected') {
+        if (
+          updateRequestDto.status === "approved" ||
+          updateRequestDto.status === "rejected"
+        ) {
           if (!isOwner) {
-            await client.query('ROLLBACK');
-            return { success: false, error: 'Only owner can approve/reject requests' };
+            await client.query("ROLLBACK");
+            return {
+              success: false,
+              error: "Only owner can approve/reject requests",
+            };
           }
-        } else if (updateRequestDto.status === 'cancelled') {
+        } else if (updateRequestDto.status === "cancelled") {
           if (!isRequester) {
-            await client.query('ROLLBACK');
-            return { success: false, error: 'Only requester can cancel their request' };
+            await client.query("ROLLBACK");
+            return {
+              success: false,
+              error: "Only requester can cancel their request",
+            };
           }
         }
 
@@ -538,24 +637,36 @@ export class ItemsDeliveryService {
         params.push(updateRequestDto.status);
 
         // If approved, mark item as reserved
-        if (updateRequestDto.status === 'approved') {
-          await client.query(`
+        if (updateRequestDto.status === "approved") {
+          await client.query(
+            `
             UPDATE items SET status = 'reserved' WHERE id = $1
-          `, [request.item_id]);
+          `,
+            [request.item_id],
+          );
         }
 
         // If completed, mark item as delivered
-        if (updateRequestDto.status === 'completed') {
-          await client.query(`
+        if (updateRequestDto.status === "completed") {
+          await client.query(
+            `
             UPDATE items SET status = 'delivered' WHERE id = $1
-          `, [request.item_id]);
+          `,
+            [request.item_id],
+          );
         }
 
         // If rejected or cancelled, mark item as available again
-        if (updateRequestDto.status === 'rejected' || updateRequestDto.status === 'cancelled') {
-          await client.query(`
+        if (
+          updateRequestDto.status === "rejected" ||
+          updateRequestDto.status === "cancelled"
+        ) {
+          await client.query(
+            `
             UPDATE items SET status = 'available' WHERE id = $1
-          `, [request.item_id]);
+          `,
+            [request.item_id],
+          );
         }
       }
 
@@ -568,13 +679,17 @@ export class ItemsDeliveryService {
       if (updateRequestDto.proposed_time !== undefined) {
         paramCount++;
         updateFields.push(`proposed_time = $${paramCount}`);
-        params.push(updateRequestDto.proposed_time ? new Date(updateRequestDto.proposed_time) : null);
+        params.push(
+          updateRequestDto.proposed_time
+            ? new Date(updateRequestDto.proposed_time)
+            : null,
+        );
       }
 
       if (updateRequestDto.owner_response !== undefined) {
         if (!isOwner) {
-          await client.query('ROLLBACK');
-          return { success: false, error: 'Only owner can set response' };
+          await client.query("ROLLBACK");
+          return { success: false, error: "Only owner can set response" };
         }
         paramCount++;
         updateFields.push(`owner_response = $${paramCount}`);
@@ -582,28 +697,35 @@ export class ItemsDeliveryService {
       }
 
       if (updateFields.length === 0) {
-        await client.query('ROLLBACK');
-        return { success: false, error: 'No fields to update' };
+        await client.query("ROLLBACK");
+        return { success: false, error: "No fields to update" };
       }
 
       paramCount++;
       updateFields.push(`updated_at = NOW()`);
       params.push(requestId);
 
-      const { rows } = await client.query(`
+      const { rows } = await client.query(
+        `
         UPDATE item_requests
-        SET ${updateFields.join(', ')}
+        SET ${updateFields.join(", ")}
         WHERE id = $${paramCount}
         RETURNING *
-      `, params);
+      `,
+        params,
+      );
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
       await this.invalidateItemCaches();
       return { success: true, data: rows[0] };
     } catch (error) {
-      await client.query('ROLLBACK');
-      this.logger.error('Update item request error:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to update request' };
+      await client.query("ROLLBACK");
+      this.logger.error("Update item request error:", error);
+      return {
+        success: false,
+        error:
+          error instanceof Error ? error.message : "Failed to update request",
+      };
     } finally {
       client.release();
     }
@@ -612,7 +734,7 @@ export class ItemsDeliveryService {
   // ==================== Cache Management ====================
 
   private async invalidateItemCaches() {
-    const patterns = ['items_list:*', 'item:*'];
+    const patterns = ["items_list:*", "item:*"];
     for (const pattern of patterns) {
       const keys = await this.redisCache.getKeys(pattern);
       for (const key of keys) {
@@ -621,7 +743,3 @@ export class ItemsDeliveryService {
     }
   }
 }
-
-
-
-

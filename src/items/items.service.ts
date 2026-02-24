@@ -4,10 +4,10 @@
 // - Provides: create/read/update/delete/list with safe collection mapping; activity counters and cache stats via Redis.
 // - Storage: Postgres tables named after collections with (user_id, item_id, data JSONB) + indexes.
 // - Cache keys: item:{collection}:{userId}:{itemId}, list:{collection}:{userId}, activity:{userId}, daily_activity:{userId}:{YYYY-MM-DD}, popular_collections:*.
-import { Inject, Injectable } from '@nestjs/common';
-import { PG_POOL } from '../database/database.module';
-import { Pool } from 'pg';
-import { RedisCacheService } from '../redis/redis-cache.service';
+import { Inject, Injectable } from "@nestjs/common";
+import { PG_POOL } from "../database/database.module";
+import { Pool } from "pg";
+import { RedisCacheService } from "../redis/redis-cache.service";
 
 @Injectable()
 export class ItemsService {
@@ -16,47 +16,47 @@ export class ItemsService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly redisCache: RedisCacheService,
-  ) { }
+  ) {}
 
   private tableFor(collection: string): string {
     // map collection names to table names; default: use as-is
     const allowed = new Set([
-      'users',
-      'posts',
-      'followers',
-      'following',
-      'chats',
-      'messages',
-      'notifications',
-      'bookmarks',
-      'donations',
-      'items',
-      'tasks',
-      'settings',
-      'media',
-      'blocked_users',
-      'message_reactions',
-      'typing_status',
-      'read_receipts',
-      'voice_messages',
-      'conversation_metadata',
-      'rides',
+      "users",
+      "posts",
+      "followers",
+      "following",
+      "chats",
+      "messages",
+      "notifications",
+      "bookmarks",
+      "donations",
+      "items",
+      "tasks",
+      "settings",
+      "media",
+      "blocked_users",
+      "message_reactions",
+      "typing_status",
+      "read_receipts",
+      "voice_messages",
+      "conversation_metadata",
+      "rides",
       // Organizations / NGO onboarding
-      'organizations',
-      'org_applications',
+      "organizations",
+      "org_applications",
       // Links (for groups and organizations)
-      'links',
+      "links",
       // App analytics (e.g., category open counters)
-      'analytics',
+      "analytics",
       // Stats
-      'stats',
-      'community_stats',
+      "stats",
+      "community_stats",
       // Challenges
-      'challenges',
-      'deleted_challenges',
-      'challenge_reset_logs',
-      'challenge_record_breaks',
-      'challenge_global_stats',
+      "challenges",
+      "deleted_challenges",
+      "challenge_reset_logs",
+      "challenge_record_breaks",
+      "challenge_global_stats",
     ]);
     if (!allowed.has(collection)) {
       throw new Error(`Unknown collection: ${collection}`);
@@ -64,15 +64,20 @@ export class ItemsService {
     return collection;
   }
 
-  async create(collection: string, userId: string, itemId: string, data: Record<string, unknown>) {
+  async create(
+    collection: string,
+    userId: string,
+    itemId: string,
+    data: Record<string, unknown>,
+  ) {
     const table = this.tableFor(collection);
     const client = await this.pool.connect();
     try {
       // Add activity tracking (safely)
       try {
-        await this.trackUserActivity(userId, 'create', collection, itemId);
+        await this.trackUserActivity(userId, "create", collection, itemId);
       } catch (err) {
-        console.warn('⚠️ Failed to track user activity (non-fatal):', err);
+        console.warn("⚠️ Failed to track user activity (non-fatal):", err);
       }
 
       await client.query(
@@ -88,21 +93,24 @@ export class ItemsService {
         const cacheKey = `item:${collection}:${userId}:${itemId}`;
         await this.redisCache.set(cacheKey, data, this.CACHE_TTL);
       } catch (err) {
-        console.warn('⚠️ Failed to cache created item (non-fatal):', err);
+        console.warn("⚠️ Failed to cache created item (non-fatal):", err);
       }
 
       // Invalidate list cache for this user and collection (safely)
       try {
         await this.invalidateListCache(collection, userId);
       } catch (err) {
-        console.warn('⚠️ Failed to invalidate list cache (non-fatal):', err);
+        console.warn("⚠️ Failed to invalidate list cache (non-fatal):", err);
       }
 
       // Track popular collections (safely)
       try {
         await this.incrementCollectionCounter(collection);
       } catch (err) {
-        console.warn('⚠️ Failed to increment collection counter (non-fatal):', err);
+        console.warn(
+          "⚠️ Failed to increment collection counter (non-fatal):",
+          err,
+        );
       }
 
       return { ok: true };
@@ -118,7 +126,7 @@ export class ItemsService {
 
     if (cached) {
       // Track cache hit
-      await this.trackUserActivity(userId, 'read_cached', collection, itemId);
+      await this.trackUserActivity(userId, "read_cached", collection, itemId);
       return cached;
     }
 
@@ -135,13 +143,18 @@ export class ItemsService {
       // Cache the result
       await this.redisCache.set(cacheKey, data, this.CACHE_TTL);
       // Track cache miss
-      await this.trackUserActivity(userId, 'read_db', collection, itemId);
+      await this.trackUserActivity(userId, "read_db", collection, itemId);
     }
 
     return data;
   }
 
-  async update(collection: string, userId: string, itemId: string, data: Record<string, unknown>) {
+  async update(
+    collection: string,
+    userId: string,
+    itemId: string,
+    data: Record<string, unknown>,
+  ) {
     const table = this.tableFor(collection);
     const { rowCount } = await this.pool.query(
       `UPDATE ${table} SET data = jsonb_strip_nulls(data || $1::jsonb), updated_at = NOW()
@@ -153,7 +166,9 @@ export class ItemsService {
 
   async delete(collection: string, userId: string, itemId: string) {
     const table = this.tableFor(collection);
-    console.log(`🗑️  DELETE Request - table: ${table}, userId: ${userId}, itemId: ${itemId}`);
+    console.log(
+      `🗑️  DELETE Request - table: ${table}, userId: ${userId}, itemId: ${itemId}`,
+    );
 
     // First check if item exists
     const checkResult = await this.pool.query(
@@ -199,7 +214,9 @@ export class ItemsService {
   // List all items from all users (for public collections like links)
   async listAll(collection: string, q?: string) {
     const table = this.tableFor(collection);
-    console.log(`🔍 ItemsService - listAll for ${collection}, table: ${table}, q: ${q || 'none'}`);
+    console.log(
+      `🔍 ItemsService - listAll for ${collection}, table: ${table}, q: ${q || "none"}`,
+    );
 
     if (q) {
       const { rows } = await this.pool.query(
@@ -208,7 +225,9 @@ export class ItemsService {
          ORDER BY COALESCE((data->>'createdAt')::timestamptz, (data->>'timestamp')::timestamptz, NOW()) DESC`,
         [`%${q}%`],
       );
-      console.log(`📊 ItemsService - listAll with query found ${rows.length} items`);
+      console.log(
+        `📊 ItemsService - listAll with query found ${rows.length} items`,
+      );
       return rows.map((r) => r.data);
     }
     const { rows } = await this.pool.query(
@@ -217,12 +236,21 @@ export class ItemsService {
     );
     console.log(`📊 ItemsService - listAll found ${rows.length} items`);
     if (rows.length > 0) {
-      console.log(`📊 ItemsService - First item sample:`, JSON.stringify(rows[0].data, null, 2));
+      console.log(
+        `📊 ItemsService - First item sample:`,
+        JSON.stringify(rows[0].data, null, 2),
+      );
     } else {
-      console.log(`⚠️ ItemsService - listAll: No rows found for table ${table}`);
+      console.log(
+        `⚠️ ItemsService - listAll: No rows found for table ${table}`,
+      );
       // Debug: Check if table exists and has data
-      const countResult = await this.pool.query(`SELECT COUNT(*) as count FROM ${table}`);
-      console.log(`📊 ItemsService - Table ${table} has ${countResult.rows[0]?.count || 0} total rows`);
+      const countResult = await this.pool.query(
+        `SELECT COUNT(*) as count FROM ${table}`,
+      );
+      console.log(
+        `📊 ItemsService - Table ${table} has ${countResult.rows[0]?.count || 0} total rows`,
+      );
     }
     const result = rows.map((r) => r.data);
     console.log(`📤 ItemsService - listAll returning ${result.length} items`);
@@ -231,7 +259,12 @@ export class ItemsService {
 
   // Redis Helper Functions
 
-  private async trackUserActivity(userId: string, action: string, collection: string, itemId: string) {
+  private async trackUserActivity(
+    userId: string,
+    action: string,
+    collection: string,
+    itemId: string,
+  ) {
     const activityKey = `activity:${userId}`;
     const activity = {
       action,
@@ -241,7 +274,8 @@ export class ItemsService {
     };
 
     // Get recent activities (max 50)
-    const recentActivities = await this.redisCache.get<any[]>(activityKey) || [];
+    const recentActivities =
+      (await this.redisCache.get<any[]>(activityKey)) || [];
     recentActivities.unshift(activity);
 
     // Keep only last 50 activities
@@ -253,7 +287,7 @@ export class ItemsService {
     await this.redisCache.set(activityKey, recentActivities, 60 * 60);
 
     // Also increment daily activity counter
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
     const dailyKey = `daily_activity:${userId}:${today}`;
     await this.redisCache.increment(dailyKey);
   }
@@ -272,11 +306,11 @@ export class ItemsService {
 
   async getUserActivity(userId: string) {
     const activityKey = `activity:${userId}`;
-    const activities = await this.redisCache.get<any[]>(activityKey) || [];
+    const activities = (await this.redisCache.get<any[]>(activityKey)) || [];
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
     const dailyKey = `daily_activity:${userId}:${today}`;
-    const dailyCount = await this.redisCache.get<number>(dailyKey) || 0;
+    const dailyCount = (await this.redisCache.get<number>(dailyKey)) || 0;
 
     return {
       recentActivities: activities.slice(0, 10), // Last 10 activities
@@ -287,12 +321,12 @@ export class ItemsService {
   }
 
   async getPopularCollections() {
-    const keys = await this.redisCache.getKeys('popular_collections:*');
+    const keys = await this.redisCache.getKeys("popular_collections:*");
     const collections = [];
 
     for (const key of keys) {
-      const collection = key.replace('popular_collections:', '');
-      const count = await this.redisCache.get<number>(key) || 0;
+      const collection = key.replace("popular_collections:", "");
+      const count = (await this.redisCache.get<number>(key)) || 0;
       collections.push({ collection, count });
     }
 
@@ -300,17 +334,16 @@ export class ItemsService {
   }
 
   async getCacheStats() {
-    const itemKeys = await this.redisCache.getKeys('item:*');
-    const listKeys = await this.redisCache.getKeys('list:*');
-    const activityKeys = await this.redisCache.getKeys('activity:*');
+    const itemKeys = await this.redisCache.getKeys("item:*");
+    const listKeys = await this.redisCache.getKeys("list:*");
+    const activityKeys = await this.redisCache.getKeys("activity:*");
 
     return {
       cachedItems: itemKeys.length,
       cachedLists: listKeys.length,
       userActivities: activityKeys.length,
-      totalCacheEntries: itemKeys.length + listKeys.length + activityKeys.length,
+      totalCacheEntries:
+        itemKeys.length + listKeys.length + activityKeys.length,
     };
   }
 }
-
-

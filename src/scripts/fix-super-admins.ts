@@ -1,11 +1,11 @@
-import { Pool } from 'pg';
-import * as dotenv from 'dotenv';
+import { Pool } from "pg";
+import * as dotenv from "dotenv";
+import * as fs from "fs";
+import * as path from "path";
 
 // Load environment
-const envFiles = ['.env.production', '.env.development', '.env'];
+const envFiles = [".env.production", ".env.development", ".env"];
 for (const file of envFiles) {
-  const fs = require('fs');
-  const path = require('path');
   const envPath = path.resolve(process.cwd(), file);
   if (fs.existsSync(envPath)) {
     dotenv.config({ path: envPath });
@@ -16,15 +16,15 @@ for (const file of envFiles) {
 async function fixSuperAdmins() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    throw new Error('DATABASE_URL environment variable is required');
+    throw new Error("DATABASE_URL environment variable is required");
   }
   const pool = new Pool({ connectionString });
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
-    console.log('🔧 Fixing super admins hierarchy levels...\n');
+    console.log("🔧 Fixing super admins hierarchy levels...\n");
 
     // Get root admin ID
     const rootAdmin = await client.query(`
@@ -32,35 +32,39 @@ async function fixSuperAdmins() {
     `);
 
     if (rootAdmin.rows.length === 0) {
-      console.log('❌ Root admin not found');
-      await client.query('ROLLBACK');
+      console.log("❌ Root admin not found");
+      await client.query("ROLLBACK");
       process.exit(1);
     }
 
     const rootAdminId = rootAdmin.rows[0].id;
-    console.log('✅ Root admin ID:', rootAdminId);
+    console.log("✅ Root admin ID:", rootAdminId);
 
     // Update super admins
-    const result = await client.query(`
+    const result = await client.query(
+      `
       UPDATE user_profiles 
       SET hierarchy_level = 1,
           parent_manager_id = $1
       WHERE email IN ('navesarussi@gmail.com', 'mahalalel100@gmail.com')
         AND (parent_manager_id IS DISTINCT FROM $1 OR hierarchy_level IS DISTINCT FROM 1)
       RETURNING email, hierarchy_level, parent_manager_id
-    `, [rootAdminId]);
+    `,
+      [rootAdminId],
+    );
 
     console.log(`\n✅ Updated ${result.rows.length} super admin(s):`);
     result.rows.forEach((r: any) => {
-      console.log(`   - ${r.email}: level=${r.hierarchy_level}, parent=${r.parent_manager_id}`);
+      console.log(
+        `   - ${r.email}: level=${r.hierarchy_level}, parent=${r.parent_manager_id}`,
+      );
     });
 
-    await client.query('COMMIT');
-    console.log('\n✅ Fix completed successfully!');
-
+    await client.query("COMMIT");
+    console.log("\n✅ Fix completed successfully!");
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Fix failed:', error);
+    await client.query("ROLLBACK");
+    console.error("❌ Fix failed:", error);
     process.exit(1);
   } finally {
     client.release();
@@ -68,9 +72,7 @@ async function fixSuperAdmins() {
   }
 }
 
-fixSuperAdmins().catch(err => {
-  console.error('❌ Fatal error:', err);
+fixSuperAdmins().catch((err) => {
+  console.error("❌ Fatal error:", err);
   process.exit(1);
 });
-
-

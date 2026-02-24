@@ -14,10 +14,10 @@
 // TODO: Add environment-specific database configurations
 // TODO: Implement database connection graceful shutdown
 // TODO: Add database query performance profiling in development mode
-import { Global, Module } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Global, Module } from "@nestjs/common";
+import { Pool } from "pg";
 
-export const PG_POOL = 'PG_POOL';
+export const PG_POOL = "PG_POOL";
 
 @Global()
 @Module({
@@ -28,28 +28,44 @@ export const PG_POOL = 'PG_POOL';
         // 1) Prefer a single DATABASE_URL (Railway Postgres addon exposes this)
         const connectionString = process.env.DATABASE_URL;
         if (connectionString) {
-          const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL || process.env.PGSSLMODE;
+          const sslFlag =
+            process.env.PG_SSL ||
+            process.env.POSTGRES_SSL ||
+            process.env.PGSSLMODE;
           const sslEnabled =
-            (sslFlag && /^(1|true|require)$/i.test(sslFlag)) || /sslmode=require/i.test(connectionString);
+            (sslFlag && /^(1|true|require)$/i.test(sslFlag)) ||
+            /sslmode=require/i.test(connectionString);
 
-        return new Pool({
-          connectionString,
-          ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
-          // Disable prepared statements to avoid schema caching issues
-          max: 20, // Maximum number of clients in the pool
-          idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 2000,
-        });
+          return new Pool({
+            connectionString,
+            ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
+            // Disable prepared statements to avoid schema caching issues
+            max: 20, // Maximum number of clients in the pool
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 2000,
+          });
         }
 
         // 2) Fall back to discrete env vars. Support both POSTGRES_* and PG* (Railway style)
-        const host = process.env.POSTGRES_HOST || process.env.PGHOST || 'localhost';
-        const port = Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432);
-        const user = process.env.POSTGRES_USER || process.env.PGUSER || 'kc';
-        const password = process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || 'kc_password';
-        const database = process.env.POSTGRES_DB || process.env.PGDATABASE || 'kc_db';
-        const sslFlag = process.env.PG_SSL || process.env.POSTGRES_SSL || process.env.PGSSLMODE;
-        const sslEnabled = sslFlag ? /^(1|true|require)$/i.test(sslFlag) : false;
+        const host =
+          process.env.POSTGRES_HOST || process.env.PGHOST || "localhost";
+        const port = Number(
+          process.env.POSTGRES_PORT || process.env.PGPORT || 5432,
+        );
+        const user = process.env.POSTGRES_USER || process.env.PGUSER || "kc";
+        const password =
+          process.env.POSTGRES_PASSWORD ||
+          process.env.PGPASSWORD ||
+          "kc_password";
+        const database =
+          process.env.POSTGRES_DB || process.env.PGDATABASE || "kc_db";
+        const sslFlag =
+          process.env.PG_SSL ||
+          process.env.POSTGRES_SSL ||
+          process.env.PGSSLMODE;
+        const sslEnabled = sslFlag
+          ? /^(1|true|require)$/i.test(sslFlag)
+          : false;
 
         return new Pool({
           host,
@@ -69,5 +85,3 @@ export const PG_POOL = 'PG_POOL';
   exports: [PG_POOL],
 })
 export class DatabaseModule {}
-
-

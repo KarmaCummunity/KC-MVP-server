@@ -2,9 +2,9 @@
 // - Purpose: Manage user sessions stored in Redis (create, validate, list, delete, stats).
 // - Reached from: `SessionController` endpoints and other services.
 // - Storage: Keys `session:*` and `user_sessions:*` with TTL; metadata includes IP/UA.
-import { Injectable } from '@nestjs/common';
-import { RedisCacheService } from '../redis/redis-cache.service';
-import { randomBytes } from 'crypto';
+import { Injectable } from "@nestjs/common";
+import { RedisCacheService } from "../redis/redis-cache.service";
+import { randomBytes } from "crypto";
 
 export interface UserSession {
   userId: string;
@@ -18,8 +18,8 @@ export interface UserSession {
 
 @Injectable()
 export class SessionService {
-  private readonly SESSION_PREFIX = 'session:';
-  private readonly USER_SESSIONS_PREFIX = 'user_sessions:';
+  private readonly SESSION_PREFIX = "session:";
+  private readonly USER_SESSIONS_PREFIX = "user_sessions:";
   private readonly SESSION_DURATION = 24 * 60 * 60; // 24 hours in seconds
 
   constructor(private readonly redisCache: RedisCacheService) {}
@@ -28,13 +28,17 @@ export class SessionService {
    * Create a new session for user
    */
   async createSession(
-    userId: string, 
-    email: string, 
-    metadata: { ipAddress?: string; userAgent?: string; username?: string } = {}
+    userId: string,
+    email: string,
+    metadata: {
+      ipAddress?: string;
+      userAgent?: string;
+      username?: string;
+    } = {},
   ): Promise<string> {
     const sessionId = this.generateSessionId();
     const now = new Date().toISOString();
-    
+
     const sessionData: UserSession = {
       userId,
       email,
@@ -49,7 +53,7 @@ export class SessionService {
     await this.redisCache.setWithExpiry(
       `${this.SESSION_PREFIX}${sessionId}`,
       sessionData,
-      this.SESSION_DURATION
+      this.SESSION_DURATION,
     );
 
     // Track user sessions (for logout all devices)
@@ -63,19 +67,21 @@ export class SessionService {
    */
   async getSession(sessionId: string): Promise<UserSession | null> {
     if (!sessionId) return null;
-    
-    const sessionData = await this.redisCache.get<UserSession>(`${this.SESSION_PREFIX}${sessionId}`);
-    
+
+    const sessionData = await this.redisCache.get<UserSession>(
+      `${this.SESSION_PREFIX}${sessionId}`,
+    );
+
     if (sessionData) {
       // Update last activity
       sessionData.lastActivity = new Date().toISOString();
       await this.redisCache.setWithExpiry(
         `${this.SESSION_PREFIX}${sessionId}`,
         sessionData,
-        this.SESSION_DURATION
+        this.SESSION_DURATION,
       );
     }
-    
+
     return sessionData;
   }
 
@@ -91,15 +97,17 @@ export class SessionService {
    */
   async deleteSession(sessionId: string): Promise<boolean> {
     if (!sessionId) return false;
-    
+
     // Get session to find userId
-    const sessionData = await this.redisCache.get<UserSession>(`${this.SESSION_PREFIX}${sessionId}`);
-    
+    const sessionData = await this.redisCache.get<UserSession>(
+      `${this.SESSION_PREFIX}${sessionId}`,
+    );
+
     if (sessionData) {
       // Remove from user sessions list
       await this.removeSessionFromUser(sessionData.userId, sessionId);
     }
-    
+
     // Delete the session
     return await this.redisCache.delete(`${this.SESSION_PREFIX}${sessionId}`);
   }
@@ -110,15 +118,17 @@ export class SessionService {
   async deleteAllUserSessions(userId: string): Promise<number> {
     const userSessions = await this.getUserSessions(userId);
     let deletedCount = 0;
-    
+
     for (const sessionId of userSessions) {
-      const deleted = await this.redisCache.delete(`${this.SESSION_PREFIX}${sessionId}`);
+      const deleted = await this.redisCache.delete(
+        `${this.SESSION_PREFIX}${sessionId}`,
+      );
       if (deleted) deletedCount++;
     }
-    
+
     // Clear user sessions list
     await this.redisCache.delete(`${this.USER_SESSIONS_PREFIX}${userId}`);
-    
+
     return deletedCount;
   }
 
@@ -126,7 +136,9 @@ export class SessionService {
    * Get all active sessions for a user
    */
   async getUserSessions(userId: string): Promise<string[]> {
-    const sessions = await this.redisCache.get<string[]>(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    const sessions = await this.redisCache.get<string[]>(
+      `${this.USER_SESSIONS_PREFIX}${userId}`,
+    );
     return sessions || [];
   }
 
@@ -136,14 +148,16 @@ export class SessionService {
   async getUserSessionsInfo(userId: string): Promise<UserSession[]> {
     const sessionIds = await this.getUserSessions(userId);
     const sessions: UserSession[] = [];
-    
+
     for (const sessionId of sessionIds) {
-      const sessionData = await this.redisCache.get<UserSession>(`${this.SESSION_PREFIX}${sessionId}`);
+      const sessionData = await this.redisCache.get<UserSession>(
+        `${this.SESSION_PREFIX}${sessionId}`,
+      );
       if (sessionData) {
         sessions.push(sessionData);
       }
     }
-    
+
     return sessions;
   }
 
@@ -153,19 +167,21 @@ export class SessionService {
   async cleanExpiredSessions(userId: string): Promise<void> {
     const sessionIds = await this.getUserSessions(userId);
     const validSessions: string[] = [];
-    
+
     for (const sessionId of sessionIds) {
-      const exists = await this.redisCache.exists(`${this.SESSION_PREFIX}${sessionId}`);
+      const exists = await this.redisCache.exists(
+        `${this.SESSION_PREFIX}${sessionId}`,
+      );
       if (exists) {
         validSessions.push(sessionId);
       }
     }
-    
+
     if (validSessions.length !== sessionIds.length) {
       await this.redisCache.setWithExpiry(
         `${this.USER_SESSIONS_PREFIX}${userId}`,
         validSessions,
-        this.SESSION_DURATION
+        this.SESSION_DURATION,
       );
     }
   }
@@ -177,8 +193,10 @@ export class SessionService {
     totalActiveSessions: number;
     sessionKeys: string[];
   }> {
-    const sessionKeys = await this.redisCache.getKeys(`${this.SESSION_PREFIX}*`);
-    
+    const sessionKeys = await this.redisCache.getKeys(
+      `${this.SESSION_PREFIX}*`,
+    );
+
     return {
       totalActiveSessions: sessionKeys.length,
       sessionKeys,
@@ -186,31 +204,37 @@ export class SessionService {
   }
 
   // Private helper methods
-  
+
   private generateSessionId(): string {
-    return randomBytes(32).toString('hex');
+    return randomBytes(32).toString("hex");
   }
 
-  private async addSessionToUser(userId: string, sessionId: string): Promise<void> {
+  private async addSessionToUser(
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
     const userSessions = await this.getUserSessions(userId);
     userSessions.push(sessionId);
-    
+
     await this.redisCache.setWithExpiry(
       `${this.USER_SESSIONS_PREFIX}${userId}`,
       userSessions,
-      this.SESSION_DURATION
+      this.SESSION_DURATION,
     );
   }
 
-  private async removeSessionFromUser(userId: string, sessionId: string): Promise<void> {
+  private async removeSessionFromUser(
+    userId: string,
+    sessionId: string,
+  ): Promise<void> {
     const userSessions = await this.getUserSessions(userId);
-    const filteredSessions = userSessions.filter(id => id !== sessionId);
-    
+    const filteredSessions = userSessions.filter((id) => id !== sessionId);
+
     if (filteredSessions.length > 0) {
       await this.redisCache.setWithExpiry(
         `${this.USER_SESSIONS_PREFIX}${userId}`,
         filteredSessions,
-        this.SESSION_DURATION
+        this.SESSION_DURATION,
       );
     } else {
       await this.redisCache.delete(`${this.USER_SESSIONS_PREFIX}${userId}`);

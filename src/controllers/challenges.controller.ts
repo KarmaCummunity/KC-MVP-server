@@ -1,36 +1,43 @@
 // Challenges Controller - מותאם מ-TimrsApp לשרת KC-MVP
 // מנהל את כל הפעולות הקשורות לאתגרים (Challenges/Timers) למנהלים
-import { 
-  Body, 
-  Controller, 
-  Get, 
-  Post, 
-  Put, 
-  Delete, 
-  Param, 
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
   Query,
-  Logger, 
-  BadRequestException, 
+  Logger,
+  BadRequestException,
   NotFoundException,
   InternalServerErrorException,
-  UseGuards 
-} from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { IsString, IsNumber, IsOptional, IsEnum, Min, Max, Length, validate } from 'class-validator';
-import { Transform } from 'class-transformer';
+} from "@nestjs/common";
+import { Inject } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsEnum,
+  Min,
+  Max,
+  Length,
+  validate,
+} from "class-validator";
 
-type TimeUnit = 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
+type TimeUnit = "seconds" | "minutes" | "hours" | "days" | "weeks" | "months";
 
 // DTOs for validation
 class CreateChallengeDto {
   @IsString()
-  @Length(1, 50, { message: 'שם האתגר חייב להיות בין 1-50 תווים' })
-  name: string = '';
+  @Length(1, 50, { message: "שם האתגר חייב להיות בין 1-50 תווים" })
+  name: string = "";
 
-  @IsEnum(['seconds', 'minutes', 'hours', 'days', 'weeks', 'months'])
-  timeUnit: TimeUnit = 'days';
+  @IsEnum(["seconds", "minutes", "hours", "days", "weeks", "months"])
+  timeUnit: TimeUnit = "days";
 
   @IsNumber()
   @Min(1)
@@ -38,7 +45,7 @@ class CreateChallengeDto {
   customResetAmount: number = 0;
 
   @IsString()
-  userId: string = '';
+  userId: string = "";
 }
 
 class UpdateChallengeDto {
@@ -48,7 +55,7 @@ class UpdateChallengeDto {
   name?: string;
 
   @IsOptional()
-  @IsEnum(['seconds', 'minutes', 'hours', 'days', 'weeks', 'months'])
+  @IsEnum(["seconds", "minutes", "hours", "days", "weeks", "months"])
   timeUnit?: TimeUnit;
 
   @IsOptional()
@@ -76,10 +83,10 @@ class UpdateChallengeDto {
 
 class CreateResetLogDto {
   @IsString()
-  challengeId: string = '';
+  challengeId: string = "";
 
   @IsString()
-  userId: string = '';
+  userId: string = "";
 
   @IsNumber()
   @Min(1)
@@ -87,7 +94,7 @@ class CreateResetLogDto {
 
   @IsString()
   @Length(1, 500)
-  reason: string = '';
+  reason: string = "";
 
   @IsNumber()
   @Min(1)
@@ -103,10 +110,10 @@ class CreateResetLogDto {
 
 class CreateRecordBreakDto {
   @IsString()
-  challengeId: string = '';
+  challengeId: string = "";
 
   @IsString()
-  userId: string = '';
+  userId: string = "";
 
   @IsNumber()
   oldRecord: number = 0;
@@ -126,22 +133,19 @@ class CreateRecordBreakDto {
   reason?: string;
 }
 
-@Controller('api/challenges')
+@Controller("api/challenges")
 export class ChallengesController {
   private readonly logger = new Logger(ChallengesController.name);
 
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
-  /**
-   * יצירת אתגר חדש
-   */
   @Post()
   async createChallenge(@Body() createDto: CreateChallengeDto) {
     this.logger.log(`Creating new challenge for user: ${createDto.userId}`);
-    
+
     const errors = await validate(createDto);
     if (errors.length > 0) {
-      throw new BadRequestException('Validation failed');
+      throw new BadRequestException("Validation failed");
     }
 
     const client = await this.pool.connect();
@@ -166,105 +170,96 @@ export class ChallengesController {
           0, // best_streak
           0, // reset_count
           now, // last_reset_date
-        ]
+        ],
       );
 
       this.logger.log(`Challenge created successfully: ${result.rows[0].id}`);
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
-      this.logger.error('Error creating challenge:', error);
-      this.logger.error('Error details:', error.message, error.stack);
+      this.logger.error("Error creating challenge:", error);
+      this.logger.error("Error details:", error.message, error.stack);
       throw new InternalServerErrorException(
-        `Failed to create challenge: ${error.message || 'Unknown error'}`
+        `Failed to create challenge: ${error.message || "Unknown error"}`,
       );
     } finally {
       client.release();
     }
   }
 
-  /**
-   * קבלת כל האתגרים של משתמש
-   */
   @Get()
-  async getChallenges(@Query('userId') userId: string) {
+  async getChallenges(@Query("userId") userId: string) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Fetching challenges for user: ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       const result = await client.query(
         `SELECT * FROM challenges 
          WHERE user_id = $1 
          ORDER BY created_at DESC`,
-        [userId]
+        [userId],
       );
 
       return { success: true, data: result.rows };
     } catch (error: any) {
-      this.logger.error('Error fetching challenges:', error);
-      this.logger.error('Error details:', error.message, error.stack);
+      this.logger.error("Error fetching challenges:", error);
+      this.logger.error("Error details:", error.message, error.stack);
       throw new InternalServerErrorException(
-        `Failed to fetch challenges: ${error.message || 'Unknown error'}`
+        `Failed to fetch challenges: ${error.message || "Unknown error"}`,
       );
     } finally {
       client.release();
     }
   }
 
-  /**
-   * קבלת אתגר ספציפי
-   */
-  @Get(':id')
-  async getChallenge(@Param('id') id: string, @Query('userId') userId: string) {
+  @Get(":id")
+  async getChallenge(@Param("id") id: string, @Query("userId") userId: string) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Fetching challenge: ${id} for user: ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       const result = await client.query(
         `SELECT * FROM challenges 
          WHERE id = $1 AND user_id = $2`,
-        [id, userId]
+        [id, userId],
       );
 
       if (result.rows.length === 0) {
-        throw new NotFoundException('Challenge not found');
+        throw new NotFoundException("Challenge not found");
       }
 
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
       if (error instanceof NotFoundException) throw error;
-      this.logger.error('Error fetching challenge:', error);
-      throw new InternalServerErrorException('Failed to fetch challenge');
+      this.logger.error("Error fetching challenge:", error);
+      throw new InternalServerErrorException("Failed to fetch challenge");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * עדכון אתגר
-   */
-  @Put(':id')
+  @Put(":id")
   async updateChallenge(
-    @Param('id') id: string,
-    @Query('userId') userId: string,
-    @Body() updateDto: UpdateChallengeDto
+    @Param("id") id: string,
+    @Query("userId") userId: string,
+    @Body() updateDto: UpdateChallengeDto,
   ) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Updating challenge: ${id}`);
-    
+
     const errors = await validate(updateDto);
     if (errors.length > 0) {
-      throw new BadRequestException('Validation failed');
+      throw new BadRequestException("Validation failed");
     }
 
     const client = await this.pool.connect();
@@ -283,7 +278,7 @@ export class ChallengesController {
       });
 
       if (updates.length === 0) {
-        throw new BadRequestException('No fields to update');
+        throw new BadRequestException("No fields to update");
       }
 
       updates.push(`updated_at = NOW()`);
@@ -291,50 +286,54 @@ export class ChallengesController {
 
       const result = await client.query(
         `UPDATE challenges 
-         SET ${updates.join(', ')}
+         SET ${updates.join(", ")}
          WHERE id = $${paramCount} AND user_id = $${paramCount + 1}
          RETURNING *`,
-        values
+        values,
       );
 
       if (result.rows.length === 0) {
-        throw new NotFoundException('Challenge not found');
+        throw new NotFoundException("Challenge not found");
       }
 
       this.logger.log(`Challenge updated successfully: ${id}`);
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
-      if (error instanceof NotFoundException || error instanceof BadRequestException) throw error;
-      this.logger.error('Error updating challenge:', error);
-      throw new InternalServerErrorException('Failed to update challenge');
+      if (
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException
+      )
+        throw error;
+      this.logger.error("Error updating challenge:", error);
+      throw new InternalServerErrorException("Failed to update challenge");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * מחיקת אתגר (רך - שמירה בהיסטוריה)
-   */
-  @Delete(':id')
-  async deleteChallenge(@Param('id') id: string, @Query('userId') userId: string) {
+  @Delete(":id")
+  async deleteChallenge(
+    @Param("id") id: string,
+    @Query("userId") userId: string,
+  ) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Deleting challenge: ${id}`);
-    
+
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Get challenge before deletion
       const challengeResult = await client.query(
-        'SELECT * FROM challenges WHERE id = $1 AND user_id = $2',
-        [id, userId]
+        "SELECT * FROM challenges WHERE id = $1 AND user_id = $2",
+        [id, userId],
       );
 
       if (challengeResult.rows.length === 0) {
-        throw new NotFoundException('Challenge not found');
+        throw new NotFoundException("Challenge not found");
       }
 
       const challenge = challengeResult.rows[0];
@@ -361,49 +360,52 @@ export class ChallengesController {
           challenge.last_reset_date,
           Date.now(),
           challenge.current_value,
-        ]
+        ],
       );
 
       // Delete from challenges
-      await client.query('DELETE FROM challenges WHERE id = $1 AND user_id = $2', [id, userId]);
+      await client.query(
+        "DELETE FROM challenges WHERE id = $1 AND user_id = $2",
+        [id, userId],
+      );
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       this.logger.log(`Challenge deleted successfully: ${id}`);
-      return { success: true, message: 'Challenge deleted' };
+      return { success: true, message: "Challenge deleted" };
     } catch (error: any) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       if (error instanceof NotFoundException) throw error;
-      this.logger.error('Error deleting challenge:', error);
-      throw new InternalServerErrorException('Failed to delete challenge');
+      this.logger.error("Error deleting challenge:", error);
+      throw new InternalServerErrorException("Failed to delete challenge");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * שחזור אתגר מההיסטוריה
-   */
-  @Post('restore/:id')
-  async restoreChallenge(@Param('id') id: string, @Query('userId') userId: string) {
+  @Post("restore/:id")
+  async restoreChallenge(
+    @Param("id") id: string,
+    @Query("userId") userId: string,
+  ) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Restoring challenge: ${id}`);
-    
+
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Get deleted challenge
       const deletedResult = await client.query(
-        'SELECT * FROM deleted_challenges WHERE id = $1 AND user_id = $2',
-        [id, userId]
+        "SELECT * FROM deleted_challenges WHERE id = $1 AND user_id = $2",
+        [id, userId],
       );
 
       if (deletedResult.rows.length === 0) {
-        throw new NotFoundException('Deleted challenge not found');
+        throw new NotFoundException("Deleted challenge not found");
       }
 
       const deleted = deletedResult.rows[0];
@@ -428,37 +430,37 @@ export class ChallengesController {
           deleted.best_streak,
           deleted.reset_count,
           deleted.last_reset_date,
-        ]
+        ],
       );
 
       // Delete from deleted_challenges
-      await client.query('DELETE FROM deleted_challenges WHERE id = $1 AND user_id = $2', [id, userId]);
+      await client.query(
+        "DELETE FROM deleted_challenges WHERE id = $1 AND user_id = $2",
+        [id, userId],
+      );
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       this.logger.log(`Challenge restored successfully: ${id}`);
-      return { success: true, message: 'Challenge restored' };
+      return { success: true, message: "Challenge restored" };
     } catch (error: any) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       if (error instanceof NotFoundException) throw error;
-      this.logger.error('Error restoring challenge:', error);
-      throw new InternalServerErrorException('Failed to restore challenge');
+      this.logger.error("Error restoring challenge:", error);
+      throw new InternalServerErrorException("Failed to restore challenge");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * קבלת היסטוריית אתגרים מחוקים
-   */
-  @Get('history/deleted')
-  async getDeletedChallenges(@Query('userId') userId: string) {
+  @Get("history/deleted")
+  async getDeletedChallenges(@Query("userId") userId: string) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Fetching deleted challenges for user: ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -466,28 +468,29 @@ export class ChallengesController {
          WHERE user_id = $1 
          ORDER BY deleted_at DESC 
          LIMIT 50`,
-        [userId]
+        [userId],
       );
 
       return { success: true, data: result.rows };
     } catch (error: any) {
-      this.logger.error('Error fetching deleted challenges:', error);
-      throw new InternalServerErrorException('Failed to fetch deleted challenges');
+      this.logger.error("Error fetching deleted challenges:", error);
+      throw new InternalServerErrorException(
+        "Failed to fetch deleted challenges",
+      );
     } finally {
       client.release();
     }
   }
 
-  /**
-   * יצירת לוג איפוס
-   */
-  @Post('reset-logs')
+  @Post("reset-logs")
   async createResetLog(@Body() createDto: CreateResetLogDto) {
-    this.logger.log(`Creating reset log for challenge: ${createDto.challengeId}`);
-    
+    this.logger.log(
+      `Creating reset log for challenge: ${createDto.challengeId}`,
+    );
+
     const errors = await validate(createDto);
     if (errors.length > 0) {
-      throw new BadRequestException('Validation failed');
+      throw new BadRequestException("Validation failed");
     }
 
     const client = await this.pool.connect();
@@ -507,33 +510,30 @@ export class ChallengesController {
           createDto.mood,
           createDto.valueBeforeReset,
           createDto.valueAfterReset,
-        ]
+        ],
       );
 
       this.logger.log(`Reset log created successfully`);
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
-      this.logger.error('Error creating reset log:', error);
-      throw new InternalServerErrorException('Failed to create reset log');
+      this.logger.error("Error creating reset log:", error);
+      throw new InternalServerErrorException("Failed to create reset log");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * קבלת לוגי איפוסים
-   */
-  @Get('reset-logs/all')
+  @Get("reset-logs/all")
   async getResetLogs(
-    @Query('userId') userId: string,
-    @Query('challengeId') challengeId?: string
+    @Query("userId") userId: string,
+    @Query("challengeId") challengeId?: string,
   ) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Fetching reset logs for user: ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       let query = `
@@ -543,33 +543,32 @@ export class ChallengesController {
       const params: any[] = [userId];
 
       if (challengeId) {
-        query += ' AND challenge_id = $2';
+        query += " AND challenge_id = $2";
         params.push(challengeId);
       }
 
-      query += ' ORDER BY timestamp DESC LIMIT 200';
+      query += " ORDER BY timestamp DESC LIMIT 200";
 
       const result = await client.query(query, params);
 
       return { success: true, data: result.rows };
     } catch (error: any) {
-      this.logger.error('Error fetching reset logs:', error);
-      throw new InternalServerErrorException('Failed to fetch reset logs');
+      this.logger.error("Error fetching reset logs:", error);
+      throw new InternalServerErrorException("Failed to fetch reset logs");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * יצירת רשומת שבירת שיא
-   */
-  @Post('record-breaks')
+  @Post("record-breaks")
   async createRecordBreak(@Body() createDto: CreateRecordBreakDto) {
-    this.logger.log(`Creating record break for challenge: ${createDto.challengeId}`);
-    
+    this.logger.log(
+      `Creating record break for challenge: ${createDto.challengeId}`,
+    );
+
     const errors = await validate(createDto);
     if (errors.length > 0) {
-      throw new BadRequestException('Validation failed');
+      throw new BadRequestException("Validation failed");
     }
 
     const client = await this.pool.connect();
@@ -588,33 +587,30 @@ export class ChallengesController {
           createDto.improvement,
           createDto.context,
           createDto.reason,
-        ]
+        ],
       );
 
       this.logger.log(`Record break created successfully`);
       return { success: true, data: result.rows[0] };
     } catch (error: any) {
-      this.logger.error('Error creating record break:', error);
-      throw new InternalServerErrorException('Failed to create record break');
+      this.logger.error("Error creating record break:", error);
+      throw new InternalServerErrorException("Failed to create record break");
     } finally {
       client.release();
     }
   }
 
-  /**
-   * קבלת רשומות שבירת שיאים
-   */
-  @Get('record-breaks/all')
+  @Get("record-breaks/all")
   async getRecordBreaks(
-    @Query('userId') userId: string,
-    @Query('challengeId') challengeId?: string
+    @Query("userId") userId: string,
+    @Query("challengeId") challengeId?: string,
   ) {
     if (!userId) {
-      throw new BadRequestException('userId is required');
+      throw new BadRequestException("userId is required");
     }
 
     this.logger.log(`Fetching record breaks for user: ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       let query = `
@@ -624,18 +620,18 @@ export class ChallengesController {
       const params: any[] = [userId];
 
       if (challengeId) {
-        query += ' AND challenge_id = $2';
+        query += " AND challenge_id = $2";
         params.push(challengeId);
       }
 
-      query += ' ORDER BY timestamp DESC LIMIT 100';
+      query += " ORDER BY timestamp DESC LIMIT 100";
 
       const result = await client.query(query, params);
 
       return { success: true, data: result.rows };
     } catch (error: any) {
-      this.logger.error('Error fetching record breaks:', error);
-      throw new InternalServerErrorException('Failed to fetch record breaks');
+      this.logger.error("Error fetching record breaks:", error);
+      throw new InternalServerErrorException("Failed to fetch record breaks");
     } finally {
       client.release();
     }
@@ -645,7 +641,6 @@ export class ChallengesController {
    * Helper: Convert camelCase to snake_case
    */
   private camelToSnake(str: string): string {
-    return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+    return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
   }
 }
-

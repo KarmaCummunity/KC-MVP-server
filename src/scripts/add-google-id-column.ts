@@ -3,24 +3,24 @@
  * Run with: npm run add:google-id or ts-node -r tsconfig-paths/register src/scripts/add-google-id-column.ts
  */
 
-import { Pool } from 'pg';
-import * as dotenv from 'dotenv';
+import { Pool } from "pg";
+import * as dotenv from "dotenv";
 
 dotenv.config();
 
 async function addGoogleIdColumn() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
-    throw new Error('DATABASE_URL environment variable is required');
+    throw new Error("DATABASE_URL environment variable is required");
   }
   const pool = new Pool({ connectionString });
 
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
-    console.log('📝 Checking if google_id column exists...');
+    console.log("📝 Checking if google_id column exists...");
 
     // Check if column exists
     const columnCheck = await client.query(`
@@ -30,13 +30,13 @@ async function addGoogleIdColumn() {
     `);
 
     if (columnCheck.rows.length === 0) {
-      console.log('📝 google_id column does not exist, creating it...');
+      console.log("📝 google_id column does not exist, creating it...");
       await client.query(`
         ALTER TABLE user_profiles ADD COLUMN google_id TEXT;
       `);
-      console.log('✅ google_id column created');
+      console.log("✅ google_id column created");
     } else {
-      console.log('✅ google_id column already exists');
+      console.log("✅ google_id column already exists");
     }
 
     // Check if unique constraint exists
@@ -47,13 +47,15 @@ async function addGoogleIdColumn() {
     `);
 
     if (constraintCheck.rows.length === 0) {
-      console.log('📝 google_id unique constraint does not exist, creating it...');
+      console.log(
+        "📝 google_id unique constraint does not exist, creating it...",
+      );
       await client.query(`
         ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_google_id_key UNIQUE (google_id);
       `);
-      console.log('✅ google_id unique constraint created');
+      console.log("✅ google_id unique constraint created");
     } else {
-      console.log('✅ google_id unique constraint already exists');
+      console.log("✅ google_id unique constraint already exists");
     }
 
     // Check if index exists
@@ -64,20 +66,20 @@ async function addGoogleIdColumn() {
     `);
 
     if (indexCheck.rows.length === 0) {
-      console.log('📝 google_id index does not exist, creating it...');
+      console.log("📝 google_id index does not exist, creating it...");
       await client.query(`
         CREATE INDEX idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
       `);
-      console.log('✅ google_id index created');
+      console.log("✅ google_id index created");
     } else {
-      console.log('✅ google_id index already exists');
+      console.log("✅ google_id index already exists");
     }
 
-    await client.query('COMMIT');
-    console.log('✅ All operations completed successfully');
+    await client.query("COMMIT");
+    console.log("✅ All operations completed successfully");
   } catch (error: any) {
-    await client.query('ROLLBACK');
-    console.error('❌ Error:', error.message);
+    await client.query("ROLLBACK");
+    console.error("❌ Error:", error.message);
     throw error;
   } finally {
     client.release();
@@ -87,11 +89,10 @@ async function addGoogleIdColumn() {
 
 addGoogleIdColumn()
   .then(() => {
-    console.log('✅ Script completed successfully');
+    console.log("✅ Script completed successfully");
     process.exit(0);
   })
   .catch((error) => {
-    console.error('❌ Script failed:', error);
+    console.error("❌ Script failed:", error);
     process.exit(1);
   });
-

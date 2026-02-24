@@ -2,19 +2,38 @@
 // - Purpose: CRUD עבור משימות קבוצתיות למנהל האפליקציה
 // - Routes: /api/tasks (GET, POST), /api/tasks/:id (GET, PATCH, DELETE)
 // - Storage: PostgreSQL טבלת tasks (schema.sql)
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, Logger } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { RedisCacheService } from '../redis/redis-cache.service';
-import { UserResolutionService } from '../services/user-resolution.service';
-import { ItemsService } from '../items/items.service';
-import { JwtAuthGuard, AdminAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+  Logger,
+} from "@nestjs/common";
+import { Inject } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import { RedisCacheService } from "../redis/redis-cache.service";
+import { UserResolutionService } from "../services/user-resolution.service";
+import { ItemsService } from "../items/items.service";
+import { JwtAuthGuard, AdminAuthGuard } from "../auth/jwt-auth.guard";
+import { randomUUID } from "crypto";
 
-type TaskStatus = 'open' | 'in_progress' | 'done' | 'archived' | 'stuck' | 'testing' | 'reports';
-type TaskPriority = 'low' | 'medium' | 'high';
+type TaskStatus =
+  | "open"
+  | "in_progress"
+  | "done"
+  | "archived"
+  | "stuck"
+  | "testing"
+  | "reports";
+type TaskPriority = "low" | "medium" | "high";
 
-@Controller('/api/tasks')
+@Controller("/api/tasks")
 export class TasksController {
   private readonly logger = new Logger(TasksController.name);
   constructor(
@@ -22,7 +41,7 @@ export class TasksController {
     private readonly redisCache: RedisCacheService,
     private readonly userResolutionService: UserResolutionService,
     private readonly itemsService: ItemsService,
-  ) { }
+  ) {}
 
   /**
    * Resolve any user identifier (email, firebase_uid, google_id, UUID string) to UUID
@@ -32,7 +51,7 @@ export class TasksController {
     return this.userResolutionService.resolveUserId(userId, {
       throwOnNotFound: false,
       cacheResult: true,
-      logError: false
+      logError: false,
     });
   }
 
@@ -61,8 +80,10 @@ export class TasksController {
 
         if (!columnCheck.rows[0]?.exists) {
           // Legacy table exists with wrong structure - drop and recreate
-          this.logger.log('⚠️  Detected legacy posts table structure - recreating with correct schema');
-          await this.pool.query('DROP TABLE IF EXISTS posts CASCADE;');
+          this.logger.log(
+            "⚠️  Detected legacy posts table structure - recreating with correct schema",
+          );
+          await this.pool.query("DROP TABLE IF EXISTS posts CASCADE;");
         } else {
           // Table exists with correct structure
           return;
@@ -89,16 +110,16 @@ export class TasksController {
 
       // SEC-002.4: Create indexes individually — no string interpolation in SQL
       const indexQueries = [
-        'CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id)',
-        'CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id)',
-        'CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)',
-        'CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type)'
+        "CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type)",
       ];
 
       for (const q of indexQueries) {
         try {
           await this.pool.query(q);
-        } catch (e) {
+        } catch {
           // index may already exist
         }
       }
@@ -112,13 +133,15 @@ export class TasksController {
             FOR EACH ROW 
             EXECUTE FUNCTION update_updated_at_column();
         `);
-      } catch (e) {
-        this.logger.log('⚠️ Could not create update_posts_updated_at trigger (function might not exist)');
+      } catch {
+        this.logger.log(
+          "⚠️ Could not create update_posts_updated_at trigger (function might not exist)",
+        );
       }
 
-      this.logger.log('✅ Posts table ensured with correct schema');
+      this.logger.log("✅ Posts table ensured with correct schema");
     } catch (error) {
-      this.logger.error('❌ Failed to ensure posts table:', error);
+      this.logger.error("❌ Failed to ensure posts table:", error);
       // Don't throw - allow code to continue, but log the error
     }
   }
@@ -164,24 +187,26 @@ export class TasksController {
           END $$;
         `);
       } catch (e) {
-        this.logger.warn('⚠️ Could not ensure estimated_hours column:', e);
+        this.logger.warn("⚠️ Could not ensure estimated_hours column:", e);
       }
 
       // 3. Ensure INDEXES (Idempotent)
       // SEC-002.4: Create indexes individually — no string interpolation in SQL
       const indexQueries = [
-        'CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)',
-        'CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)'
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)",
       ];
       for (const q of indexQueries) {
         try {
           await this.pool.query(q);
-        } catch (e) { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       // 4. Ensure task_time_logs table exists
@@ -199,11 +224,17 @@ export class TasksController {
         `);
 
         // Create indexes for task_time_logs
-        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_id ON task_time_logs(task_id)`);
-        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id)`);
-        await this.pool.query(`CREATE INDEX IF NOT EXISTS idx_task_time_logs_logged_at ON task_time_logs(logged_at DESC)`);
+        await this.pool.query(
+          `CREATE INDEX IF NOT EXISTS idx_task_time_logs_task_id ON task_time_logs(task_id)`,
+        );
+        await this.pool.query(
+          `CREATE INDEX IF NOT EXISTS idx_task_time_logs_user_id ON task_time_logs(user_id)`,
+        );
+        await this.pool.query(
+          `CREATE INDEX IF NOT EXISTS idx_task_time_logs_logged_at ON task_time_logs(logged_at DESC)`,
+        );
       } catch (e) {
-        this.logger.warn('⚠️ Could not ensure task_time_logs table:', e);
+        this.logger.warn("⚠️ Could not ensure task_time_logs table:", e);
       }
 
       // 5. Ensure NOTIFICATIONS table (Idempotent)
@@ -217,9 +248,8 @@ export class TasksController {
             PRIMARY KEY (user_id, item_id)
         );
       `);
-
     } catch (error) {
-      this.logger.error('❌ Error ensuring tables (non-fatal):', error);
+      this.logger.error("❌ Error ensuring tables (non-fatal):", error);
       // Do not throw. If standard tables exist, we can proceed.
     }
   }
@@ -232,16 +262,18 @@ export class TasksController {
     try {
       const rootEmail = process.env.ROOT_ADMIN_EMAIL;
       if (!rootEmail) {
-        this.logger.warn('⚠️ ROOT_ADMIN_EMAIL not set — cannot resolve super admin');
+        this.logger.warn(
+          "⚠️ ROOT_ADMIN_EMAIL not set — cannot resolve super admin",
+        );
         return null;
       }
       const { rows } = await this.pool.query(
         `SELECT id FROM user_profiles WHERE email = $1 LIMIT 1`,
-        [rootEmail]
+        [rootEmail],
       );
       return rows[0]?.id || null;
     } catch (error) {
-      this.logger.error('❌ Error getting super admin ID:', error);
+      this.logger.error("❌ Error getting super admin ID:", error);
       return null;
     }
   }
@@ -251,7 +283,10 @@ export class TasksController {
    * Super admin can assign to anyone
    * Other managers can only assign to their direct/indirect subordinates
    */
-  private async canAssignToUser(managerId: string, targetUserId: string): Promise<boolean> {
+  private async canAssignToUser(
+    managerId: string,
+    targetUserId: string,
+  ): Promise<boolean> {
     try {
       // If assigning to self, always allowed
       if (managerId === targetUserId) {
@@ -261,14 +296,15 @@ export class TasksController {
       // SEC-003.1: Check if manager is super_admin by role, not by email
       const { rows: superCheck } = await this.pool.query(
         `SELECT 1 FROM user_profiles WHERE id = $1 AND 'super_admin' = ANY(roles)`,
-        [managerId]
+        [managerId],
       );
       if (superCheck.length > 0) {
         return true;
       }
 
       // Check if targetUser is in manager's hierarchy (recursive - all levels down)
-      const { rows } = await this.pool.query(`
+      const { rows } = await this.pool.query(
+        `
         WITH RECURSIVE subordinates AS (
           -- Base case: direct subordinates of manager
           SELECT id, 1 as depth FROM user_profiles WHERE parent_manager_id = $1
@@ -280,13 +316,17 @@ export class TasksController {
           WHERE s.depth < 100
         )
         SELECT 1 FROM subordinates WHERE id = $2 LIMIT 1
-      `, [managerId, targetUserId]);
+      `,
+        [managerId, targetUserId],
+      );
 
       const canAssign = rows.length > 0;
-      this.logger.log(`🔐 Manager ${managerId} ${canAssign ? 'CAN' : 'CANNOT'} assign to ${targetUserId}`);
+      this.logger.log(
+        `🔐 Manager ${managerId} ${canAssign ? "CAN" : "CANNOT"} assign to ${targetUserId}`,
+      );
       return canAssign;
     } catch (error) {
-      this.logger.error('❌ Error checking hierarchy permissions:', error);
+      this.logger.error("❌ Error checking hierarchy permissions:", error);
       // On error, deny assignment to be safe
       return false;
     }
@@ -299,13 +339,13 @@ export class TasksController {
   @Get()
   @UseGuards(JwtAuthGuard)
   async listTasks(
-    @Query('status') status?: TaskStatus,
-    @Query('priority') priority?: TaskPriority,
-    @Query('category') category?: string,
-    @Query('assignee') assignee?: string,
-    @Query('q') searchQuery?: string,
-    @Query('limit') limitParam?: string,
-    @Query('offset') offsetParam?: string,
+    @Query("status") status?: TaskStatus,
+    @Query("priority") priority?: TaskPriority,
+    @Query("category") category?: string,
+    @Query("assignee") assignee?: string,
+    @Query("q") searchQuery?: string,
+    @Query("limit") limitParam?: string,
+    @Query("offset") offsetParam?: string,
   ) {
     try {
       // Ensure table exists before querying
@@ -314,11 +354,14 @@ export class TasksController {
       // Parse limit and offset - handle 0 correctly
       const limitNum = limitParam ? parseInt(String(limitParam), 10) : 100;
       const offsetNum = offsetParam ? parseInt(String(offsetParam), 10) : 0;
-      const limit = Math.min(Math.max(isNaN(limitNum) ? 100 : limitNum, 1), 500);
+      const limit = Math.min(
+        Math.max(isNaN(limitNum) ? 100 : limitNum, 1),
+        500,
+      );
       const offset = Math.max(isNaN(offsetNum) ? 0 : offsetNum, 0);
 
       // Build cache key from query parameters (include search query if present)
-      const cacheKey = `tasks_list_${status || 'all'}_${priority || 'all'}_${category || 'all'}_${assignee || 'all'}_${searchQuery || 'all'}_${limit}_${offset}`;
+      const cacheKey = `tasks_list_${status || "all"}_${priority || "all"}_${category || "all"}_${assignee || "all"}_${searchQuery || "all"}_${limit}_${offset}`;
 
       // Cache restored - race condition was fixed by awaiting cache clearing in create/update/delete
       // Try to get from cache (but don't fail if Redis is unavailable)
@@ -326,11 +369,11 @@ export class TasksController {
       try {
         cached = await this.redisCache.get(cacheKey);
       } catch (cacheError) {
-        this.logger.warn('Redis cache error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache error (non-fatal):", cacheError);
       }
 
       if (cached) {
-        this.logger.log('✅ Returning cached tasks list');
+        this.logger.log("✅ Returning cached tasks list");
         return { success: true, data: cached };
       }
 
@@ -356,17 +399,22 @@ export class TasksController {
         // Assume assignee is UUID for now. If email, we'd need to resolve it.
         // Ideally we resolve it to be safe.
         // But for performance, let's assume UUID if it looks like one.
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const uuidRegex =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         let assigneeUuid = assignee;
 
         if (!uuidRegex.test(assignee)) {
           // Try to resolve if not UUID (e.g. email)
           const resolved = await this.resolveUserIdToUUID(assignee);
           if (resolved) {
-            this.logger.log(`👤 Resolved list filter assignee ${assignee} -> ${resolved}`);
+            this.logger.log(
+              `👤 Resolved list filter assignee ${assignee} -> ${resolved}`,
+            );
             assigneeUuid = resolved;
           } else {
-            this.logger.warn(`⚠️ Could not resolve list filter assignee: ${assignee}`);
+            this.logger.warn(
+              `⚠️ Could not resolve list filter assignee: ${assignee}`,
+            );
           }
         }
 
@@ -381,10 +429,12 @@ export class TasksController {
         const searchTerm = `%${searchQuery.trim()}%`;
         params.push(searchTerm);
         const searchParamIndex = params.length;
-        filters.push(`(title ILIKE $${searchParamIndex} OR description ILIKE $${searchParamIndex})`);
+        filters.push(
+          `(title ILIKE $${searchParamIndex} OR description ILIKE $${searchParamIndex})`,
+        );
       }
 
-      const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+      const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
       // Check if task_time_logs table exists
       const tableExists = await this.pool.query(`
@@ -426,7 +476,10 @@ export class TasksController {
       `;
       params.push(limit, offset);
 
-      this.logger.log(`🚀 Executing LIST SQL:`, sql.replace(/\s+/g, ' ').trim());
+      this.logger.log(
+        `🚀 Executing LIST SQL:`,
+        sql.replace(/\s+/g, " ").trim(),
+      );
       this.logger.log(`params:`, params);
 
       const { rows } = await this.pool.query(sql, params);
@@ -436,25 +489,30 @@ export class TasksController {
       try {
         await this.redisCache.set(cacheKey, rows, 10 * 60);
       } catch (cacheError) {
-        this.logger.warn('Redis cache set error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache set error (non-fatal):", cacheError);
       }
 
       return { success: true, data: rows };
     } catch (error) {
-      this.logger.error('Error listing tasks:', error);
+      this.logger.error("Error listing tasks:", error);
 
       // Check if error is about missing table/columns
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes('does not exist') || errorMessage.includes('column')) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      if (
+        errorMessage.includes("does not exist") ||
+        errorMessage.includes("column")
+      ) {
         return {
           success: false,
-          error: 'Database table structure issue. Please contact administrator or check server logs.',
+          error:
+            "Database table structure issue. Please contact administrator or check server logs.",
         };
       }
 
       return {
         success: false,
-        error: errorMessage || 'Failed to list tasks',
+        error: errorMessage || "Failed to list tasks",
       };
     }
   }
@@ -464,20 +522,23 @@ export class TasksController {
    * Useful for production when automatic creation fails
    * GET /api/tasks/init-table
    */
-  @Get('init-table')
+  @Get("init-table")
   @UseGuards(AdminAuthGuard)
   async initTasksTable() {
     try {
       await this.ensureTasksTable();
       return {
         success: true,
-        message: 'Tasks table initialized successfully'
+        message: "Tasks table initialized successfully",
       };
     } catch (error) {
-      this.logger.error('Failed to initialize tasks table:', error);
+      this.logger.error("Failed to initialize tasks table:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to initialize tasks table',
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to initialize tasks table",
       };
     }
   }
@@ -486,17 +547,18 @@ export class TasksController {
    * Get a single task by ID
    * Cache TTL: 15 minutes
    */
-  @Get(':id')
+  @Get(":id")
   @UseGuards(JwtAuthGuard)
-  async getTask(@Param('id') id: string) {
+  async getTask(@Param("id") id: string) {
     try {
       // Ensure table exists before querying
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
       const cacheKey = `task_${id}`;
@@ -506,7 +568,7 @@ export class TasksController {
       try {
         cached = await this.redisCache.get(cacheKey);
       } catch (cacheError) {
-        this.logger.warn('Redis cache error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache error (non-fatal):", cacheError);
       }
 
       if (cached) {
@@ -529,22 +591,22 @@ export class TasksController {
         [id],
       );
       if (!rows.length) {
-        return { success: false, error: 'Task not found' };
+        return { success: false, error: "Task not found" };
       }
 
       // Try to cache the result (but don't fail if Redis is unavailable)
       try {
         await this.redisCache.set(cacheKey, rows[0], 15 * 60);
       } catch (cacheError) {
-        this.logger.warn('Redis cache set error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache set error (non-fatal):", cacheError);
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      this.logger.error('Error getting task:', error);
+      this.logger.error("Error getting task:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to get task',
+        error: error instanceof Error ? error.message : "Failed to get task",
       };
     }
   }
@@ -553,19 +615,21 @@ export class TasksController {
    * Get subtasks of a specific task
    * GET /api/tasks/:id/subtasks
    */
-  @Get(':id/subtasks')
+  @Get(":id/subtasks")
   @UseGuards(JwtAuthGuard)
-  async getSubtasks(@Param('id') parentId: string) {
+  async getSubtasks(@Param("id") parentId: string) {
     try {
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(parentId)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
-      const { rows } = await this.pool.query(`
+      const { rows } = await this.pool.query(
+        `
         SELECT 
           t.id, t.title, t.description, t.status, t.priority, t.category, 
           t.due_date, t.assignees, t.tags, t.checklist, t.parent_task_id, t.estimated_hours,
@@ -581,15 +645,18 @@ export class TasksController {
         ORDER BY 
           CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
           created_at DESC
-      `, [parentId]);
+      `,
+        [parentId],
+      );
 
       this.logger.log(`📋 Found ${rows.length} subtasks for task ${parentId}`);
       return { success: true, data: rows };
     } catch (error) {
-      this.logger.error('Error getting subtasks:', error);
+      this.logger.error("Error getting subtasks:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to get subtasks',
+        error:
+          error instanceof Error ? error.message : "Failed to get subtasks",
       };
     }
   }
@@ -598,20 +665,22 @@ export class TasksController {
    * Get full task tree (recursive - all subtasks at all levels)
    * GET /api/tasks/:id/tree
    */
-  @Get(':id/tree')
+  @Get(":id/tree")
   @UseGuards(JwtAuthGuard)
-  async getTaskTree(@Param('id') rootId: string) {
+  async getTaskTree(@Param("id") rootId: string) {
     try {
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(rootId)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
       // Use recursive CTE to get all subtasks at all levels
-      const { rows } = await this.pool.query(`
+      const { rows } = await this.pool.query(
+        `
         WITH RECURSIVE task_tree AS (
           -- Base case: the root task
           SELECT 
@@ -645,15 +714,20 @@ export class TasksController {
           (SELECT COUNT(*) FROM tasks st WHERE st.parent_task_id = tt.id) as subtask_count
         FROM task_tree tt
         ORDER BY tt.path
-      `, [rootId]);
+      `,
+        [rootId],
+      );
 
-      this.logger.log(`🌳 Found ${rows.length} tasks in tree for root ${rootId}`);
+      this.logger.log(
+        `🌳 Found ${rows.length} tasks in tree for root ${rootId}`,
+      );
       return { success: true, data: rows };
     } catch (error) {
-      this.logger.error('Error getting task tree:', error);
+      this.logger.error("Error getting task tree:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to get task tree',
+        error:
+          error instanceof Error ? error.message : "Failed to get task tree",
       };
     }
   }
@@ -668,33 +742,46 @@ export class TasksController {
       const {
         title,
         description = null,
-        status = 'open',
-        priority = 'medium',
+        status = "open",
+        priority = "medium",
         category = null,
         due_date = null,
         assignees = [],
         assigneesEmails = [],
         tags = [],
         checklist = null,
-        checkList = null,
         created_by = null,
         parent_task_id = null,
         estimated_hours = null,
       } = body || {};
 
-      if (!title || typeof title !== 'string' || !title.trim()) {
-        return { success: false, error: 'title is required and cannot be empty' };
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return {
+          success: false,
+          error: "title is required and cannot be empty",
+        };
       }
 
       // Validate status
       // Validate status
-      if (status && !['open', 'in_progress', 'done', 'archived', 'stuck', 'testing', 'reports'].includes(status)) {
-        return { success: false, error: 'Invalid status value' };
+      if (
+        status &&
+        ![
+          "open",
+          "in_progress",
+          "done",
+          "archived",
+          "stuck",
+          "testing",
+          "reports",
+        ].includes(status)
+      ) {
+        return { success: false, error: "Invalid status value" };
       }
 
       // Validate priority
-      if (priority && !['low', 'medium', 'high'].includes(priority)) {
-        return { success: false, error: 'Invalid priority value' };
+      if (priority && !["low", "medium", "high"].includes(priority)) {
+        return { success: false, error: "Invalid priority value" };
       }
 
       this.logger.log(`📝 POST /api/tasks payload:`, JSON.stringify(body));
@@ -704,25 +791,34 @@ export class TasksController {
       if (created_by) {
         const resolutionStart = Date.now();
         createdByUuid = await this.resolveUserIdToUUID(created_by);
-        this.logger.log(`👤 Resolved created_by ${created_by} to ${createdByUuid} in ${Date.now() - resolutionStart}ms`);
+        this.logger.log(
+          `👤 Resolved created_by ${created_by} to ${createdByUuid} in ${Date.now() - resolutionStart}ms`,
+        );
         if (!createdByUuid) {
-          return { success: false, error: 'Could not resolve created_by user - invalid user ID' };
+          return {
+            success: false,
+            error: "Could not resolve created_by user - invalid user ID",
+          };
         }
       } else {
-        this.logger.log(`❌ No created_by provided in payload - this is required`);
-        return { success: false, error: 'created_by is required - every task must have a creator' };
+        this.logger.log(
+          `❌ No created_by provided in payload - this is required`,
+        );
+        return {
+          success: false,
+          error: "created_by is required - every task must have a creator",
+        };
       }
 
       this.logger.log(`👤 Final createdByUuid:`, createdByUuid);
 
-
       // Validate and parse due_date if provided
       let parsedDueDate = null;
       if (due_date) {
-        if (typeof due_date === 'string') {
+        if (typeof due_date === "string") {
           const date = new Date(due_date);
           if (isNaN(date.getTime())) {
-            return { success: false, error: 'Invalid due_date format' };
+            return { success: false, error: "Invalid due_date format" };
           }
           parsedDueDate = date.toISOString();
         } else {
@@ -735,27 +831,36 @@ export class TasksController {
 
       // If assigneesEmails is provided (array of emails), convert to UUIDs
       if (Array.isArray(assigneesEmails) && assigneesEmails.length > 0) {
-        this.logger.log('📧 Processing assigneesEmails (POST):', assigneesEmails);
-        const emailList = assigneesEmails.filter((e) => typeof e === 'string' && e.trim());
+        this.logger.log(
+          "📧 Processing assigneesEmails (POST):",
+          assigneesEmails,
+        );
+        const emailList = assigneesEmails.filter(
+          (e) => typeof e === "string" && e.trim(),
+        );
         if (emailList.length > 0) {
           const emailQuery = `
             SELECT id FROM user_profiles 
             WHERE email = ANY($1::TEXT[])
           `;
-          const { rows: userRows } = await this.pool.query(emailQuery, [emailList]);
+          const { rows: userRows } = await this.pool.query(emailQuery, [
+            emailList,
+          ]);
           assigneeUUIDs = userRows.map((row) => row.id);
-          this.logger.log('📧 Resolved emails to UUIDs:', assigneeUUIDs);
+          this.logger.log("📧 Resolved emails to UUIDs:", assigneeUUIDs);
         }
       }
       // Otherwise, use assignees if provided (should be UUIDs)
       else if (Array.isArray(assignees) && assignees.length > 0) {
-        this.logger.log('👥 Processing assignees (POST):', assignees);
+        this.logger.log("👥 Processing assignees (POST):", assignees);
         assigneeUUIDs = assignees;
       }
 
       // DEFAULT ASSIGNEES: If no assignees provided, assign to creator + super admin
       if (assigneeUUIDs.length === 0) {
-        this.logger.log('📋 No assignees provided - setting default (creator + super admin)');
+        this.logger.log(
+          "📋 No assignees provided - setting default (creator + super admin)",
+        );
 
         // Add creator as assignee
         if (createdByUuid) {
@@ -768,31 +873,39 @@ export class TasksController {
           assigneeUUIDs.push(superAdminId);
         }
 
-        this.logger.log('📋 Default assignees set:', assigneeUUIDs);
+        this.logger.log("📋 Default assignees set:", assigneeUUIDs);
       }
 
       // HIERARCHY PERMISSION CHECK: Verify creator can assign to all assignees
       for (const assigneeId of assigneeUUIDs) {
         if (assigneeId !== createdByUuid) {
-          const canAssign = await this.canAssignToUser(createdByUuid!, assigneeId);
+          const canAssign = await this.canAssignToUser(
+            createdByUuid!,
+            assigneeId,
+          );
           if (!canAssign) {
-            this.logger.log(`❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`);
+            this.logger.log(
+              `❌ Permission denied: ${createdByUuid} cannot assign to ${assigneeId}`,
+            );
             return {
               success: false,
-              error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
+              error:
+                "אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך",
             };
           }
         }
       }
-      this.logger.log('✅ Hierarchy permission check passed for all assignees');
-
+      this.logger.log("✅ Hierarchy permission check passed for all assignees");
 
       // Validate estimated_hours if provided
       let parsedEstimatedHours = null;
       if (estimated_hours !== null && estimated_hours !== undefined) {
         const hours = parseFloat(String(estimated_hours));
         if (isNaN(hours) || hours < 0) {
-          return { success: false, error: 'estimated_hours must be a non-negative number' };
+          return {
+            success: false,
+            error: "estimated_hours must be a non-negative number",
+          };
         }
         parsedEstimatedHours = hours;
       }
@@ -817,41 +930,51 @@ export class TasksController {
         parsedEstimatedHours,
       ];
 
-      this.logger.log(`🚀 Executing INSERT SQL with params:`, JSON.stringify(params));
+      this.logger.log(
+        `🚀 Executing INSERT SQL with params:`,
+        JSON.stringify(params),
+      );
 
       const { rows } = await this.pool.query(sql, params);
       const newTask = rows[0];
-      this.logger.log('✅ Task inserted successfully:', newTask.id);
+      this.logger.log("✅ Task inserted successfully:", newTask.id);
 
       // NOTIFICATION: Notify assignees
       if (assigneeUUIDs.length > 0) {
         const timestamp = new Date().toISOString();
-        this.logger.log(`🔔 Preparing to notify ${assigneeUUIDs.length} assignees...`);
+        this.logger.log(
+          `🔔 Preparing to notify ${assigneeUUIDs.length} assignees...`,
+        );
 
         for (const assigneeId of assigneeUUIDs) {
           try {
             // Check if notifications table exists first (quick safeguard)
             // Actually, just try to create and catch error
 
-            this.logger.log(`🔔 Sending new task notification to ${assigneeId}`); // Log BEFORE attempt
+            this.logger.log(
+              `🔔 Sending new task notification to ${assigneeId}`,
+            ); // Log BEFORE attempt
 
             await this.itemsService.create(
-              'notifications',
+              "notifications",
               assigneeId,
-              require('crypto').randomUUID(),
+              randomUUID(),
               {
-                title: 'משימה חדשה',
+                title: "משימה חדשה",
                 body: `הוקצתה לך משימה חדשה: ${newTask.title}`,
-                type: 'system',
+                type: "system",
                 timestamp,
                 read: false,
                 userId: assigneeId,
-                data: { taskId: newTask.id }
-              }
+                data: { taskId: newTask.id },
+              },
             );
             this.logger.log(`✅ Notification sent to ${assigneeId}`);
           } catch (itemError) {
-            this.logger.error(`❌ Failed to create notification for ${assigneeId}. It is likely the 'notifications' table does not exist.`, itemError);
+            this.logger.error(
+              `❌ Failed to create notification for ${assigneeId}. It is likely the 'notifications' table does not exist.`,
+              itemError,
+            );
             // Verify table existence - if it fails here, we should probably auto-create it or warn loudly
           }
         }
@@ -870,91 +993,123 @@ export class TasksController {
           // 1. Create post for the CREATOR first (if they exist)
           if (createdByUuid) {
             try {
-              await this.pool.query(`
+              await this.pool.query(
+                `
                 INSERT INTO posts (author_id, task_id, title, description, post_type)
                 VALUES ($1, $2, $3, $4, 'task_assignment')
-              `, [
-                createdByUuid,
-                newTask.id,
-                `יצרת משימה חדשה: ${newTask.title}`,
-                newTask.description
-                  ? `יצרת משימה חדשה: ${newTask.description}`
-                  : `יצרת משימה חדשה: ${newTask.title}`
-              ]);
+              `,
+                [
+                  createdByUuid,
+                  newTask.id,
+                  `יצרת משימה חדשה: ${newTask.title}`,
+                  newTask.description
+                    ? `יצרת משימה חדשה: ${newTask.description}`
+                    : `יצרת משימה חדשה: ${newTask.title}`,
+                ],
+              );
               postResults.created++;
               postCreatedFor.add(createdByUuid);
               this.logger.log(`✅ Post created for creator ${createdByUuid}`);
             } catch (postError) {
               postResults.failed++;
-              const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
-              postResults.errors.push(`Failed for creator ${createdByUuid}: ${errorMsg}`);
-              this.logger.error(`❌ Failed to create post for creator ${createdByUuid}:`, postError);
+              const errorMsg =
+                postError instanceof Error
+                  ? postError.message
+                  : "Unknown error";
+              postResults.errors.push(
+                `Failed for creator ${createdByUuid}: ${errorMsg}`,
+              );
+              this.logger.error(
+                `❌ Failed to create post for creator ${createdByUuid}:`,
+                postError,
+              );
             }
           }
 
           // 2. Create posts for ASSIGNEES (skip if already got post as creator)
-          this.logger.log(`📝 Creating posts for ${assigneeUUIDs.length} assignees...`);
+          this.logger.log(
+            `📝 Creating posts for ${assigneeUUIDs.length} assignees...`,
+          );
           for (const assigneeId of assigneeUUIDs) {
             // Skip if this assignee already got a post (e.g., they are also the creator)
             if (postCreatedFor.has(assigneeId)) {
-              this.logger.log(`⏭️ Skipping post for ${assigneeId} - already created as creator`);
+              this.logger.log(
+                `⏭️ Skipping post for ${assigneeId} - already created as creator`,
+              );
               continue;
             }
 
             try {
-              await this.pool.query(`
+              await this.pool.query(
+                `
                 INSERT INTO posts (author_id, task_id, title, description, post_type)
                 VALUES ($1, $2, $3, $4, 'task_assignment')
-              `, [
-                assigneeId,
-                newTask.id,
-                `משימה חדשה: ${newTask.title}`,
-                newTask.description
-                  ? `הוקצתה לך משימה חדשה: ${newTask.description}`
-                  : `הוקצתה לך משימה חדשה: ${newTask.title}`
-              ]);
+              `,
+                [
+                  assigneeId,
+                  newTask.id,
+                  `משימה חדשה: ${newTask.title}`,
+                  newTask.description
+                    ? `הוקצתה לך משימה חדשה: ${newTask.description}`
+                    : `הוקצתה לך משימה חדשה: ${newTask.title}`,
+                ],
+              );
               postResults.created++;
               postCreatedFor.add(assigneeId);
               this.logger.log(`✅ Post created for assignee ${assigneeId}`);
             } catch (postError) {
               postResults.failed++;
-              const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+              const errorMsg =
+                postError instanceof Error
+                  ? postError.message
+                  : "Unknown error";
               postResults.errors.push(`Failed for ${assigneeId}: ${errorMsg}`);
-              this.logger.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+              this.logger.error(
+                `❌ Failed to create post for assignee ${assigneeId}:`,
+                postError,
+              );
             }
           }
 
-          this.logger.log(`📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`);
+          this.logger.log(
+            `📊 Post creation summary: ${postResults.created} created, ${postResults.failed} failed`,
+          );
 
           // Clear posts cache after creating posts
           if (postResults.created > 0) {
             try {
               await this.clearPostsCaches();
-              this.logger.log('✅ Posts caches cleared after post creation');
+              this.logger.log("✅ Posts caches cleared after post creation");
             } catch (cacheErr) {
-              this.logger.warn('Error clearing posts caches after creation (non-fatal):', cacheErr);
+              this.logger.warn(
+                "Error clearing posts caches after creation (non-fatal):",
+                cacheErr,
+              );
             }
           }
         } catch (tableError) {
-          this.logger.error('❌ Failed to ensure posts table:', tableError);
-          postResults.errors.push('Posts table initialization failed');
+          this.logger.error("❌ Failed to ensure posts table:", tableError);
+          postResults.errors.push("Posts table initialization failed");
         }
       }
 
       // Clear task list caches (blocking to prevent race condition)
       try {
         await this.clearTaskCaches();
-        this.logger.log('✅ Task caches cleared after creation');
+        this.logger.log("✅ Task caches cleared after creation");
       } catch (cacheErr) {
-        this.logger.warn('Error clearing caches after task creation (non-fatal):', cacheErr);
+        this.logger.warn(
+          "Error clearing caches after task creation (non-fatal):",
+          cacheErr,
+        );
       }
 
       return { success: true, data: newTask };
     } catch (error) {
-      this.logger.error('Error creating task:', error);
+      this.logger.error("Error creating task:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to create task'
+        error: error instanceof Error ? error.message : "Failed to create task",
       };
     }
   }
@@ -964,39 +1119,43 @@ export class TasksController {
    * POST /api/tasks/:id/log-hours
    * Note: Must be before @Patch(':id') to ensure proper route matching
    */
-  @Post(':id/log-hours')
+  @Post(":id/log-hours")
   @UseGuards(JwtAuthGuard)
-  async logTaskHours(@Param('id') taskId: string, @Body() body: any) {
+  async logTaskHours(@Param("id") taskId: string, @Body() body: any) {
     try {
       // Ensure task_time_logs table exists
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(taskId)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
       const { hours, user_id } = body || {};
 
-      if (!hours || typeof hours !== 'number' || hours <= 0) {
-        return { success: false, error: 'hours must be a positive number' };
+      if (!hours || typeof hours !== "number" || hours <= 0) {
+        return { success: false, error: "hours must be a positive number" };
       }
 
       if (!user_id) {
-        return { success: false, error: 'user_id is required' };
+        return { success: false, error: "user_id is required" };
       }
 
       // Resolve user_id to UUID
       const userIdUuid = await this.resolveUserIdToUUID(user_id);
       if (!userIdUuid) {
-        return { success: false, error: 'Invalid user_id' };
+        return { success: false, error: "Invalid user_id" };
       }
 
       // Verify task exists
-      const taskCheck = await this.pool.query('SELECT id FROM tasks WHERE id = $1', [taskId]);
+      const taskCheck = await this.pool.query(
+        "SELECT id FROM tasks WHERE id = $1",
+        [taskId],
+      );
       if (!taskCheck.rows[0]) {
-        return { success: false, error: 'Task not found' };
+        return { success: false, error: "Task not found" };
       }
 
       // Check if table exists before inserting
@@ -1009,64 +1168,85 @@ export class TasksController {
       `);
 
       if (!tableExists.rows[0].exists) {
-        return { success: false, error: 'Time logging is not available - table not initialized' };
+        return {
+          success: false,
+          error: "Time logging is not available - table not initialized",
+        };
       }
 
       // Insert or update time log (using ON CONFLICT for unique constraint)
-      const { rows } = await this.pool.query(`
+      const { rows } = await this.pool.query(
+        `
         INSERT INTO task_time_logs (task_id, user_id, actual_hours, logged_at)
         VALUES ($1, $2, $3::NUMERIC, NOW())
         ON CONFLICT (task_id, user_id)
         DO UPDATE SET actual_hours = EXCLUDED.actual_hours, logged_at = NOW()
         RETURNING id, task_id, user_id, actual_hours, logged_at, created_at
-      `, [taskId, userIdUuid, hours]);
+      `,
+        [taskId, userIdUuid, hours],
+      );
 
       // Clear task cache
       try {
         await this.redisCache.delete(`task_${taskId}`);
         await this.clearTaskCaches();
       } catch (cacheError) {
-        this.logger.warn('Redis cache delete error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache delete error (non-fatal):", cacheError);
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      this.logger.error('Error logging task hours:', error);
+      this.logger.error("Error logging task hours:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to log task hours',
+        error:
+          error instanceof Error ? error.message : "Failed to log task hours",
       };
     }
   }
 
-  @Patch(':id')
+  @Patch(":id")
   @UseGuards(JwtAuthGuard, AdminAuthGuard)
-  async updateTask(@Param('id') id: string, @Body() body: any) {
+  async updateTask(@Param("id") id: string, @Body() body: any) {
     try {
       // Ensure table exists before updating
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
       // Fetch OLD task to compare assignees and check current status
-      const oldTaskRes = await this.pool.query('SELECT assignees, status FROM tasks WHERE id = $1', [id]);
+      const oldTaskRes = await this.pool.query(
+        "SELECT assignees, status FROM tasks WHERE id = $1",
+        [id],
+      );
       if (!oldTaskRes.rows[0]) {
-        return { success: false, error: 'Task not found' };
+        return { success: false, error: "Task not found" };
       }
       const oldAssignees: string[] = oldTaskRes.rows[0]?.assignees || [];
-      const oldStatus: string = oldTaskRes.rows[0]?.status || 'open';
+      const oldStatus: string = oldTaskRes.rows[0]?.status || "open";
 
       // Validate status if provided
-      if (body.status && !['open', 'in_progress', 'done', 'archived', 'stuck', 'testing'].includes(body.status)) {
-        return { success: false, error: 'Invalid status value' };
+      if (
+        body.status &&
+        ![
+          "open",
+          "in_progress",
+          "done",
+          "archived",
+          "stuck",
+          "testing",
+        ].includes(body.status)
+      ) {
+        return { success: false, error: "Invalid status value" };
       }
 
       // Check if status is changing to 'done' - require time log (only if table exists)
-      if (body.status === 'done' && oldStatus !== 'done') {
+      if (body.status === "done" && oldStatus !== "done") {
         const tableExists = await this.pool.query(`
           SELECT EXISTS (
             SELECT FROM information_schema.tables 
@@ -1078,14 +1258,16 @@ export class TasksController {
         if (tableExists.rows[0].exists) {
           // Check if there's a time log for this task
           const timeLogCheck = await this.pool.query(
-            'SELECT COUNT(*) as count FROM task_time_logs WHERE task_id = $1',
-            [id]
+            "SELECT COUNT(*) as count FROM task_time_logs WHERE task_id = $1",
+            [id],
           );
-          const hasTimeLog = parseInt(timeLogCheck.rows[0]?.count || '0', 10) > 0;
+          const hasTimeLog =
+            parseInt(timeLogCheck.rows[0]?.count || "0", 10) > 0;
           if (!hasTimeLog) {
             return {
               success: false,
-              error: 'נדרש לרשום שעות עבודה לפני סימון המשימה כבוצעה. אנא מלא את שעות העבודה בפועל.',
+              error:
+                "נדרש לרשום שעות עבודה לפני סימון המשימה כבוצעה. אנא מלא את שעות העבודה בפועל.",
               requiresHoursLog: true,
             };
           }
@@ -1094,17 +1276,17 @@ export class TasksController {
       }
 
       // Validate priority if provided
-      if (body.priority && !['low', 'medium', 'high'].includes(body.priority)) {
-        return { success: false, error: 'Invalid priority value' };
+      if (body.priority && !["low", "medium", "high"].includes(body.priority)) {
+        return { success: false, error: "Invalid priority value" };
       }
 
       // Validate and parse due_date if provided
       let parsedDueDate = null;
       if (body.due_date !== undefined && body.due_date !== null) {
-        if (typeof body.due_date === 'string') {
+        if (typeof body.due_date === "string") {
           const date = new Date(body.due_date);
           if (isNaN(date.getTime())) {
-            return { success: false, error: 'Invalid due_date format' };
+            return { success: false, error: "Invalid due_date format" };
           }
           parsedDueDate = date.toISOString();
         } else {
@@ -1112,21 +1294,24 @@ export class TasksController {
         }
       }
 
-      this.logger.log(`📝 PATCH /api/tasks/${id} payload:`, JSON.stringify(body));
+      this.logger.log(
+        `📝 PATCH /api/tasks/${id} payload:`,
+        JSON.stringify(body),
+      );
 
       // Build partial update dynamically
       const allowed = [
-        'title',
-        'description',
-        'status',
-        'priority',
-        'category',
-        'due_date',
-        'assignees',
-        'assigneesEmails',
-        'tags',
-        'checklist',
-        'estimated_hours',
+        "title",
+        "description",
+        "status",
+        "priority",
+        "category",
+        "due_date",
+        "assignees",
+        "assigneesEmails",
+        "tags",
+        "checklist",
+        "estimated_hours",
       ] as const;
       const sets: string[] = [];
       const params: any[] = [];
@@ -1135,21 +1320,25 @@ export class TasksController {
       let shouldUpdateAssignees = false;
       let assigneeUUIDs: string[] = [];
 
-      if ('assigneesEmails' in body && Array.isArray(body.assigneesEmails)) {
-        this.logger.log('📧 Processing assigneesEmails update');
-        const emailList = body.assigneesEmails.filter((e: any) => typeof e === 'string' && e.trim());
+      if ("assigneesEmails" in body && Array.isArray(body.assigneesEmails)) {
+        this.logger.log("📧 Processing assigneesEmails update");
+        const emailList = body.assigneesEmails.filter(
+          (e: any) => typeof e === "string" && e.trim(),
+        );
         if (emailList.length > 0) {
           const emailQuery = `
             SELECT id FROM user_profiles 
             WHERE email = ANY($1::TEXT[])
           `;
-          const { rows: userRows } = await this.pool.query(emailQuery, [emailList]);
+          const { rows: userRows } = await this.pool.query(emailQuery, [
+            emailList,
+          ]);
           assigneeUUIDs = userRows.map((row) => row.id);
         }
         shouldUpdateAssignees = true;
-      } else if ('assignees' in body) {
+      } else if ("assignees" in body) {
         // Handle assignees update explicitly if key exists
-        this.logger.log('👥 Processing assignees update:', body.assignees);
+        this.logger.log("👥 Processing assignees update:", body.assignees);
         if (Array.isArray(body.assignees)) {
           assigneeUUIDs = body.assignees;
           shouldUpdateAssignees = true;
@@ -1158,12 +1347,12 @@ export class TasksController {
 
       // Build SET clause
       for (const key of allowed) {
-        if (key === 'assignees' || key === 'assigneesEmails') {
+        if (key === "assignees" || key === "assigneesEmails") {
           // Skip, handled above
           continue;
         }
 
-        if (key === 'due_date') {
+        if (key === "due_date") {
           // Handle due_date separately with parsed value
           if (body.due_date !== undefined) {
             params.push(parsedDueDate);
@@ -1172,14 +1361,17 @@ export class TasksController {
           continue;
         }
 
-        if (key === 'estimated_hours') {
+        if (key === "estimated_hours") {
           // Handle estimated_hours separately with validation
           if (body.estimated_hours !== undefined) {
             let parsedHours = null;
             if (body.estimated_hours !== null) {
               const hours = parseFloat(String(body.estimated_hours));
               if (isNaN(hours) || hours < 0) {
-                return { success: false, error: 'estimated_hours must be a non-negative number' };
+                return {
+                  success: false,
+                  error: "estimated_hours must be a non-negative number",
+                };
               }
               parsedHours = hours;
             }
@@ -1191,14 +1383,16 @@ export class TasksController {
 
         if (key in body) {
           params.push(
-            key === 'tags'
-              ? (Array.isArray(body[key]) ? body[key] : [])
+            key === "tags"
+              ? Array.isArray(body[key])
+                ? body[key]
+                : []
               : body[key],
           );
           const idx = params.length;
-          if (key === 'tags') {
+          if (key === "tags") {
             sets.push(`tags = $${idx}::TEXT[]`);
-          } else if (key === 'checklist') {
+          } else if (key === "checklist") {
             sets.push(`checklist = $${idx}::JSONB`);
           } else {
             sets.push(`${key} = $${idx}`);
@@ -1207,30 +1401,43 @@ export class TasksController {
       }
 
       if (shouldUpdateAssignees) {
-        this.logger.log('👥 Updating assignees to set:', assigneeUUIDs);
+        this.logger.log("👥 Updating assignees to set:", assigneeUUIDs);
 
         // HIERARCHY PERMISSION CHECK: Get the task's created_by and verify permissions
-        const taskCreatorRes = await this.pool.query('SELECT created_by FROM tasks WHERE id = $1', [id]);
+        const taskCreatorRes = await this.pool.query(
+          "SELECT created_by FROM tasks WHERE id = $1",
+          [id],
+        );
         const taskCreatorId = taskCreatorRes.rows[0]?.created_by;
 
         if (taskCreatorId) {
           // Check permissions for new assignees only (not ones that were already there)
           const safeOldAssignees = (oldAssignees || []).filter(Boolean);
-          const newlyAddedAssignees = assigneeUUIDs.filter((uid: string) => !safeOldAssignees.includes(uid));
+          const newlyAddedAssignees = assigneeUUIDs.filter(
+            (uid: string) => !safeOldAssignees.includes(uid),
+          );
 
           for (const assigneeId of newlyAddedAssignees) {
             if (assigneeId !== taskCreatorId) {
-              const canAssign = await this.canAssignToUser(taskCreatorId, assigneeId);
+              const canAssign = await this.canAssignToUser(
+                taskCreatorId,
+                assigneeId,
+              );
               if (!canAssign) {
-                this.logger.log(`❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`);
+                this.logger.log(
+                  `❌ Permission denied: ${taskCreatorId} cannot assign to ${assigneeId}`,
+                );
                 return {
                   success: false,
-                  error: 'אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך'
+                  error:
+                    "אין לך הרשאה להקצות משימה למשתמש זה - ניתן להקצות רק לעובדים שלך",
                 };
               }
             }
           }
-          this.logger.log('✅ Hierarchy permission check passed for updated assignees');
+          this.logger.log(
+            "✅ Hierarchy permission check passed for updated assignees",
+          );
         }
 
         params.push(assigneeUUIDs);
@@ -1238,21 +1445,21 @@ export class TasksController {
       }
 
       if (!sets.length) {
-        return { success: false, error: 'No valid fields to update' };
+        return { success: false, error: "No valid fields to update" };
       }
 
       params.push(id);
       const sql = `
-        UPDATE tasks SET ${sets.join(', ')}, updated_at = NOW()
+        UPDATE tasks SET ${sets.join(", ")}, updated_at = NOW()
         WHERE id = $${params.length}
         RETURNING id, title, description, status, priority, category, due_date, assignees, tags, checklist, created_by, parent_task_id, estimated_hours, created_at, updated_at
       `;
 
-      this.logger.log('🚀 Executing SQL:', sql, params);
+      this.logger.log("🚀 Executing SQL:", sql, params);
 
       const { rows } = await this.pool.query(sql, params);
       if (!rows.length) {
-        return { success: false, error: 'Task not found' };
+        return { success: false, error: "Task not found" };
       }
 
       const updatedTask = rows[0];
@@ -1262,39 +1469,46 @@ export class TasksController {
         const newAssignees = updatedTask.assignees || [];
         // Handle case where oldAssignees might be null/undefined or contains nulls
         const safeOldAssignees = (oldAssignees || []).filter(Boolean);
-        const addedAssignees = newAssignees.filter((uid: string) => !safeOldAssignees.includes(uid));
+        const addedAssignees = newAssignees.filter(
+          (uid: string) => !safeOldAssignees.includes(uid),
+        );
 
-        this.logger.log('🔔 Notification check:', {
+        this.logger.log("🔔 Notification check:", {
           safeOld: safeOldAssignees,
           new: newAssignees,
-          added: addedAssignees
+          added: addedAssignees,
         });
 
         if (addedAssignees.length > 0) {
           const timestamp = new Date().toISOString();
-          this.logger.log(`🔔 Found ${addedAssignees.length} new assignees to notify...`);
+          this.logger.log(
+            `🔔 Found ${addedAssignees.length} new assignees to notify...`,
+          );
 
           for (const assigneeId of addedAssignees) {
             try {
               this.logger.log(`🔔 Sending notification to ${assigneeId}`);
 
               await this.itemsService.create(
-                'notifications',
+                "notifications",
                 assigneeId,
-                require('crypto').randomUUID(),
+                randomUUID(),
                 {
-                  title: 'משימה חדשה',
+                  title: "משימה חדשה",
                   body: `הוקצתה לך משימה חדשה: ${updatedTask.title}`,
-                  type: 'system',
+                  type: "system",
                   timestamp,
                   read: false,
                   userId: assigneeId,
-                  data: { taskId: updatedTask.id }
-                }
+                  data: { taskId: updatedTask.id },
+                },
               );
               this.logger.log(`✅ Notification sent to ${assigneeId}`);
             } catch (err) {
-              this.logger.error(`❌ Failed to create notification for ${assigneeId}`, err);
+              this.logger.error(
+                `❌ Failed to create notification for ${assigneeId}`,
+                err,
+              );
             }
           }
 
@@ -1305,40 +1519,60 @@ export class TasksController {
             // Ensure posts table exists before creating posts
             await this.ensurePostsTable();
 
-            this.logger.log(`📝 Creating posts for ${addedAssignees.length} newly assigned users...`);
+            this.logger.log(
+              `📝 Creating posts for ${addedAssignees.length} newly assigned users...`,
+            );
             for (const assigneeId of addedAssignees) {
               try {
-                await this.pool.query(`
+                await this.pool.query(
+                  `
                   INSERT INTO posts (author_id, task_id, title, description, post_type)
                   VALUES ($1, $2, $3, $4, 'task_assignment')
-                `, [
-                  assigneeId,
-                  updatedTask.id,
-                  `משימה חדשה: ${updatedTask.title}`,
-                  updatedTask.description
-                    ? `הוקצתה לך משימה חדשה: ${updatedTask.description}`
-                    : `הוקצתה לך משימה חדשה: ${updatedTask.title}`
-                ]);
+                `,
+                  [
+                    assigneeId,
+                    updatedTask.id,
+                    `משימה חדשה: ${updatedTask.title}`,
+                    updatedTask.description
+                      ? `הוקצתה לך משימה חדשה: ${updatedTask.description}`
+                      : `הוקצתה לך משימה חדשה: ${updatedTask.title}`,
+                  ],
+                );
                 assignPostResults.created++;
-                this.logger.log(`✅ Post created for newly assigned user ${assigneeId}`);
+                this.logger.log(
+                  `✅ Post created for newly assigned user ${assigneeId}`,
+                );
               } catch (postError) {
                 assignPostResults.failed++;
-                this.logger.error(`❌ Failed to create post for assignee ${assigneeId}:`, postError);
+                this.logger.error(
+                  `❌ Failed to create post for assignee ${assigneeId}:`,
+                  postError,
+                );
               }
             }
-            this.logger.log(`📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`);
+            this.logger.log(
+              `📊 Assignment post summary: ${assignPostResults.created} created, ${assignPostResults.failed} failed`,
+            );
 
             // Clear posts cache after creating posts
             if (assignPostResults.created > 0) {
               try {
                 await this.clearPostsCaches();
-                this.logger.log('✅ Posts caches cleared after assignment post creation');
+                this.logger.log(
+                  "✅ Posts caches cleared after assignment post creation",
+                );
               } catch (cacheErr) {
-                this.logger.warn('Error clearing posts caches after assignment (non-fatal):', cacheErr);
+                this.logger.warn(
+                  "Error clearing posts caches after assignment (non-fatal):",
+                  cacheErr,
+                );
               }
             }
           } catch (tableError) {
-            this.logger.error('❌ Failed to ensure posts table for assignment posts:', tableError);
+            this.logger.error(
+              "❌ Failed to ensure posts table for assignment posts:",
+              tableError,
+            );
           }
         }
       }
@@ -1347,12 +1581,15 @@ export class TasksController {
       try {
         await this.redisCache.delete(`task_${id}`);
         await this.clearTaskCaches();
-        this.logger.log('✅ Task caches cleared after update');
+        this.logger.log("✅ Task caches cleared after update");
       } catch (cacheErr) {
-        this.logger.warn('Error clearing caches after task update (non-fatal):', cacheErr);
+        this.logger.warn(
+          "Error clearing caches after task update (non-fatal):",
+          cacheErr,
+        );
       }
 
-      if (rows.length > 0 && body.status === 'done') {
+      if (rows.length > 0 && body.status === "done") {
         const task = rows[0];
         // AUTO-POST: Create posts for task completion
         const completionPostResults = { created: 0, failed: 0 };
@@ -1361,97 +1598,130 @@ export class TasksController {
           // Ensure posts table exists before creating posts
           await this.ensurePostsTable();
 
-          this.logger.log(`📝 Creating completion posts for task ${task.id}...`);
+          this.logger.log(
+            `📝 Creating completion posts for task ${task.id}...`,
+          );
 
           // 1. Post for creator
           if (task.created_by) {
             try {
-              await this.pool.query(`
+              await this.pool.query(
+                `
                 INSERT INTO posts (author_id, task_id, title, description, post_type)
                 VALUES ($1, $2, $3, $4, 'task_completion')
-              `, [
-                task.created_by,
-                task.id,
-                `משימה הושלמה: ${task.title}`,
-                task.description
-                  ? `המשימה "${task.title}" הושלמה בהצלחה! ${task.description}`
-                  : `המשימה "${task.title}" הושלמה בהצלחה!`
-              ]);
+              `,
+                [
+                  task.created_by,
+                  task.id,
+                  `משימה הושלמה: ${task.title}`,
+                  task.description
+                    ? `המשימה "${task.title}" הושלמה בהצלחה! ${task.description}`
+                    : `המשימה "${task.title}" הושלמה בהצלחה!`,
+                ],
+              );
               completionPostResults.created++;
-              this.logger.log(`✅ Completion post created for creator ${task.created_by}`);
+              this.logger.log(
+                `✅ Completion post created for creator ${task.created_by}`,
+              );
             } catch (creatorPostError) {
               completionPostResults.failed++;
-              this.logger.error(`❌ Failed to create completion post for creator ${task.created_by}:`, creatorPostError);
+              this.logger.error(
+                `❌ Failed to create completion post for creator ${task.created_by}:`,
+                creatorPostError,
+              );
             }
           }
 
           // 2. Post for assignees
           if (task.assignees && task.assignees.length > 0) {
             for (const assigneeId of task.assignees) {
-              if (assigneeId !== task.created_by) { // Avoid duplicate if assigned to creator
+              if (assigneeId !== task.created_by) {
+                // Avoid duplicate if assigned to creator
                 try {
-                  await this.pool.query(`
+                  await this.pool.query(
+                    `
                     INSERT INTO posts (author_id, task_id, title, description, post_type)
                     VALUES ($1, $2, $3, $4, 'task_completion')
-                  `, [
-                    assigneeId,
-                    task.id,
-                    `ביצעתי משימה: ${task.title}`,
-                    task.description
-                      ? `השלמתי את המשימה "${task.title}" בהצלחה! ${task.description}`
-                      : `השלמתי את המשימה "${task.title}" בהצלחה!`
-                  ]);
+                  `,
+                    [
+                      assigneeId,
+                      task.id,
+                      `ביצעתי משימה: ${task.title}`,
+                      task.description
+                        ? `השלמתי את המשימה "${task.title}" בהצלחה! ${task.description}`
+                        : `השלמתי את המשימה "${task.title}" בהצלחה!`,
+                    ],
+                  );
                   completionPostResults.created++;
-                  this.logger.log(`✅ Completion post created for assignee ${assigneeId}`);
+                  this.logger.log(
+                    `✅ Completion post created for assignee ${assigneeId}`,
+                  );
                 } catch (assigneePostError) {
                   completionPostResults.failed++;
-                  this.logger.error(`❌ Failed to create completion post for assignee ${assigneeId}:`, assigneePostError);
+                  this.logger.error(
+                    `❌ Failed to create completion post for assignee ${assigneeId}:`,
+                    assigneePostError,
+                  );
                 }
               }
             }
           }
-          this.logger.log(`📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`);
+          this.logger.log(
+            `📊 Completion post summary: ${completionPostResults.created} created, ${completionPostResults.failed} failed`,
+          );
 
           // Clear posts cache after creating posts
           if (completionPostResults.created > 0) {
             try {
               await this.clearPostsCaches();
-              this.logger.log('✅ Posts caches cleared after completion post creation');
+              this.logger.log(
+                "✅ Posts caches cleared after completion post creation",
+              );
             } catch (cacheErr) {
-              this.logger.warn('Error clearing posts caches after completion (non-fatal):', cacheErr);
+              this.logger.warn(
+                "Error clearing posts caches after completion (non-fatal):",
+                cacheErr,
+              );
             }
           }
         } catch (tableError) {
-          this.logger.error('❌ Failed to ensure posts table for completion posts:', tableError);
+          this.logger.error(
+            "❌ Failed to ensure posts table for completion posts:",
+            tableError,
+          );
         }
       }
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      this.logger.error('Error updating task:', error);
+      this.logger.error("Error updating task:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to update task'
+        error: error instanceof Error ? error.message : "Failed to update task",
       };
     }
   }
 
-  @Delete(':id')
+  @Delete(":id")
   @UseGuards(JwtAuthGuard, AdminAuthGuard)
-  async deleteTask(@Param('id') id: string) {
+  async deleteTask(@Param("id") id: string) {
     try {
       // Ensure table exists before deleting
       await this.ensureTasksTable();
 
       // Validate UUID format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
-        return { success: false, error: 'Invalid task ID format' };
+        return { success: false, error: "Invalid task ID format" };
       }
 
-      const { rowCount } = await this.pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+      const { rowCount } = await this.pool.query(
+        "DELETE FROM tasks WHERE id = $1",
+        [id],
+      );
       if (!rowCount) {
-        return { success: false, error: 'Task not found' };
+        return { success: false, error: "Task not found" };
       }
 
       // Try to clear task caches (but don't fail if Redis is unavailable)
@@ -1459,15 +1729,15 @@ export class TasksController {
         await this.redisCache.delete(`task_${id}`);
         await this.clearTaskCaches();
       } catch (cacheError) {
-        this.logger.warn('Redis cache delete error (non-fatal):', cacheError);
+        this.logger.warn("Redis cache delete error (non-fatal):", cacheError);
       }
 
-      return { success: true, message: 'Task deleted' };
+      return { success: true, message: "Task deleted" };
     } catch (error) {
-      this.logger.error('Error deleting task:', error);
+      this.logger.error("Error deleting task:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to delete task',
+        error: error instanceof Error ? error.message : "Failed to delete task",
       };
     }
   }
@@ -1478,9 +1748,12 @@ export class TasksController {
    */
   private async clearTaskCaches() {
     try {
-      await this.redisCache.invalidatePattern('tasks_list_*');
+      await this.redisCache.invalidatePattern("tasks_list_*");
     } catch (cacheError) {
-      this.logger.warn('Redis cache invalidation error (non-fatal):', cacheError);
+      this.logger.warn(
+        "Redis cache invalidation error (non-fatal):",
+        cacheError,
+      );
     }
   }
 
@@ -1490,10 +1763,13 @@ export class TasksController {
    */
   private async clearPostsCaches() {
     try {
-      await this.redisCache.invalidatePattern('posts_list_*');
-      await this.redisCache.invalidatePattern('user_posts_*');
+      await this.redisCache.invalidatePattern("posts_list_*");
+      await this.redisCache.invalidatePattern("user_posts_*");
     } catch (cacheError) {
-      this.logger.warn('Redis cache invalidation error for posts (non-fatal):', cacheError);
+      this.logger.warn(
+        "Redis cache invalidation error for posts (non-fatal):",
+        cacheError,
+      );
     }
   }
 
@@ -1501,9 +1777,9 @@ export class TasksController {
    * Get hours report for a manager and their team
    * GET /api/tasks/hours-report/:managerId
    */
-  @Get('hours-report/:managerId')
+  @Get("hours-report/:managerId")
   @UseGuards(JwtAuthGuard)
-  async getHoursReport(@Param('managerId') managerId: string) {
+  async getHoursReport(@Param("managerId") managerId: string) {
     try {
       // Ensure task_time_logs table exists
       await this.ensureTasksTable();
@@ -1534,11 +1810,12 @@ export class TasksController {
       // Resolve managerId to UUID
       const managerUuid = await this.resolveUserIdToUUID(managerId);
       if (!managerUuid) {
-        return { success: false, error: 'Invalid manager ID' };
+        return { success: false, error: "Invalid manager ID" };
       }
 
       // Get all subordinates (recursive)
-      const { rows: subordinates } = await this.pool.query(`
+      const { rows: subordinates } = await this.pool.query(
+        `
         WITH RECURSIVE subordinates AS (
           SELECT id, name, email
           FROM user_profiles
@@ -1551,28 +1828,41 @@ export class TasksController {
           INNER JOIN subordinates s ON u.parent_manager_id = s.id
         )
         SELECT id, name, email FROM subordinates
-      `, [managerUuid]);
+      `,
+        [managerUuid],
+      );
 
       const teamUserIds = [managerUuid, ...subordinates.map((s: any) => s.id)];
 
       // Get manager's own hours
-      const managerHoursRes = await this.pool.query(`
+      const managerHoursRes = await this.pool.query(
+        `
         SELECT COALESCE(SUM(actual_hours), 0)::NUMERIC as total_hours
         FROM task_time_logs
         WHERE user_id = $1
-      `, [managerUuid]);
-      const managerHours = parseFloat(managerHoursRes.rows[0]?.total_hours || '0');
+      `,
+        [managerUuid],
+      );
+      const managerHours = parseFloat(
+        managerHoursRes.rows[0]?.total_hours || "0",
+      );
 
       // Get team total hours
-      const teamHoursRes = await this.pool.query(`
+      const teamHoursRes = await this.pool.query(
+        `
         SELECT COALESCE(SUM(actual_hours), 0)::NUMERIC as total_hours
         FROM task_time_logs
         WHERE user_id = ANY($1::UUID[])
-      `, [teamUserIds]);
-      const teamTotalHours = parseFloat(teamHoursRes.rows[0]?.total_hours || '0');
+      `,
+        [teamUserIds],
+      );
+      const teamTotalHours = parseFloat(
+        teamHoursRes.rows[0]?.total_hours || "0",
+      );
 
       // Get hours by task
-      const hoursByTaskRes = await this.pool.query(`
+      const hoursByTaskRes = await this.pool.query(
+        `
         SELECT 
           t.id as task_id,
           t.title as task_title,
@@ -1582,10 +1872,13 @@ export class TasksController {
         WHERE ttl.user_id = ANY($1::UUID[])
         GROUP BY t.id, t.title
         ORDER BY hours DESC
-      `, [teamUserIds]);
+      `,
+        [teamUserIds],
+      );
 
       // Get hours by period (month)
-      const hoursByPeriodRes = await this.pool.query(`
+      const hoursByPeriodRes = await this.pool.query(
+        `
         SELECT 
           TO_CHAR(logged_at, 'YYYY-MM') as period,
           COALESCE(SUM(actual_hours), 0)::NUMERIC as hours
@@ -1594,10 +1887,13 @@ export class TasksController {
         GROUP BY TO_CHAR(logged_at, 'YYYY-MM')
         ORDER BY period DESC
         LIMIT 12
-      `, [teamUserIds]);
+      `,
+        [teamUserIds],
+      );
 
       // Get hours by user
-      const hoursByUserRes = await this.pool.query(`
+      const hoursByUserRes = await this.pool.query(
+        `
         SELECT 
           u.id as user_id,
           u.name as user_name,
@@ -1607,7 +1903,9 @@ export class TasksController {
         WHERE u.id = ANY($1::UUID[])
         GROUP BY u.id, u.name
         ORDER BY hours DESC
-      `, [teamUserIds]);
+      `,
+        [teamUserIds],
+      );
 
       const report = {
         manager_hours: managerHours,
@@ -1615,22 +1913,22 @@ export class TasksController {
         by_task: hoursByTaskRes.rows.map((row: any) => ({
           task_id: row.task_id,
           task_title: row.task_title,
-          hours: parseFloat(row.hours || '0'),
+          hours: parseFloat(row.hours || "0"),
         })),
         by_period: hoursByPeriodRes.rows.map((row: any) => ({
           period: row.period,
-          hours: parseFloat(row.hours || '0'),
+          hours: parseFloat(row.hours || "0"),
         })),
         by_user: hoursByUserRes.rows.map((row: any) => ({
           user_id: row.user_id,
           user_name: row.user_name,
-          hours: parseFloat(row.hours || '0'),
+          hours: parseFloat(row.hours || "0"),
         })),
       };
 
       return { success: true, data: report };
     } catch (error) {
-      this.logger.error('Error getting hours report:', error);
+      this.logger.error("Error getting hours report:", error);
       // Return empty report on error instead of failing
       return {
         success: true,
@@ -1644,7 +1942,4 @@ export class TasksController {
       };
     }
   }
-
 }
-
-

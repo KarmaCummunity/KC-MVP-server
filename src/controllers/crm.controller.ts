@@ -1,42 +1,53 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Inject, Logger } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { RedisCacheService } from '../redis/redis-cache.service';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Inject,
+  Logger,
+} from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import { RedisCacheService } from "../redis/redis-cache.service";
 
 interface CreateContactDto {
-    name: string;
-    capabilities?: string;
-    desire?: string;
-    time_availability?: string;
-    source?: string; // Where they came from
-    referrer?: string; // Who brought them
-    status?: 'active' | 'inactive';
-    created_by?: string;
+  name: string;
+  capabilities?: string;
+  desire?: string;
+  time_availability?: string;
+  source?: string; // Where they came from
+  referrer?: string; // Who brought them
+  status?: "active" | "inactive";
+  created_by?: string;
 }
 
 interface UpdateContactDto {
-    name?: string;
-    capabilities?: string;
-    desire?: string;
-    time_availability?: string;
-    source?: string;
-    referrer?: string;
-    status?: 'active' | 'inactive';
+  name?: string;
+  capabilities?: string;
+  desire?: string;
+  time_availability?: string;
+  source?: string;
+  referrer?: string;
+  status?: "active" | "inactive";
 }
 
-@Controller('/api/crm')
+@Controller("/api/crm")
 export class CrmController {
   private readonly logger = new Logger(CrmController.name);
-    private readonly CACHE_TTL = 10 * 60; // 10 minutes
+  private readonly CACHE_TTL = 10 * 60; // 10 minutes
 
-    constructor(
-        @Inject(PG_POOL) private readonly pool: Pool,
-        private readonly redisCache: RedisCacheService,
-    ) { }
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    private readonly redisCache: RedisCacheService,
+  ) {}
 
-    private async ensureTable() {
-        try {
-            const checkTable = await this.pool.query(`
+  private async ensureTable() {
+    try {
+      const checkTable = await this.pool.query(`
         SELECT EXISTS (
           SELECT FROM information_schema.tables 
           WHERE table_schema = 'public' 
@@ -44,11 +55,11 @@ export class CrmController {
         );
       `);
 
-            if (!checkTable.rows[0].exists) {
-                this.logger.log('📋 Creating crm_contacts table...');
-                await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+      if (!checkTable.rows[0].exists) {
+        this.logger.log("📋 Creating crm_contacts table...");
+        await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
 
-                await this.pool.query(`
+        await this.pool.query(`
           CREATE TABLE IF NOT EXISTS crm_contacts (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             name VARCHAR(255) NOT NULL,
@@ -64,11 +75,15 @@ export class CrmController {
           )
         `);
 
-                await this.pool.query('CREATE INDEX IF NOT EXISTS idx_crm_contacts_name ON crm_contacts (name)');
-                await this.pool.query('CREATE INDEX IF NOT EXISTS idx_crm_contacts_status ON crm_contacts (status)');
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_crm_contacts_name ON crm_contacts (name)",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_crm_contacts_status ON crm_contacts (status)",
+        );
 
-                // Trigger for updated_at
-                await this.pool.query(`
+        // Trigger for updated_at
+        await this.pool.query(`
            DO $$
            BEGIN
                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_crm_contacts_updated_at') THEN
@@ -81,140 +96,174 @@ export class CrmController {
            $$;
         `);
 
-                this.logger.log('✅ crm_contacts table created successfully');
-            }
-        } catch (error) {
-            this.logger.error('❌ Error ensuring crm_contacts table:', error);
-        }
+        this.logger.log("✅ crm_contacts table created successfully");
+      }
+    } catch (error) {
+      this.logger.error("❌ Error ensuring crm_contacts table:", error);
+    }
+  }
+
+  @Get()
+  async getAllContacts(
+    @Query("status") status?: string,
+    @Query("search") search?: string,
+  ) {
+    await this.ensureTable();
+
+    const cacheKey = `crm_contacts_list_${status || "all"}_${search || ""}`;
+    const cached = await this.redisCache.get(cacheKey);
+
+    if (cached) {
+      return { success: true, data: cached };
     }
 
-    @Get()
-    async getAllContacts(
-        @Query('status') status?: string,
-        @Query('search') search?: string,
-    ) {
-        await this.ensureTable();
+    try {
+      let query = `SELECT * FROM crm_contacts WHERE 1=1`;
+      const params: any[] = [];
+      let paramIndex = 1;
 
-        const cacheKey = `crm_contacts_list_${status || 'all'}_${search || ''}`;
-        const cached = await this.redisCache.get(cacheKey);
+      if (status) {
+        query += ` AND status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
 
-        if (cached) {
-            return { success: true, data: cached };
-        }
+      if (search) {
+        query += ` AND (name ILIKE $${paramIndex} OR capabilities ILIKE $${paramIndex} OR source ILIKE $${paramIndex})`;
+        params.push(`%${search}%`);
+        paramIndex++;
+      }
 
-        try {
-            let query = `SELECT * FROM crm_contacts WHERE 1=1`;
-            const params: any[] = [];
-            let paramIndex = 1;
+      query += ` ORDER BY created_at DESC`;
 
-            if (status) {
-                query += ` AND status = $${paramIndex}`;
-                params.push(status);
-                paramIndex++;
-            }
+      const { rows } = await this.pool.query(query, params);
+      await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
 
-            if (search) {
-                query += ` AND (name ILIKE $${paramIndex} OR capabilities ILIKE $${paramIndex} OR source ILIKE $${paramIndex})`;
-                params.push(`%${search}%`);
-                paramIndex++;
-            }
-
-            query += ` ORDER BY created_at DESC`;
-
-            const { rows } = await this.pool.query(query, params);
-            await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
-
-            return { success: true, data: rows };
-        } catch (error) {
-            this.logger.error('Error fetching CRM contacts:', error);
-            return { success: false, error: 'Failed to fetch contacts', data: [] };
-        }
+      return { success: true, data: rows };
+    } catch (error) {
+      this.logger.error("Error fetching CRM contacts:", error);
+      return { success: false, error: "Failed to fetch contacts", data: [] };
     }
+  }
 
-    @Post()
-    async createContact(@Body() dto: CreateContactDto) {
-        await this.ensureTable();
+  @Post()
+  async createContact(@Body() dto: CreateContactDto) {
+    await this.ensureTable();
 
-        try {
-            if (!dto.name) {
-                return { success: false, error: 'Name is required' };
-            }
+    try {
+      if (!dto.name) {
+        return { success: false, error: "Name is required" };
+      }
 
-            // Simple handling for created_by - assuming it's passed as UUID or handled by frontend
-            // In a real scenario, we'd validate the user UUID.
+      // Simple handling for created_by - assuming it's passed as UUID or handled by frontend
+      // In a real scenario, we'd validate the user UUID.
 
-            const { rows } = await this.pool.query(
-                `INSERT INTO crm_contacts (name, capabilities, desire, time_availability, source, referrer, status, created_by)
+      const { rows } = await this.pool.query(
+        `INSERT INTO crm_contacts (name, capabilities, desire, time_availability, source, referrer, status, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::UUID)
          RETURNING *`,
-                [
-                    dto.name,
-                    dto.capabilities || null,
-                    dto.desire || null,
-                    dto.time_availability || null,
-                    dto.source || null,
-                    dto.referrer || null,
-                    dto.status || 'active',
-                    dto.created_by || null, // Assuming UUID string or null
-                ]
-            );
+        [
+          dto.name,
+          dto.capabilities || null,
+          dto.desire || null,
+          dto.time_availability || null,
+          dto.source || null,
+          dto.referrer || null,
+          dto.status || "active",
+          dto.created_by || null, // Assuming UUID string or null
+        ],
+      );
 
-            await this.redisCache.invalidatePattern('crm_contacts_list_*');
-            return { success: true, data: rows[0] };
-        } catch (error) {
-            this.logger.error('Error creating CRM contact:', error);
-            return { success: false, error: 'Failed to create contact' };
-        }
+      await this.redisCache.invalidatePattern("crm_contacts_list_*");
+      return { success: true, data: rows[0] };
+    } catch (error) {
+      this.logger.error("Error creating CRM contact:", error);
+      return { success: false, error: "Failed to create contact" };
     }
+  }
 
-    @Patch(':id')
-    async updateContact(@Param('id') id: string, @Body() dto: UpdateContactDto) {
-        await this.ensureTable();
+  @Patch(":id")
+  async updateContact(@Param("id") id: string, @Body() dto: UpdateContactDto) {
+    await this.ensureTable();
 
-        try {
-            const updates: string[] = [];
-            const params: any[] = [];
-            let paramIndex = 1;
+    try {
+      const updates: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
 
-            if (dto.name !== undefined) { updates.push(`name = $${paramIndex}`); params.push(dto.name); paramIndex++; }
-            if (dto.capabilities !== undefined) { updates.push(`capabilities = $${paramIndex}`); params.push(dto.capabilities); paramIndex++; }
-            if (dto.desire !== undefined) { updates.push(`desire = $${paramIndex}`); params.push(dto.desire); paramIndex++; }
-            if (dto.time_availability !== undefined) { updates.push(`time_availability = $${paramIndex}`); params.push(dto.time_availability); paramIndex++; }
-            if (dto.source !== undefined) { updates.push(`source = $${paramIndex}`); params.push(dto.source); paramIndex++; }
-            if (dto.referrer !== undefined) { updates.push(`referrer = $${paramIndex}`); params.push(dto.referrer); paramIndex++; }
-            if (dto.status !== undefined) { updates.push(`status = $${paramIndex}`); params.push(dto.status); paramIndex++; }
+      if (dto.name !== undefined) {
+        updates.push(`name = $${paramIndex}`);
+        params.push(dto.name);
+        paramIndex++;
+      }
+      if (dto.capabilities !== undefined) {
+        updates.push(`capabilities = $${paramIndex}`);
+        params.push(dto.capabilities);
+        paramIndex++;
+      }
+      if (dto.desire !== undefined) {
+        updates.push(`desire = $${paramIndex}`);
+        params.push(dto.desire);
+        paramIndex++;
+      }
+      if (dto.time_availability !== undefined) {
+        updates.push(`time_availability = $${paramIndex}`);
+        params.push(dto.time_availability);
+        paramIndex++;
+      }
+      if (dto.source !== undefined) {
+        updates.push(`source = $${paramIndex}`);
+        params.push(dto.source);
+        paramIndex++;
+      }
+      if (dto.referrer !== undefined) {
+        updates.push(`referrer = $${paramIndex}`);
+        params.push(dto.referrer);
+        paramIndex++;
+      }
+      if (dto.status !== undefined) {
+        updates.push(`status = $${paramIndex}`);
+        params.push(dto.status);
+        paramIndex++;
+      }
 
-            if (updates.length === 0) return { success: false, error: 'No fields to update' };
+      if (updates.length === 0)
+        return { success: false, error: "No fields to update" };
 
-            params.push(id);
-            const { rows } = await this.pool.query(
-                `UPDATE crm_contacts SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
-                params
-            );
+      params.push(id);
+      const { rows } = await this.pool.query(
+        `UPDATE crm_contacts SET ${updates.join(", ")} WHERE id = $${paramIndex} RETURNING *`,
+        params,
+      );
 
-            if (rows.length === 0) return { success: false, error: 'Contact not found' };
+      if (rows.length === 0)
+        return { success: false, error: "Contact not found" };
 
-            await this.redisCache.invalidatePattern('crm_contacts_list_*');
-            return { success: true, data: rows[0] };
-        } catch (error) {
-            this.logger.error('Error updating CRM contact:', error);
-            return { success: false, error: 'Failed to update contact' };
-        }
+      await this.redisCache.invalidatePattern("crm_contacts_list_*");
+      return { success: true, data: rows[0] };
+    } catch (error) {
+      this.logger.error("Error updating CRM contact:", error);
+      return { success: false, error: "Failed to update contact" };
     }
+  }
 
-    @Delete(':id')
-    async deleteContact(@Param('id') id: string) {
-        await this.ensureTable();
+  @Delete(":id")
+  async deleteContact(@Param("id") id: string) {
+    await this.ensureTable();
 
-        try {
-            const { rows } = await this.pool.query(`DELETE FROM crm_contacts WHERE id = $1 RETURNING id`, [id]);
-            if (rows.length === 0) return { success: false, error: 'Contact not found' };
+    try {
+      const { rows } = await this.pool.query(
+        `DELETE FROM crm_contacts WHERE id = $1 RETURNING id`,
+        [id],
+      );
+      if (rows.length === 0)
+        return { success: false, error: "Contact not found" };
 
-            await this.redisCache.invalidatePattern('crm_contacts_list_*');
-            return { success: true, message: 'Contact deleted successfully' };
-        } catch (error) {
-            this.logger.error('Error deleting CRM contact:', error);
-            return { success: false, error: 'Failed to delete contact' };
-        }
+      await this.redisCache.invalidatePattern("crm_contacts_list_*");
+      return { success: true, message: "Contact deleted successfully" };
+    } catch (error) {
+      this.logger.error("Error deleting CRM contact:", error);
+      return { success: false, error: "Failed to delete contact" };
     }
+  }
 }

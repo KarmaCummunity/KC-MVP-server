@@ -3,24 +3,36 @@
 // - Provides: Endpoint to sync users automatically (can be called from Firebase Cloud Function)
 // - Security: Should be protected with API key or admin authentication
 
-import { Controller, Post, Body, Get, Query, Headers, UnauthorizedException, UseGuards, Logger } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { AdminAuthGuard } from '../auth/jwt-auth.guard';
-import * as admin from 'firebase-admin';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Headers,
+  UnauthorizedException,
+  UseGuards,
+  Logger,
+} from "@nestjs/common";
+import { Inject } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import { AdminAuthGuard } from "../auth/jwt-auth.guard";
+import * as admin from "firebase-admin";
 
-@Controller('api/sync')
+@Controller("api/sync")
 export class SyncController {
   private readonly logger = new Logger(SyncController.name);
   // Simple API key check - in production, use proper authentication
-  private readonly SYNC_API_KEY = process.env.SYNC_API_KEY || 'change-me-in-production';
+  private readonly SYNC_API_KEY =
+    process.env.SYNC_API_KEY || "change-me-in-production";
   constructor(@Inject(PG_POOL) private readonly pool: Pool) {
     // Initialize Firebase Admin SDK if not already initialized
     if (!admin.apps.length) {
       try {
         if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-          const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+          const serviceAccount = JSON.parse(
+            process.env.FIREBASE_SERVICE_ACCOUNT_KEY,
+          );
           admin.initializeApp({
             credential: admin.credential.cert(serviceAccount),
           });
@@ -29,8 +41,10 @@ export class SyncController {
             credential: admin.credential.applicationDefault(),
           });
         }
-      } catch (error) {
-        this.logger.warn('⚠️ Firebase Admin SDK not initialized - sync endpoint will not work');
+      } catch {
+        this.logger.warn(
+          "⚠️ Firebase Admin SDK not initialized - sync endpoint will not work",
+        );
       }
     }
   }
@@ -40,32 +54,32 @@ export class SyncController {
    */
   private checkApiKey(apiKey?: string) {
     if (!apiKey || apiKey !== this.SYNC_API_KEY) {
-      throw new UnauthorizedException('Invalid API key');
+      throw new UnauthorizedException("Invalid API key");
     }
   }
 
   /**
    * Sync a single user from Firebase to user_profiles
    * Can be called from Firebase Cloud Function when a new user is created
-   * 
+   *
    * @param body - { firebase_uid: string } or { email: string }
    * @param headers - API key in X-API-Key header
    * @returns Success status
    */
-  @Post('user')
+  @Post("user")
   @UseGuards(AdminAuthGuard)
   async syncUser(
     @Body() body: { firebase_uid?: string; email?: string },
-    @Headers('x-api-key') apiKey?: string
+    @Headers("x-api-key") apiKey?: string,
   ) {
     // Check API key (optional - can be disabled for internal use)
-    if (this.SYNC_API_KEY !== 'change-me-in-production') {
+    if (this.SYNC_API_KEY !== "change-me-in-production") {
       this.checkApiKey(apiKey);
     }
     const { firebase_uid, email } = body;
 
     if (!firebase_uid && !email) {
-      return { success: false, error: 'Must provide firebase_uid or email' };
+      return { success: false, error: "Must provide firebase_uid or email" };
     }
 
     try {
@@ -77,15 +91,18 @@ export class SyncController {
         } else if (email) {
           firebaseUser = await admin.auth().getUserByEmail(email);
         } else {
-          return { success: false, error: 'Must provide firebase_uid or email' };
+          return {
+            success: false,
+            error: "Must provide firebase_uid or email",
+          };
         }
       } catch (error: any) {
-        this.logger.error('❌ Error fetching user from Firebase:', error);
-        return { success: false, error: 'User not found in Firebase' };
+        this.logger.error("❌ Error fetching user from Firebase:", error);
+        return { success: false, error: "User not found in Firebase" };
       }
 
       if (!firebaseUser.email) {
-        return { success: false, error: 'User has no email' };
+        return { success: false, error: "User has no email" };
       }
 
       const normalizedEmail = firebaseUser.email.toLowerCase().trim();
@@ -93,7 +110,7 @@ export class SyncController {
       // Extract Google ID from provider data if available
       let googleId: string | null = null;
       const googleProvider = firebaseUser.providerData?.find(
-        p => p.providerId === 'google.com'
+        (p) => p.providerId === "google.com",
       );
       if (googleProvider?.uid) {
         googleId = googleProvider.uid;
@@ -101,19 +118,18 @@ export class SyncController {
 
       const client = await this.pool.connect();
       try {
-        await client.query('BEGIN');
+        await client.query("BEGIN");
 
         // Check if user already exists
         const { rows: existingUsers } = await client.query(
           `SELECT id, email, firebase_uid, google_id FROM user_profiles 
            WHERE firebase_uid = $1 OR LOWER(email) = LOWER($2)
            LIMIT 1`,
-          [firebaseUser.uid, normalizedEmail]
+          [firebaseUser.uid, normalizedEmail],
         );
 
-        const nowIso = new Date().toISOString();
-        const creationTime = firebaseUser.metadata.creationTime 
-          ? new Date(firebaseUser.metadata.creationTime) 
+        const creationTime = firebaseUser.metadata.creationTime
+          ? new Date(firebaseUser.metadata.creationTime)
           : new Date();
         const lastSignInTime = firebaseUser.metadata.lastSignInTime
           ? new Date(firebaseUser.metadata.lastSignInTime)
@@ -126,17 +142,26 @@ export class SyncController {
           const updateValues: any[] = [];
           let paramCount = 1;
 
-          if (!existingUser.firebase_uid || existingUser.firebase_uid !== firebaseUser.uid) {
+          if (
+            !existingUser.firebase_uid ||
+            existingUser.firebase_uid !== firebaseUser.uid
+          ) {
             needsUpdate.push(`firebase_uid = $${paramCount++}`);
             updateValues.push(firebaseUser.uid);
           }
 
-          if (googleId && (!existingUser.google_id || existingUser.google_id !== googleId)) {
+          if (
+            googleId &&
+            (!existingUser.google_id || existingUser.google_id !== googleId)
+          ) {
             needsUpdate.push(`google_id = $${paramCount++}`);
             updateValues.push(googleId);
           }
 
-          if (firebaseUser.displayName && existingUser.name !== firebaseUser.displayName) {
+          if (
+            firebaseUser.displayName &&
+            existingUser.name !== firebaseUser.displayName
+          ) {
             needsUpdate.push(`name = $${paramCount++}`);
             updateValues.push(firebaseUser.displayName);
           }
@@ -162,15 +187,23 @@ export class SyncController {
 
             await client.query(
               `UPDATE user_profiles 
-               SET ${needsUpdate.join(', ')} 
+               SET ${needsUpdate.join(", ")} 
                WHERE id = $${paramCount}`,
-              updateValues
+              updateValues,
             );
-            await client.query('COMMIT');
-            return { success: true, action: 'updated', user_id: existingUser.id };
+            await client.query("COMMIT");
+            return {
+              success: true,
+              action: "updated",
+              user_id: existingUser.id,
+            };
           } else {
-            await client.query('COMMIT');
-            return { success: true, action: 'no_changes', user_id: existingUser.id };
+            await client.query("COMMIT");
+            return {
+              success: true,
+              action: "no_changes",
+              user_id: existingUser.id,
+            };
           }
         } else {
           // User doesn't exist - create new
@@ -186,31 +219,36 @@ export class SyncController {
                 firebaseUser.uid,
                 googleId,
                 normalizedEmail,
-                firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
-                firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
-                'משתמש חדש בקארמה קומיוניטי',
+                firebaseUser.displayName ||
+                  normalizedEmail.split("@")[0] ||
+                  "User",
+                firebaseUser.photoURL || "https://i.pravatar.cc/150?img=1",
+                "משתמש חדש בקארמה קומיוניטי",
                 0,
                 creationTime,
                 true,
                 lastSignInTime,
-                'ישראל',
-                'Israel',
+                "ישראל",
+                "Israel",
                 [],
-                ['user'],
+                ["user"],
                 firebaseUser.emailVerified || false,
-                JSON.stringify({ 
-                  language: 'he', 
-                  dark_mode: false, 
+                JSON.stringify({
+                  language: "he",
+                  dark_mode: false,
                   notifications_enabled: true,
-                  privacy: 'public'
-                })
-              ]
+                  privacy: "public",
+                }),
+              ],
             );
-            await client.query('COMMIT');
-            return { success: true, action: 'created', user_id: newUser[0].id };
+            await client.query("COMMIT");
+            return { success: true, action: "created", user_id: newUser[0].id };
           } catch (insertError: any) {
             // If google_id column doesn't exist, try without it
-            if (insertError.message && insertError.message.includes('google_id')) {
+            if (
+              insertError.message &&
+              insertError.message.includes("google_id")
+            ) {
               const { rows: newUser } = await client.query(
                 `INSERT INTO user_profiles (
                   firebase_uid, email, name, avatar_url, bio,
@@ -221,87 +259,96 @@ export class SyncController {
                 [
                   firebaseUser.uid,
                   normalizedEmail,
-                  firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
-                  firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
-                  'משתמש חדש בקארמה קומיוניטי',
+                  firebaseUser.displayName ||
+                    normalizedEmail.split("@")[0] ||
+                    "User",
+                  firebaseUser.photoURL || "https://i.pravatar.cc/150?img=1",
+                  "משתמש חדש בקארמה קומיוניטי",
                   0,
                   creationTime,
                   true,
                   lastSignInTime,
-                  'ישראל',
-                  'Israel',
+                  "ישראל",
+                  "Israel",
                   [],
-                  ['user'],
+                  ["user"],
                   firebaseUser.emailVerified || false,
-                  JSON.stringify({ 
-                    language: 'he', 
-                    dark_mode: false, 
+                  JSON.stringify({
+                    language: "he",
+                    dark_mode: false,
                     notifications_enabled: true,
-                    privacy: 'public'
-                  })
-                ]
+                    privacy: "public",
+                  }),
+                ],
               );
-              await client.query('COMMIT');
-              return { success: true, action: 'created', user_id: newUser[0].id };
+              await client.query("COMMIT");
+              return {
+                success: true,
+                action: "created",
+                user_id: newUser[0].id,
+              };
             } else {
               throw insertError;
             }
           }
         }
       } catch (error: any) {
-        await client.query('ROLLBACK');
-        this.logger.error('❌ Error syncing user:', error);
-        return { success: false, error: error.message || 'Failed to sync user' };
+        await client.query("ROLLBACK");
+        this.logger.error("❌ Error syncing user:", error);
+        return {
+          success: false,
+          error: error.message || "Failed to sync user",
+        };
       } finally {
         client.release();
       }
     } catch (error: any) {
-      this.logger.error('❌ Sync user error:', error);
-      return { success: false, error: error.message || 'Failed to sync user' };
+      this.logger.error("❌ Sync user error:", error);
+      return { success: false, error: error.message || "Failed to sync user" };
     }
   }
 
   /**
    * Sync ALL users from Firebase to user_profiles
    * This endpoint runs the full sync process - use with caution in production
-   * 
+   *
    * @param headers - API key in X-API-Key header (optional if SYNC_API_KEY is not set)
    * @returns Sync summary with created/updated counts
    */
-  @Post('all')
+  @Post("all")
   @UseGuards(AdminAuthGuard)
-  async syncAllUsers(
-    @Headers('x-api-key') apiKey?: string
-  ) {
+  async syncAllUsers(@Headers("x-api-key") apiKey?: string) {
     // Check API key (optional - can be disabled for internal use)
-    if (this.SYNC_API_KEY !== 'change-me-in-production') {
+    if (this.SYNC_API_KEY !== "change-me-in-production") {
       this.checkApiKey(apiKey);
     }
 
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
-      
-      this.logger.log('🔄 Starting full Firebase users sync...');
-      
+      await client.query("BEGIN");
+
+      this.logger.log("🔄 Starting full Firebase users sync...");
+
       // Get all users from Firebase Authentication
       let allUsers: admin.auth.UserRecord[] = [];
       let nextPageToken: string | undefined;
-      
+
       do {
-        const listUsersResult = await admin.auth().listUsers(1000, nextPageToken);
+        const listUsersResult = await admin
+          .auth()
+          .listUsers(1000, nextPageToken);
         allUsers = allUsers.concat(listUsersResult.users);
         nextPageToken = listUsersResult.pageToken;
         this.logger.log(`📥 Fetched ${allUsers.length} users from Firebase...`);
       } while (nextPageToken);
-      
+
       this.logger.log(`✅ Total users in Firebase: ${allUsers.length}`);
-      
+
       let created = 0;
       let updated = 0;
       let skipped = 0;
       let errors = 0;
-      
+
       for (const firebaseUser of allUsers) {
         try {
           // Skip users without email
@@ -310,33 +357,33 @@ export class SyncController {
             skipped++;
             continue;
           }
-          
+
           const normalizedEmail = firebaseUser.email.toLowerCase().trim();
-          
+
           // Extract Google ID from provider data if available
           let googleId: string | null = null;
           const googleProvider = firebaseUser.providerData?.find(
-            (p: any) => p.providerId === 'google.com'
+            (p: any) => p.providerId === "google.com",
           );
           if (googleProvider?.uid) {
             googleId = googleProvider.uid;
           }
-          
-          const creationTime = firebaseUser.metadata.creationTime 
+
+          const creationTime = firebaseUser.metadata.creationTime
             ? new Date(firebaseUser.metadata.creationTime).toISOString()
             : new Date().toISOString();
-          const lastSignInTime = firebaseUser.metadata.lastSignInTime 
+          const lastSignInTime = firebaseUser.metadata.lastSignInTime
             ? new Date(firebaseUser.metadata.lastSignInTime).toISOString()
             : creationTime;
-          
+
           // Check if user already exists
           const { rows: existingUsers } = await client.query(
             `SELECT id, firebase_uid, email, google_id FROM user_profiles 
              WHERE email = $1 OR firebase_uid = $2 OR (google_id IS NOT NULL AND google_id = $3)
              LIMIT 1`,
-            [normalizedEmail, firebaseUser.uid, googleId]
+            [normalizedEmail, firebaseUser.uid, googleId],
           );
-          
+
           if (existingUsers.length > 0) {
             // Update existing user
             const existingUser = existingUsers[0];
@@ -353,19 +400,29 @@ export class SyncController {
                 WHERE id = $7`,
                 [
                   firebaseUser.uid,
-                  firebaseUser.displayName || existingUser.name || normalizedEmail.split('@')[0] || 'User',
-                  firebaseUser.photoURL || existingUser.avatar_url || 'https://i.pravatar.cc/150?img=1',
+                  firebaseUser.displayName ||
+                    existingUser.name ||
+                    normalizedEmail.split("@")[0] ||
+                    "User",
+                  firebaseUser.photoURL ||
+                    existingUser.avatar_url ||
+                    "https://i.pravatar.cc/150?img=1",
                   firebaseUser.emailVerified || false,
                   lastSignInTime,
                   googleId,
-                  existingUser.id
-                ]
+                  existingUser.id,
+                ],
               );
               updated++;
-              this.logger.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+              this.logger.log(
+                `🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`,
+              );
             } catch (updateError: any) {
               // If google_id column doesn't exist, try without it
-              if (updateError.message && updateError.message.includes('google_id')) {
+              if (
+                updateError.message &&
+                updateError.message.includes("google_id")
+              ) {
                 await client.query(
                   `UPDATE user_profiles SET
                     firebase_uid = COALESCE($1, firebase_uid),
@@ -377,15 +434,22 @@ export class SyncController {
                   WHERE id = $6`,
                   [
                     firebaseUser.uid,
-                    firebaseUser.displayName || existingUser.name || normalizedEmail.split('@')[0] || 'User',
-                    firebaseUser.photoURL || existingUser.avatar_url || 'https://i.pravatar.cc/150?img=1',
+                    firebaseUser.displayName ||
+                      existingUser.name ||
+                      normalizedEmail.split("@")[0] ||
+                      "User",
+                    firebaseUser.photoURL ||
+                      existingUser.avatar_url ||
+                      "https://i.pravatar.cc/150?img=1",
                     firebaseUser.emailVerified || false,
                     lastSignInTime,
-                    existingUser.id
-                  ]
+                    existingUser.id,
+                  ],
                 );
                 updated++;
-                this.logger.log(`🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`);
+                this.logger.log(
+                  `🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`,
+                );
               } else {
                 throw updateError;
               }
@@ -393,7 +457,7 @@ export class SyncController {
           } else {
             // Create new user
             try {
-              const { rows: newUser } = await client.query(
+              await client.query(
                 `INSERT INTO user_profiles (
                   firebase_uid, email, name, avatar_url, bio,
                   karma_points, join_date, is_active, last_active,
@@ -403,33 +467,40 @@ export class SyncController {
                 [
                   firebaseUser.uid,
                   normalizedEmail,
-                  firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
-                  firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
-                  'משתמש חדש בקארמה קומיוניטי',
+                  firebaseUser.displayName ||
+                    normalizedEmail.split("@")[0] ||
+                    "User",
+                  firebaseUser.photoURL || "https://i.pravatar.cc/150?img=1",
+                  "משתמש חדש בקארמה קומיוניטי",
                   0,
                   creationTime,
                   true,
                   lastSignInTime,
-                  'ישראל',
-                  'Israel',
+                  "ישראל",
+                  "Israel",
                   [],
-                  ['user'],
+                  ["user"],
                   firebaseUser.emailVerified || false,
-                  JSON.stringify({ 
-                    language: 'he', 
-                    dark_mode: false, 
+                  JSON.stringify({
+                    language: "he",
+                    dark_mode: false,
                     notifications_enabled: true,
-                    privacy: 'public'
+                    privacy: "public",
                   }),
-                  googleId
-                ]
+                  googleId,
+                ],
               );
               created++;
-              this.logger.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+              this.logger.log(
+                `✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`,
+              );
             } catch (insertError: any) {
               // If google_id column doesn't exist, try without it
-              if (insertError.message && insertError.message.includes('google_id')) {
-                const { rows: newUser } = await client.query(
+              if (
+                insertError.message &&
+                insertError.message.includes("google_id")
+              ) {
+                await client.query(
                   `INSERT INTO user_profiles (
                     firebase_uid, email, name, avatar_url, bio,
                     karma_points, join_date, is_active, last_active,
@@ -439,41 +510,48 @@ export class SyncController {
                   [
                     firebaseUser.uid,
                     normalizedEmail,
-                    firebaseUser.displayName || normalizedEmail.split('@')[0] || 'User',
-                    firebaseUser.photoURL || 'https://i.pravatar.cc/150?img=1',
-                    'משתמש חדש בקארמה קומיוניטי',
+                    firebaseUser.displayName ||
+                      normalizedEmail.split("@")[0] ||
+                      "User",
+                    firebaseUser.photoURL || "https://i.pravatar.cc/150?img=1",
+                    "משתמש חדש בקארמה קומיוניטי",
                     0,
                     creationTime,
                     true,
                     lastSignInTime,
-                    'ישראל',
-                    'Israel',
+                    "ישראל",
+                    "Israel",
                     [],
-                    ['user'],
+                    ["user"],
                     firebaseUser.emailVerified || false,
-                    JSON.stringify({ 
-                      language: 'he', 
-                      dark_mode: false, 
+                    JSON.stringify({
+                      language: "he",
+                      dark_mode: false,
                       notifications_enabled: true,
-                      privacy: 'public'
-                    })
-                  ]
+                      privacy: "public",
+                    }),
+                  ],
                 );
                 created++;
-                this.logger.log(`✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`);
+                this.logger.log(
+                  `✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`,
+                );
               } else {
                 throw insertError;
               }
             }
           }
         } catch (error: any) {
-          this.logger.error(`❌ Error processing user ${firebaseUser.uid}:`, error);
+          this.logger.error(
+            `❌ Error processing user ${firebaseUser.uid}:`,
+            error,
+          );
           errors++;
         }
       }
-      
-      await client.query('COMMIT');
-      
+
+      await client.query("COMMIT");
+
       const summary = {
         success: true,
         firebase_users: allUsers.length,
@@ -481,22 +559,25 @@ export class SyncController {
         updated,
         skipped,
         errors,
-        total_processed: created + updated + skipped
+        total_processed: created + updated + skipped,
       };
-      
-      this.logger.log('\n📊 Sync Summary:');
+
+      this.logger.log("\n📊 Sync Summary:");
       this.logger.log(`   ✅ Created: ${created}`);
       this.logger.log(`   🔄 Updated: ${updated}`);
       this.logger.log(`   ⏭️  Skipped: ${skipped}`);
       this.logger.log(`   ❌ Errors: ${errors}`);
       this.logger.log(`   📈 Total processed: ${created + updated + skipped}`);
-      this.logger.log('\n✅ Firebase users sync completed!');
-      
+      this.logger.log("\n✅ Firebase users sync completed!");
+
       return summary;
     } catch (error: any) {
-      await client.query('ROLLBACK');
-      this.logger.error('❌ Full sync error:', error);
-      return { success: false, error: error.message || 'Failed to sync all users' };
+      await client.query("ROLLBACK");
+      this.logger.error("❌ Full sync error:", error);
+      return {
+        success: false,
+        error: error.message || "Failed to sync all users",
+      };
     } finally {
       client.release();
     }
@@ -506,7 +587,7 @@ export class SyncController {
    * Get sync status - check how many users are in Firebase vs user_profiles
    * Useful for monitoring sync health
    */
-  @Get('status')
+  @Get("status")
   @UseGuards(AdminAuthGuard)
   async getSyncStatus() {
     try {
@@ -515,25 +596,27 @@ export class SyncController {
       try {
         let nextPageToken: string | undefined;
         do {
-          const listUsersResult = await admin.auth().listUsers(1000, nextPageToken);
+          const listUsersResult = await admin
+            .auth()
+            .listUsers(1000, nextPageToken);
           firebaseCount += listUsersResult.users.length;
           nextPageToken = listUsersResult.pageToken;
         } while (nextPageToken);
       } catch (error) {
-        this.logger.warn('⚠️ Could not count Firebase users:', error);
+        this.logger.warn("⚠️ Could not count Firebase users:", error);
       }
 
       // Count users in user_profiles
       const { rows: dbCountResult } = await this.pool.query(
-        `SELECT COUNT(*) as count FROM user_profiles WHERE email IS NOT NULL AND email <> ''`
+        `SELECT COUNT(*) as count FROM user_profiles WHERE email IS NOT NULL AND email <> ''`,
       );
-      const dbCount = parseInt(dbCountResult[0]?.count || '0');
+      const dbCount = parseInt(dbCountResult[0]?.count || "0");
 
       // Count users with firebase_uid
       const { rows: firebaseLinkedResult } = await this.pool.query(
-        `SELECT COUNT(*) as count FROM user_profiles WHERE firebase_uid IS NOT NULL`
+        `SELECT COUNT(*) as count FROM user_profiles WHERE firebase_uid IS NOT NULL`,
       );
-      const firebaseLinked = parseInt(firebaseLinkedResult[0]?.count || '0');
+      const firebaseLinked = parseInt(firebaseLinkedResult[0]?.count || "0");
 
       return {
         success: true,
@@ -543,9 +626,11 @@ export class SyncController {
         missing_sync: Math.max(0, firebaseCount - firebaseLinked),
       };
     } catch (error: any) {
-      this.logger.error('❌ Get sync status error:', error);
-      return { success: false, error: error.message || 'Failed to get sync status' };
+      this.logger.error("❌ Get sync status error:", error);
+      return {
+        success: false,
+        error: error.message || "Failed to get sync status",
+      };
     }
   }
 }
-

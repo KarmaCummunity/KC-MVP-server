@@ -2,34 +2,46 @@
 // - Purpose: Endpoints to test, inspect, and manipulate rate limiting behavior.
 // - Reached from: Routes under '/rate-limit'.
 // - Provides: test, stress-test, status, clear, rules, stats, custom, simulate endpoints.
-import { Controller, Get, Post, Delete, Body, Ip, Param, Query } from '@nestjs/common';
-import { RateLimitService, RateLimitRule } from '../auth/rate-limit.service';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Body,
+  Ip,
+  Param,
+  Query,
+} from "@nestjs/common";
+import { RateLimitService, RateLimitRule } from "../auth/rate-limit.service";
 
-@Controller('rate-limit')
+@Controller("rate-limit")
 export class RateLimitController {
-  constructor(private readonly rateLimitService: RateLimitService) { }
+  constructor(private readonly rateLimitService: RateLimitService) {}
 
   /**
    * Test rate limiting
    * POST /rate-limit/test
    */
-  @Post('test')
+  @Post("test")
   async testRateLimit(
     @Body() body: { ruleType?: string; identifier?: string },
     @Ip() ip: string,
   ) {
     try {
       const identifier = body.identifier || ip;
-      const ruleType = body.ruleType || 'general';
+      const ruleType = body.ruleType || "general";
 
-      const result = await this.rateLimitService.checkRateLimit(identifier, ruleType);
+      const result = await this.rateLimitService.checkRateLimit(
+        identifier,
+        ruleType,
+      );
 
       return {
         success: true,
         identifier,
         ruleType,
         rateLimitResult: result,
-        message: result.allowed ? 'Request allowed' : 'Rate limit exceeded',
+        message: result.allowed ? "Request allowed" : "Rate limit exceeded",
       };
     } catch (error) {
       return {
@@ -43,9 +55,10 @@ export class RateLimitController {
    * Test multiple requests to trigger rate limit
    * POST /rate-limit/stress-test
    */
-  @Post('stress-test')
+  @Post("stress-test")
   async stressTest(
-    @Body() body: {
+    @Body()
+    body: {
       requests?: number;
       ruleType?: string;
       identifier?: string;
@@ -55,14 +68,17 @@ export class RateLimitController {
   ) {
     try {
       const identifier = body.identifier || ip;
-      const ruleType = body.ruleType || 'general';
+      const ruleType = body.ruleType || "general";
       const requestCount = Math.min(body.requests || 10, 50); // Max 50 for safety
       const delayMs = body.delayMs || 100;
 
       const results = [];
 
       for (let i = 0; i < requestCount; i++) {
-        const result = await this.rateLimitService.checkRateLimit(identifier, ruleType);
+        const result = await this.rateLimitService.checkRateLimit(
+          identifier,
+          ruleType,
+        );
         results.push({
           requestNumber: i + 1,
           allowed: result.allowed,
@@ -73,12 +89,12 @@ export class RateLimitController {
 
         // Small delay between requests
         if (delayMs > 0 && i < requestCount - 1) {
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
       }
 
-      const allowedCount = results.filter(r => r.allowed).length;
-      const blockedCount = results.filter(r => r.blocked).length;
+      const allowedCount = results.filter((r) => r.allowed).length;
+      const blockedCount = results.filter((r) => r.blocked).length;
 
       return {
         success: true,
@@ -102,15 +118,18 @@ export class RateLimitController {
    * Get rate limit status for identifier
    * GET /rate-limit/status
    */
-  @Get('status')
+  @Get("status")
   async getRateLimitStatus(
-    @Query('identifier') identifier: string,
-    @Query('ruleType') ruleType: string = 'general',
+    @Query("identifier") identifier: string,
+    @Query("ruleType") ruleType: string = "general",
     @Ip() ip: string,
   ) {
     try {
       const targetIdentifier = identifier || ip;
-      const status = await this.rateLimitService.getRateLimitStatus(targetIdentifier, ruleType);
+      const status = await this.rateLimitService.getRateLimitStatus(
+        targetIdentifier,
+        ruleType,
+      );
 
       return {
         success: true,
@@ -130,23 +149,28 @@ export class RateLimitController {
    * Clear rate limit for identifier
    * DELETE /rate-limit/clear
    */
-  @Delete('clear')
+  @Delete("clear")
   async clearRateLimit(
     @Body() body: { identifier?: string; ruleType?: string },
     @Ip() ip: string,
   ) {
     try {
       const identifier = body.identifier || ip;
-      const ruleType = body.ruleType || 'general';
+      const ruleType = body.ruleType || "general";
 
-      const cleared = await this.rateLimitService.clearRateLimit(identifier, ruleType);
+      const cleared = await this.rateLimitService.clearRateLimit(
+        identifier,
+        ruleType,
+      );
 
       return {
         success: true,
         identifier,
         ruleType,
         cleared,
-        message: cleared ? 'Rate limit cleared' : 'No rate limit found to clear',
+        message: cleared
+          ? "Rate limit cleared"
+          : "No rate limit found to clear",
       };
     } catch (error) {
       return {
@@ -160,7 +184,7 @@ export class RateLimitController {
    * Get all available rate limit rules
    * GET /rate-limit/rules
    */
-  @Get('rules')
+  @Get("rules")
   async getRules() {
     try {
       const rules = this.rateLimitService.getRules();
@@ -182,7 +206,7 @@ export class RateLimitController {
    * Get rate limit statistics
    * GET /rate-limit/stats
    */
-  @Get('stats')
+  @Get("stats")
   async getStats() {
     try {
       const stats = await this.rateLimitService.getRateLimitStats();
@@ -203,9 +227,10 @@ export class RateLimitController {
    * Test custom rate limit rule
    * POST /rate-limit/custom
    */
-  @Post('custom')
+  @Post("custom")
   async testCustomRule(
-    @Body() body: {
+    @Body()
+    body: {
       rule: RateLimitRule;
       identifier?: string;
       customKey?: string;
@@ -217,7 +242,7 @@ export class RateLimitController {
       const result = await this.rateLimitService.applyCustomRateLimit(
         identifier,
         body.rule,
-        body.customKey
+        body.customKey,
       );
 
       return {
@@ -239,23 +264,23 @@ export class RateLimitController {
    * Simulate different endpoints with different rules
    * POST /rate-limit/simulate/:endpoint
    */
-  @Post('simulate/:endpoint')
+  @Post("simulate/:endpoint")
   async simulateEndpoint(
-    @Param('endpoint') endpoint: string,
+    @Param("endpoint") endpoint: string,
     @Ip() ip: string,
   ) {
     try {
       // Map endpoint to rule type
       const endpointRuleMap: Record<string, string> = {
-        'login': 'login',
-        'register': 'register',
-        'reset-pwd': 'pwd' + '_reset',
-        'chat': 'chat',
-        'search': 'search',
-        'api': 'general',
+        login: "login",
+        register: "register",
+        "reset-pwd": "pwd" + "_reset",
+        chat: "chat",
+        search: "search",
+        api: "general",
       };
 
-      const ruleType = endpointRuleMap[endpoint] || 'general';
+      const ruleType = endpointRuleMap[endpoint] || "general";
       const result = await this.rateLimitService.checkRateLimit(ip, ruleType);
 
       return {
@@ -263,7 +288,7 @@ export class RateLimitController {
         endpoint,
         ruleType,
         result,
-        message: `Simulated ${endpoint} endpoint ${result.allowed ? 'allowed' : 'denied'}`,
+        message: `Simulated ${endpoint} endpoint ${result.allowed ? "allowed" : "denied"}`,
       };
     } catch (error) {
       return {

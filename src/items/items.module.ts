@@ -3,13 +3,13 @@
 // - Reached from: Imported by `AppModule` to expose /api generic collection endpoints.
 // - Provides: `ItemsController`, `ItemsService`, `DedicatedItemsController`, `DedicatedItemsService`
 // - Downstream: Used by clients via `/api/:collection` routes and `/api/dedicated-items` routes
-import { Module } from '@nestjs/common';
-import { ItemsController } from './items.controller';
-import { ItemsService } from './items.service';
-import { DedicatedItemsController } from './dedicated-items.controller';
-import { DedicatedItemsService } from './dedicated-items.service';
-import { RedisCacheModule } from '../redis/redis-cache.module';
-import { DatabaseModule } from '../database/database.module';
+import { Module } from "@nestjs/common";
+import { ItemsController } from "./items.controller";
+import { ItemsService } from "./items.service";
+import { DedicatedItemsController } from "./dedicated-items.controller";
+import { DedicatedItemsService } from "./dedicated-items.service";
+import { RedisCacheModule } from "../redis/redis-cache.module";
+import { DatabaseModule } from "../database/database.module";
 
 @Module({
   imports: [RedisCacheModule, DatabaseModule],
@@ -20,5 +20,3 @@ import { DatabaseModule } from '../database/database.module';
   exports: [ItemsService, DedicatedItemsService],
 })
 export class ItemsModule {}
-
-

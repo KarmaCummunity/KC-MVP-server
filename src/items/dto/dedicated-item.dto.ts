@@ -1,5 +1,5 @@
 // DTOs for dedicated items table with separate columns
-import { IsString, IsOptional, IsNumber, IsBoolean } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsBoolean } from "class-validator";
 
 export class CreateItemDto {
   @IsOptional()
@@ -126,4 +126,3 @@ export class UpdateItemDto {
   @IsString()
   deleted_at?: string;
 }
-

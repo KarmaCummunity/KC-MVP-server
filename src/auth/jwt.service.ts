@@ -3,9 +3,9 @@
 // - Provides: Session token creation, validation, refresh tokens, secure signing
 // - Security: Uses HMAC-SHA256 signing (SEC-001.1), proper expiration, blacklist support
 
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
-import { RedisCacheService } from '../redis/redis-cache.service';
-import { randomBytes, createHash, createHmac } from 'crypto';
+import { Injectable, Logger, UnauthorizedException } from "@nestjs/common";
+import { RedisCacheService } from "../redis/redis-cache.service";
+import { randomBytes, createHash, createHmac } from "crypto";
 
 export interface SessionTokenPayload {
   userId: string;
@@ -14,7 +14,7 @@ export interface SessionTokenPayload {
   roles: string[];
   iat: number;
   exp: number;
-  type: 'access' | 'refresh';
+  type: "access" | "refresh";
 }
 
 export interface TokenPair {
@@ -29,8 +29,8 @@ export class JwtService {
   private readonly logger = new Logger(JwtService.name);
   private readonly ACCESS_TOKEN_EXPIRY = 60 * 60; // 1 hour in seconds
   private readonly REFRESH_TOKEN_EXPIRY = 30 * 24 * 60 * 60; // 30 days in seconds
-  private readonly TOKEN_BLACKLIST_PREFIX = 'blacklisted_token:';
-  private readonly REFRESH_TOKEN_PREFIX = 'refresh_token:';
+  private readonly TOKEN_BLACKLIST_PREFIX = "blacklisted_token:";
+  private readonly REFRESH_TOKEN_PREFIX = "refresh_token:";
 
   constructor(private readonly redisCache: RedisCacheService) {
     this.validateJwtSecret();
@@ -39,8 +39,10 @@ export class JwtService {
   private validateJwtSecret(): void {
     const secret = process.env.JWT_SECRET;
     if (!secret || secret.length < 32) {
-      this.logger.error('JWT_SECRET is missing or too short (minimum 32 characters required)');
-      throw new Error('Invalid JWT configuration');
+      this.logger.error(
+        "JWT_SECRET is missing or too short (minimum 32 characters required)",
+      );
+      throw new Error("Invalid JWT configuration");
     }
   }
 
@@ -60,10 +62,10 @@ export class JwtService {
       userId: user.id,
       email: user.email,
       sessionId,
-      roles: user.roles || ['user'],
+      roles: user.roles || ["user"],
       iat: now,
       exp: now + this.ACCESS_TOKEN_EXPIRY,
-      type: 'access',
+      type: "access",
     };
 
     // Create refresh token payload
@@ -71,10 +73,10 @@ export class JwtService {
       userId: user.id,
       email: user.email,
       sessionId,
-      roles: user.roles || ['user'],
+      roles: user.roles || ["user"],
       iat: now,
       exp: now + this.REFRESH_TOKEN_EXPIRY,
-      type: 'refresh',
+      type: "refresh",
     };
 
     const accessToken = this.signToken(accessPayload);
@@ -83,12 +85,12 @@ export class JwtService {
     // Store refresh token in Redis with expiry
     await this.storeRefreshToken(sessionId, refreshToken, user.id);
 
-    this.logger.log('Created token pair for user', {
+    this.logger.log("Created token pair for user", {
       userId: user.id,
       email: user.email,
       sessionId,
       accessExpiresIn: this.ACCESS_TOKEN_EXPIRY,
-      refreshExpiresIn: this.REFRESH_TOKEN_EXPIRY
+      refreshExpiresIn: this.REFRESH_TOKEN_EXPIRY,
     });
 
     return {
@@ -107,7 +109,7 @@ export class JwtService {
       // Check if token is blacklisted
       const isBlacklisted = await this.isTokenBlacklisted(token);
       if (isBlacklisted) {
-        throw new UnauthorizedException('Token has been revoked');
+        throw new UnauthorizedException("Token has been revoked");
       }
 
       const payload = this.verifyTokenSignature(token);
@@ -115,35 +117,39 @@ export class JwtService {
       // Validate token hasn't expired
       const now = Math.floor(Date.now() / 1000);
       if (payload.exp < now) {
-        throw new UnauthorizedException('Token has expired');
+        throw new UnauthorizedException("Token has expired");
       }
 
       // For refresh tokens, verify it still exists in Redis
-      if (payload.type === 'refresh') {
+      if (payload.type === "refresh") {
         const storedToken = await this.getStoredRefreshToken(payload.sessionId);
         if (!storedToken || storedToken !== token) {
-          throw new UnauthorizedException('Refresh token is invalid or has been revoked');
+          throw new UnauthorizedException(
+            "Refresh token is invalid or has been revoked",
+          );
         }
       }
 
       return payload;
     } catch (error) {
-      this.logger.warn('Token verification failed', {
+      this.logger.warn("Token verification failed", {
         error: error instanceof Error ? error.message : String(error),
-        tokenLength: token?.length
+        tokenLength: token?.length,
       });
-      throw new UnauthorizedException('Invalid token');
+      throw new UnauthorizedException("Invalid token");
     }
   }
 
   /**
    * Refresh access token using refresh token
    */
-  async refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresIn: number }> {
+  async refreshAccessToken(
+    refreshToken: string,
+  ): Promise<{ accessToken: string; expiresIn: number }> {
     const payload = await this.verifyToken(refreshToken);
 
-    if (payload.type !== 'refresh') {
-      throw new UnauthorizedException('Invalid token type for refresh');
+    if (payload.type !== "refresh") {
+      throw new UnauthorizedException("Invalid token type for refresh");
     }
 
     // Create new access token with same session ID
@@ -155,14 +161,14 @@ export class JwtService {
       roles: payload.roles,
       iat: now,
       exp: now + this.ACCESS_TOKEN_EXPIRY,
-      type: 'access',
+      type: "access",
     };
 
     const accessToken = this.signToken(newAccessPayload);
 
-    this.logger.log('Refreshed access token', {
+    this.logger.log("Refreshed access token", {
       userId: payload.userId,
-      sessionId: payload.sessionId
+      sessionId: payload.sessionId,
     });
 
     return {
@@ -185,18 +191,20 @@ export class JwtService {
         await this.redisCache.setWithExpiry(blacklistKey, true, remainingTtl);
 
         // If it's a refresh token, also remove from storage
-        if (payload.type === 'refresh') {
+        if (payload.type === "refresh") {
           await this.removeRefreshToken(payload.sessionId);
         }
 
-        this.logger.log('Token revoked', {
+        this.logger.log("Token revoked", {
           userId: payload.userId,
           sessionId: payload.sessionId,
-          tokenType: payload.type
+          tokenType: payload.type,
         });
       }
     } catch (error) {
-      this.logger.warn('Failed to revoke token', { error: error instanceof Error ? error.message : String(error) });
+      this.logger.warn("Failed to revoke token", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -206,11 +214,11 @@ export class JwtService {
   async revokeUserSession(sessionId: string): Promise<void> {
     try {
       await this.removeRefreshToken(sessionId);
-      this.logger.log('User session revoked', { sessionId });
+      this.logger.log("User session revoked", { sessionId });
     } catch (error) {
-      this.logger.error('Failed to revoke user session', {
+      this.logger.error("Failed to revoke user session", {
         error: error instanceof Error ? error.message : String(error),
-        sessionId
+        sessionId,
       });
     }
   }
@@ -218,14 +226,22 @@ export class JwtService {
   /**
    * Get active sessions for user (for security monitoring)
    */
-  async getUserActiveSessions(userId: string): Promise<Array<{
-    sessionId: string;
-    createdAt: Date;
-    expiresAt: Date;
-  }>> {
+  async getUserActiveSessions(userId: string): Promise<
+    Array<{
+      sessionId: string;
+      createdAt: Date;
+      expiresAt: Date;
+    }>
+  > {
     try {
-      const keys = await this.redisCache.getKeys(`${this.REFRESH_TOKEN_PREFIX}*`);
-      const sessions: Array<{ sessionId: string; createdAt: Date; expiresAt: Date }> = [];
+      const keys = await this.redisCache.getKeys(
+        `${this.REFRESH_TOKEN_PREFIX}*`,
+      );
+      const sessions: Array<{
+        sessionId: string;
+        createdAt: Date;
+        expiresAt: Date;
+      }> = [];
 
       for (const key of keys) {
         const token = await this.redisCache.get<string>(key);
@@ -247,9 +263,9 @@ export class JwtService {
 
       return sessions;
     } catch (error) {
-      this.logger.error('Failed to get user active sessions', {
+      this.logger.error("Failed to get user active sessions", {
         error: error instanceof Error ? error.message : String(error),
-        userId
+        userId,
       });
       return [];
     }
@@ -259,47 +275,53 @@ export class JwtService {
 
   private signToken(payload: SessionTokenPayload): string {
     const secret = process.env.JWT_SECRET!;
-    const header = { alg: 'HS256', typ: 'JWT' };
+    const header = { alg: "HS256", typ: "JWT" };
 
-    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
-    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const encodedHeader = Buffer.from(JSON.stringify(header)).toString(
+      "base64url",
+    );
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
+      "base64url",
+    );
 
-    const signature = createHmac('sha256', secret)
+    const signature = createHmac("sha256", secret)
       .update(`${encodedHeader}.${encodedPayload}`)
-      .digest('base64url');
+      .digest("base64url");
 
     return `${encodedHeader}.${encodedPayload}.${signature}`;
   }
 
   private verifyTokenSignature(token: string): SessionTokenPayload {
-    const parts = token.split('.');
+    const parts = token.split(".");
     if (parts.length !== 3) {
-      throw new Error('Invalid token format');
+      throw new Error("Invalid token format");
     }
 
     const [encodedHeader, encodedPayload, signature] = parts;
     const secret = process.env.JWT_SECRET!;
 
     // Verify signature
-    const expectedSignature = createHmac('sha256', secret)
+    const expectedSignature = createHmac("sha256", secret)
       .update(`${encodedHeader}.${encodedPayload}`)
-      .digest('base64url');
+      .digest("base64url");
 
     if (signature !== expectedSignature) {
-      throw new Error('Invalid token signature');
+      throw new Error("Invalid token signature");
     }
 
     // Decode payload
-    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString());
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString(),
+    );
     return payload;
   }
 
   private generateSessionId(): string {
-    return randomBytes(32).toString('hex');
+    return randomBytes(32).toString("hex");
   }
 
   private hashToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
+    return createHash("sha256").update(token).digest("hex");
   }
 
   private async isTokenBlacklisted(token: string): Promise<boolean> {
@@ -308,18 +330,32 @@ export class JwtService {
     return Boolean(isBlacklisted);
   }
 
-  private async storeRefreshToken(sessionId: string, refreshToken: string, userId: string): Promise<void> {
+  private async storeRefreshToken(
+    sessionId: string,
+    refreshToken: string,
+    userId: string,
+  ): Promise<void> {
     const key = `${this.REFRESH_TOKEN_PREFIX}${sessionId}`;
-    await this.redisCache.setWithExpiry(key, refreshToken, this.REFRESH_TOKEN_EXPIRY);
+    await this.redisCache.setWithExpiry(
+      key,
+      refreshToken,
+      this.REFRESH_TOKEN_EXPIRY,
+    );
 
     // Also store user mapping for cleanup
     const userKey = `user_sessions:${userId}`;
-    const userSessions = await this.redisCache.get<string[]>(userKey) || [];
+    const userSessions = (await this.redisCache.get<string[]>(userKey)) || [];
     userSessions.push(sessionId);
-    await this.redisCache.setWithExpiry(userKey, userSessions, this.REFRESH_TOKEN_EXPIRY);
+    await this.redisCache.setWithExpiry(
+      userKey,
+      userSessions,
+      this.REFRESH_TOKEN_EXPIRY,
+    );
   }
 
-  private async getStoredRefreshToken(sessionId: string): Promise<string | null> {
+  private async getStoredRefreshToken(
+    sessionId: string,
+  ): Promise<string | null> {
     const key = `${this.REFRESH_TOKEN_PREFIX}${sessionId}`;
     return await this.redisCache.get<string>(key);
   }

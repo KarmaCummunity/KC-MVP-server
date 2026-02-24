@@ -3,11 +3,20 @@
 // - Reached from: Routes under '/api/dedicated-items'
 // - Provides: CRUD endpoints for items (create, read, update, delete)
 // - External deps: DedicatedItemsService
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
-import { DedicatedItemsService } from './dedicated-items.service';
-import { CreateItemDto, UpdateItemDto } from './dto/dedicated-item.dto';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+} from "@nestjs/common";
+import { DedicatedItemsService } from "./dedicated-items.service";
+import { CreateItemDto, UpdateItemDto } from "./dto/dedicated-item.dto";
 
-@Controller('api/dedicated-items')
+@Controller("api/dedicated-items")
 export class DedicatedItemsController {
   constructor(private readonly service: DedicatedItemsService) {}
 
@@ -22,14 +31,14 @@ export class DedicatedItemsController {
       return {
         success: true,
         data: item,
-        message: 'Item created successfully',
+        message: "Item created successfully",
       };
     } catch (error) {
-      console.error('Controller: Error creating item:', error);
+      console.error("Controller: Error creating item:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to create item',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to create item",
       };
     }
   }
@@ -38,17 +47,17 @@ export class DedicatedItemsController {
    * GET /api/dedicated-items/owner/:ownerId
    * Get all items for a specific owner
    */
-  @Get('owner/:ownerId')
-  async getByOwner(@Param('ownerId') ownerId: string) {
+  @Get("owner/:ownerId")
+  async getByOwner(@Param("ownerId") ownerId: string) {
     try {
       const items = await this.service.getItemsByOwner(ownerId);
       return items; // Return array directly for simpler client handling
     } catch (error) {
-      console.error('Controller: Error fetching items by owner:', error);
+      console.error("Controller: Error fetching items by owner:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to fetch items',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to fetch items",
       };
     }
   }
@@ -57,15 +66,15 @@ export class DedicatedItemsController {
    * GET /api/dedicated-items/:id
    * Get a single item by ID
    */
-  @Get(':id')
-  async getById(@Param('id') id: string) {
+  @Get(":id")
+  async getById(@Param("id") id: string) {
     try {
       const item = await this.service.getItemById(id);
       if (!item) {
         return {
           success: false,
-          error: 'Item not found',
-          message: 'Item not found or has been deleted',
+          error: "Item not found",
+          message: "Item not found or has been deleted",
         };
       }
       return {
@@ -73,11 +82,11 @@ export class DedicatedItemsController {
         data: item,
       };
     } catch (error) {
-      console.error('Controller: Error fetching item by ID:', error);
+      console.error("Controller: Error fetching item by ID:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to fetch item',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to fetch item",
       };
     }
   }
@@ -86,28 +95,28 @@ export class DedicatedItemsController {
    * PUT /api/dedicated-items/:id
    * Update an item
    */
-  @Put(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateItemDto) {
+  @Put(":id")
+  async update(@Param("id") id: string, @Body() dto: UpdateItemDto) {
     try {
       const item = await this.service.updateItem(id, dto);
       if (!item) {
         return {
           success: false,
-          error: 'Item not found',
-          message: 'Item not found',
+          error: "Item not found",
+          message: "Item not found",
         };
       }
       return {
         success: true,
         data: item,
-        message: 'Item updated successfully',
+        message: "Item updated successfully",
       };
     } catch (error) {
-      console.error('Controller: Error updating item:', error);
+      console.error("Controller: Error updating item:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to update item',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to update item",
       };
     }
   }
@@ -116,17 +125,17 @@ export class DedicatedItemsController {
    * DELETE /api/dedicated-items/:id
    * Soft delete an item
    */
-  @Delete(':id')
-  async softDelete(@Param('id') id: string) {
+  @Delete(":id")
+  async softDelete(@Param("id") id: string) {
     try {
       const result = await this.service.softDeleteItem(id);
       return result;
     } catch (error) {
-      console.error('Controller: Error deleting item:', error);
+      console.error("Controller: Error deleting item:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to delete item',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to delete item",
       };
     }
   }
@@ -135,17 +144,17 @@ export class DedicatedItemsController {
    * GET /api/dedicated-items/category/:category
    * Get all items by category
    */
-  @Get('category/:category')
-  async getByCategory(@Param('category') category: string) {
+  @Get("category/:category")
+  async getByCategory(@Param("category") category: string) {
     try {
       const items = await this.service.getItemsByCategory(category);
       return items;
     } catch (error) {
-      console.error('Controller: Error fetching items by category:', error);
+      console.error("Controller: Error fetching items by category:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to fetch items',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to fetch items",
       };
     }
   }
@@ -154,26 +163,25 @@ export class DedicatedItemsController {
    * GET /api/dedicated-items/search?q=term
    * Search items by title or description
    */
-  @Get('search')
-  async search(@Query('q') searchTerm: string) {
+  @Get("search")
+  async search(@Query("q") searchTerm: string) {
     try {
-      if (!searchTerm || searchTerm.trim() === '') {
+      if (!searchTerm || searchTerm.trim() === "") {
         return {
           success: false,
-          error: 'Search term required',
-          message: 'Please provide a search term',
+          error: "Search term required",
+          message: "Please provide a search term",
         };
       }
       const items = await this.service.searchItems(searchTerm);
       return items;
     } catch (error) {
-      console.error('Controller: Error searching items:', error);
+      console.error("Controller: Error searching items:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        message: 'Failed to search items',
+        error: error instanceof Error ? error.message : "Unknown error",
+        message: "Failed to search items",
       };
     }
   }
 }
-

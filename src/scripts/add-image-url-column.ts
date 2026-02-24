@@ -1,17 +1,17 @@
 // Script to add image_url column to community_group_challenges table
-import { Pool } from 'pg';
-import * as path from 'node:path';
-import * as fs from 'node:fs';
-import * as dotenv from 'dotenv';
+import { Pool } from "pg";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import * as dotenv from "dotenv";
 
 // Load .env from KC-MVP-server directory
-const envPath = path.join(__dirname, '../../.env');
+const envPath = path.join(__dirname, "../../.env");
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
-  console.log('✅ Loaded .env from:', envPath);
+  console.log("✅ Loaded .env from:", envPath);
 } else {
   dotenv.config();
-  console.log('✅ Using default .env');
+  console.log("✅ Using default .env");
 }
 
 async function addImageUrlColumn() {
@@ -20,18 +20,26 @@ async function addImageUrlColumn() {
   const config = connectionString
     ? { connectionString }
     : {
-      host: process.env.POSTGRES_HOST || process.env.PGHOST || 'localhost',
-      port: Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432),
-      user: process.env.POSTGRES_USER || process.env.PGUSER || 'kc',
-      password: process.env.POSTGRES_PASSWORD || process.env.PGPASSWORD || 'kc_password',
-      database: process.env.POSTGRES_DB || process.env.PGDATABASE || 'kc_db',
-    };
+        host: process.env.POSTGRES_HOST || process.env.PGHOST || "localhost",
+        port: Number(process.env.POSTGRES_PORT || process.env.PGPORT || 5432),
+        user: process.env.POSTGRES_USER || process.env.PGUSER || "kc",
+        password:
+          process.env.POSTGRES_PASSWORD ||
+          process.env.PGPASSWORD ||
+          "kc_password",
+        database: process.env.POSTGRES_DB || process.env.PGDATABASE || "kc_db",
+      };
 
   const pool = new Pool(config);
 
   try {
-    console.log('🔧 Adding image_url column to community_group_challenges table...');
-    console.log('📍 Database config:', connectionString ? 'Using DATABASE_URL' : config);
+    console.log(
+      "🔧 Adding image_url column to community_group_challenges table...",
+    );
+    console.log(
+      "📍 Database config:",
+      connectionString ? "Using DATABASE_URL" : config,
+    );
 
     await pool.query(`
       DO $$ 
@@ -48,7 +56,7 @@ async function addImageUrlColumn() {
       END $$;
     `);
 
-    console.log('✅ Migration completed successfully!');
+    console.log("✅ Migration completed successfully!");
 
     // Verify the column exists
     const verify = await pool.query(`
@@ -59,14 +67,13 @@ async function addImageUrlColumn() {
     `);
 
     if (verify.rows.length > 0) {
-      console.log('✅ Verified: image_url column exists');
-      console.log('   Type:', verify.rows[0].data_type);
+      console.log("✅ Verified: image_url column exists");
+      console.log("   Type:", verify.rows[0].data_type);
     } else {
-      console.error('❌ Column still not found after migration!');
+      console.error("❌ Column still not found after migration!");
     }
-
   } catch (error) {
-    console.error('❌ Error during migration:', error);
+    console.error("❌ Error during migration:", error);
     throw error;
   } finally {
     await pool.end();
@@ -76,10 +83,10 @@ async function addImageUrlColumn() {
 (async () => {
   try {
     await addImageUrlColumn();
-    console.log('✨ Done!');
+    console.log("✨ Done!");
     process.exit(0);
   } catch (error) {
-    console.error('💥 Fatal error:', error);
+    console.error("💥 Fatal error:", error);
     process.exit(1);
   }
 })();

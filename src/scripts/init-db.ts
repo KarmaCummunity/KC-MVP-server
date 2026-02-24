@@ -3,18 +3,18 @@
 // - Reached from: Client script `scripts/run-local-e2e.sh` before starting server.
 // - Provides: Creates `community_stats`, `donation_categories`, relational `donations`, plus a set of JSONB tables for generic items and messaging.
 // - Also: Ensures rides + ride_bookings tables; seeds default categories; prints success on completion.
-import { Pool } from 'pg';
-import * as dotenv from 'dotenv';
+import { Pool } from "pg";
+import * as dotenv from "dotenv";
 
 dotenv.config();
 
 async function run() {
   const pool = new Pool({
-    host: process.env.POSTGRES_HOST || 'localhost',
+    host: process.env.POSTGRES_HOST || "localhost",
     port: Number(process.env.POSTGRES_PORT || 5432),
-    user: process.env.POSTGRES_USER || 'kc',
-    password: process.env.POSTGRES_PASSWORD || 'kc_password',
-    database: process.env.POSTGRES_DB || 'kc_db',
+    user: process.env.POSTGRES_USER || "kc",
+    password: process.env.POSTGRES_PASSWORD || "kc_password",
+    database: process.env.POSTGRES_DB || "kc_db",
   });
 
   const client = await pool.connect();
@@ -34,8 +34,12 @@ async function run() {
         UNIQUE(stat_type, city, date_period)
       );
     `);
-    await client.query('CREATE INDEX IF NOT EXISTS idx_community_stats_type ON community_stats (stat_type, date_period);');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, date_period);');
+    await client.query(
+      "CREATE INDEX IF NOT EXISTS idx_community_stats_type ON community_stats (stat_type, date_period);",
+    );
+    await client.query(
+      "CREATE INDEX IF NOT EXISTS idx_community_stats_city ON community_stats (city, date_period);",
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS donation_categories (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -91,28 +95,28 @@ async function run() {
     `;
 
     const tables = [
-      'users',
+      "users",
       // 'posts' - handled separately as relational table (not JSONB)
-      'followers',
-      'following',
-      'chats',
-      'messages',
-      'notifications',
-      'bookmarks',
-      'settings',
-      'media',
-      'blocked_users',
-      'message_reactions',
-      'typing_status',
-      'read_receipts',
-      'voice_messages',
-      'conversation_metadata',
+      "followers",
+      "following",
+      "chats",
+      "messages",
+      "notifications",
+      "bookmarks",
+      "settings",
+      "media",
+      "blocked_users",
+      "message_reactions",
+      "typing_status",
+      "read_receipts",
+      "voice_messages",
+      "conversation_metadata",
       // Organizations / NGO onboarding
-      'organizations',
-      'org_applications',
+      "organizations",
+      "org_applications",
       // Links (for groups and organizations)
-      'links',
-      'analytics',
+      "links",
+      "analytics",
     ];
 
     for (const t of tables) {
@@ -136,19 +140,30 @@ async function run() {
         // Check if index exists is tricky in one-liner, but IF NOT EXISTS handles it.
         // However, we catch errors individually.
 
-        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_user_idx ON ${t}(user_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_item_idx ON ${t}(item_id);`);
-        await client.query(`CREATE INDEX IF NOT EXISTS ${t}_data_gin ON ${t} USING GIN (data);`);
-
+        await client.query(
+          `CREATE INDEX IF NOT EXISTS ${t}_user_idx ON ${t}(user_id);`,
+        );
+        await client.query(
+          `CREATE INDEX IF NOT EXISTS ${t}_item_idx ON ${t}(item_id);`,
+        );
+        await client.query(
+          `CREATE INDEX IF NOT EXISTS ${t}_data_gin ON ${t} USING GIN (data);`,
+        );
       } catch (err: any) {
         console.error(`❌ Error initializing table '${t}':`, err.message);
-        if (err.code === '42501') {
+        if (err.code === "42501") {
           // Permission denied - try to grant myself? No.
           // Check ownership?
-          const res = await client.query(`
+          const res = await client.query(
+            `
                SELECT tableowner FROM pg_tables WHERE tablename = $1
-            `, [t]);
-          console.log(`Owner of ${t}:`, res.rows[0]?.tableowner || 'Unknown (table might not exist)');
+            `,
+            [t],
+          );
+          console.log(
+            `Owner of ${t}:`,
+            res.rows[0]?.tableowner || "Unknown (table might not exist)",
+          );
         }
         throw err;
       }
@@ -166,16 +181,18 @@ async function run() {
     if (!newTasks?.rows?.[0]?.exists) {
       // Create legacy JSONB tasks table only if new schema doesn't exist
       // eslint-disable-next-line no-console
-      console.log('Ensuring table: tasks (legacy JSONB format)');
-      await client.query(baseTable('tasks'));
+      console.log("Ensuring table: tasks (legacy JSONB format)");
+      await client.query(baseTable("tasks"));
     } else {
       // eslint-disable-next-line no-console
-      console.log('✅ Tasks table exists in new schema format - skipping legacy creation');
+      console.log(
+        "✅ Tasks table exists in new schema format - skipping legacy creation",
+      );
     }
 
     // Index for email lookup in users table
     await client.query(
-      `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')))`
+      `CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users ((lower(data->>'email')))`,
     );
 
     // If a legacy JSONB donations table exists (with 'data' column) — replace it with relational schema for APIs
@@ -187,8 +204,10 @@ async function run() {
     `);
     if (legacyDonations?.rows?.[0]?.exists) {
       // eslint-disable-next-line no-console
-      console.warn('⚠️  Replacing legacy JSONB donations table with relational schema');
-      await client.query('DROP TABLE IF EXISTS donations CASCADE;');
+      console.warn(
+        "⚠️  Replacing legacy JSONB donations table with relational schema",
+      );
+      await client.query("DROP TABLE IF EXISTS donations CASCADE;");
     }
     // Ensure relational donations table exists (id/donor_id/...)
     await client.query(`
@@ -254,8 +273,10 @@ async function run() {
     `);
     if (legacyRides?.rows?.[0]?.exists) {
       // eslint-disable-next-line no-console
-      console.warn('⚠️  Replacing legacy JSONB rides table with relational schema');
-      await client.query('DROP TABLE IF EXISTS rides CASCADE;');
+      console.warn(
+        "⚠️  Replacing legacy JSONB rides table with relational schema",
+      );
+      await client.query("DROP TABLE IF EXISTS rides CASCADE;");
     }
     await client.query(`
       CREATE TABLE IF NOT EXISTS rides (
@@ -356,9 +377,15 @@ async function run() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_community_events_status ON community_events (status);');
+    await client.query(
+      "CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);",
+    );
+    await client.query(
+      "CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);",
+    );
+    await client.query(
+      "CREATE INDEX IF NOT EXISTS idx_community_events_status ON community_events (status);",
+    );
 
     // Ensure event_attendees table
     await client.query(`
@@ -393,8 +420,12 @@ async function run() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`,
+    );
 
     // Add missing columns to existing chat_messages table if needed
     await client.query(`
@@ -442,7 +473,9 @@ async function run() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`,
+    );
 
     // Ensure user_profiles table - required by StatsController
     await client.query(`
@@ -518,7 +551,7 @@ async function run() {
         WHERE table_name = 'posts'
       ) AS exists;
     `);
-    
+
     if (postsTableExists?.rows?.[0]?.exists) {
       // Check if it's legacy JSONB format (has 'user_id' and 'item_id' columns instead of 'author_id')
       const legacyPostsCheck = await client.query(`
@@ -533,14 +566,19 @@ async function run() {
           WHERE table_name = 'posts' AND column_name = 'author_id'
         ) AS exists;
       `);
-      
-      if (legacyPostsCheck?.rows?.[0]?.exists && !hasAuthorId?.rows?.[0]?.exists) {
+
+      if (
+        legacyPostsCheck?.rows?.[0]?.exists &&
+        !hasAuthorId?.rows?.[0]?.exists
+      ) {
         // eslint-disable-next-line no-console
-        console.warn('⚠️  Replacing legacy JSONB posts table with relational schema');
-        await client.query('DROP TABLE IF EXISTS posts CASCADE;');
+        console.warn(
+          "⚠️  Replacing legacy JSONB posts table with relational schema",
+        );
+        await client.query("DROP TABLE IF EXISTS posts CASCADE;");
       }
     }
-    
+
     // Check if posts table exists with correct structure (author_id column)
     const postsCheck = await client.query(`
       SELECT EXISTS (
@@ -550,7 +588,7 @@ async function run() {
     `);
     if (!postsCheck?.rows?.[0]?.exists) {
       // eslint-disable-next-line no-console
-      console.log('Ensuring table: posts (relational schema)');
+      console.log("Ensuring table: posts (relational schema)");
       // Create task_id without foreign key constraint first (tasks table might not exist yet)
       await client.query(`
         CREATE TABLE IF NOT EXISTS posts (
@@ -620,7 +658,9 @@ async function run() {
       `);
     } else {
       // eslint-disable-next-line no-console
-      console.log('✅ Posts table exists with correct schema - skipping creation');
+      console.log(
+        "✅ Posts table exists with correct schema - skipping creation",
+      );
     }
 
     // Ensure user_activities table - required by StatsController for real-time tracking
@@ -635,43 +675,156 @@ async function run() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_user ON user_activities (user_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_type ON user_activities (activity_type);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_activities_created ON user_activities (created_at);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_user_activities_user ON user_activities (user_id);`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_user_activities_type ON user_activities (activity_type);`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_user_activities_created ON user_activities (created_at);`,
+    );
 
     // Seed default donation categories if empty
-    const { rows: catCountRows } = await client.query('SELECT COUNT(*)::int as count FROM donation_categories');
+    const { rows: catCountRows } = await client.query(
+      "SELECT COUNT(*)::int as count FROM donation_categories",
+    );
     const catCount = catCountRows?.[0]?.count ?? 0;
     if (catCount === 0) {
       const categories = [
-        { slug: 'money', name_he: 'כסף', name_en: 'Money', icon: '💰', color: '#4CAF50', sort_order: 1 },
-        { slug: 'trump', name_he: 'טרמפים', name_en: 'Rides', icon: '🚗', color: '#2196F3', sort_order: 2 },
-        { slug: 'knowledge', name_he: 'ידע', name_en: 'Knowledge', icon: '📚', color: '#9C27B0', sort_order: 3 },
-        { slug: 'time', name_he: 'זמן', name_en: 'Time', icon: '⏰', color: '#FF9800', sort_order: 4 },
-        { slug: 'food', name_he: 'אוכל', name_en: 'Food', icon: '🍞', color: '#8BC34A', sort_order: 5 },
-        { slug: 'clothes', name_he: 'בגדים', name_en: 'Clothes', icon: '👕', color: '#03A9F4', sort_order: 6 },
-        { slug: 'books', name_he: 'ספרים', name_en: 'Books', icon: '📖', color: '#607D8B', sort_order: 7 },
-        { slug: 'furniture', name_he: 'רהיטים', name_en: 'Furniture', icon: '🪑', color: '#795548', sort_order: 8 },
-        { slug: 'medical', name_he: 'רפואה', name_en: 'Medical', icon: '🏥', color: '#F44336', sort_order: 9 },
-        { slug: 'animals', name_he: 'חיות', name_en: 'Animals', icon: '🐾', color: '#4CAF50', sort_order: 10 },
-        { slug: 'housing', name_he: 'דיור', name_en: 'Housing', icon: '🏠', color: '#FF5722', sort_order: 11 },
-        { slug: 'support', name_he: 'תמיכה', name_en: 'Support', icon: '💝', color: '#E91E63', sort_order: 12 },
-        { slug: 'education', name_he: 'חינוך', name_en: 'Education', icon: '🎓', color: '#3F51B5', sort_order: 13 },
-        { slug: 'environment', name_he: 'סביבה', name_en: 'Environment', icon: '🌱', color: '#4CAF50', sort_order: 14 },
-        { slug: 'technology', name_he: 'טכנולוגיה', name_en: 'Technology', icon: '💻', color: '#009688', sort_order: 15 }
+        {
+          slug: "money",
+          name_he: "כסף",
+          name_en: "Money",
+          icon: "💰",
+          color: "#4CAF50",
+          sort_order: 1,
+        },
+        {
+          slug: "trump",
+          name_he: "טרמפים",
+          name_en: "Rides",
+          icon: "🚗",
+          color: "#2196F3",
+          sort_order: 2,
+        },
+        {
+          slug: "knowledge",
+          name_he: "ידע",
+          name_en: "Knowledge",
+          icon: "📚",
+          color: "#9C27B0",
+          sort_order: 3,
+        },
+        {
+          slug: "time",
+          name_he: "זמן",
+          name_en: "Time",
+          icon: "⏰",
+          color: "#FF9800",
+          sort_order: 4,
+        },
+        {
+          slug: "food",
+          name_he: "אוכל",
+          name_en: "Food",
+          icon: "🍞",
+          color: "#8BC34A",
+          sort_order: 5,
+        },
+        {
+          slug: "clothes",
+          name_he: "בגדים",
+          name_en: "Clothes",
+          icon: "👕",
+          color: "#03A9F4",
+          sort_order: 6,
+        },
+        {
+          slug: "books",
+          name_he: "ספרים",
+          name_en: "Books",
+          icon: "📖",
+          color: "#607D8B",
+          sort_order: 7,
+        },
+        {
+          slug: "furniture",
+          name_he: "רהיטים",
+          name_en: "Furniture",
+          icon: "🪑",
+          color: "#795548",
+          sort_order: 8,
+        },
+        {
+          slug: "medical",
+          name_he: "רפואה",
+          name_en: "Medical",
+          icon: "🏥",
+          color: "#F44336",
+          sort_order: 9,
+        },
+        {
+          slug: "animals",
+          name_he: "חיות",
+          name_en: "Animals",
+          icon: "🐾",
+          color: "#4CAF50",
+          sort_order: 10,
+        },
+        {
+          slug: "housing",
+          name_he: "דיור",
+          name_en: "Housing",
+          icon: "🏠",
+          color: "#FF5722",
+          sort_order: 11,
+        },
+        {
+          slug: "support",
+          name_he: "תמיכה",
+          name_en: "Support",
+          icon: "💝",
+          color: "#E91E63",
+          sort_order: 12,
+        },
+        {
+          slug: "education",
+          name_he: "חינוך",
+          name_en: "Education",
+          icon: "🎓",
+          color: "#3F51B5",
+          sort_order: 13,
+        },
+        {
+          slug: "environment",
+          name_he: "סביבה",
+          name_en: "Environment",
+          icon: "🌱",
+          color: "#4CAF50",
+          sort_order: 14,
+        },
+        {
+          slug: "technology",
+          name_he: "טכנולוגיה",
+          name_en: "Technology",
+          icon: "💻",
+          color: "#009688",
+          sort_order: 15,
+        },
       ];
       for (const c of categories) {
         await client.query(
           `INSERT INTO donation_categories (slug, name_he, name_en, icon, color, sort_order)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (slug) DO UPDATE SET name_he=EXCLUDED.name_he, name_en=EXCLUDED.name_en, icon=EXCLUDED.icon, color=EXCLUDED.color, sort_order=EXCLUDED.sort_order, updated_at=NOW()`,
-          [c.slug, c.name_he, c.name_en, c.icon, c.color, c.sort_order]
+          [c.slug, c.name_he, c.name_en, c.icon, c.color, c.sort_order],
         );
       }
     }
 
     // eslint-disable-next-line no-console
-    console.log('✅ Database initialized');
+    console.log("✅ Database initialized");
   } finally {
     client.release();
     await pool.end();
@@ -680,8 +833,6 @@ async function run() {
 
 run().catch((err) => {
   // eslint-disable-next-line no-console
-  console.error('❌ init-db failed', err);
+  console.error("❌ init-db failed", err);
   process.exit(1);
 });
-
-

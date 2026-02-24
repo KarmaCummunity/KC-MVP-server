@@ -4,15 +4,15 @@
 // - Provides: Detects legacy schema, runs `schema.sql` when available, ensures compatibility tables and default data.
 // - Env inputs: `SKIP_FULL_SCHEMA` to skip full schema in dev.
 // - Downstream: Creates core tables (community_stats, user_profiles, donation_categories, donations, user_activities) when needed.
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from './database.module';
-import * as fs from 'fs';
-import * as path from 'path';
+import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "./database.module";
+import * as fs from "fs";
+import * as path from "path";
 
 @Injectable()
 export class DatabaseInit implements OnModuleInit {
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) { }
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
   async onModuleInit() {
     try {
@@ -20,17 +20,28 @@ export class DatabaseInit implements OnModuleInit {
       try {
         // 0) Allow forcing full schema via env var (overrides legacy detection and SKIP flags)
         const forceFullSchemaEnv = process.env.FORCE_FULL_SCHEMA;
-        const forceFullSchema = !!forceFullSchemaEnv && /^(1|true|yes)$/i.test(forceFullSchemaEnv);
+        const forceFullSchema =
+          !!forceFullSchemaEnv && /^(1|true|yes)$/i.test(forceFullSchemaEnv);
 
         if (forceFullSchema) {
-          console.warn('⏭️  FORCE_FULL_SCHEMA detected. Running full schema initialization.');
+          console.warn(
+            "⏭️  FORCE_FULL_SCHEMA detected. Running full schema initialization.",
+          );
           try {
             await this.runSchema(client);
             await this.initializeDefaultData(client);
-            console.log('✅ DatabaseInit - Forced full schema initialized successfully');
+            console.log(
+              "✅ DatabaseInit - Forced full schema initialized successfully",
+            );
           } catch (schemaError: unknown) {
-            const reason = schemaError instanceof Error ? schemaError.message : String(schemaError);
-            console.error('❌ Forced full schema initialization failed:', reason);
+            const reason =
+              schemaError instanceof Error
+                ? schemaError.message
+                : String(schemaError);
+            console.error(
+              "❌ Forced full schema initialization failed:",
+              reason,
+            );
             throw schemaError;
           }
           return;
@@ -38,18 +49,25 @@ export class DatabaseInit implements OnModuleInit {
 
         // Run full schema initialization
         // NOTE: Legacy tables are no longer created - all code should use relational tables
-        if (process.env.SKIP_FULL_SCHEMA === '1') {
-          console.warn('⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)');
+        if (process.env.SKIP_FULL_SCHEMA === "1") {
+          console.warn(
+            "⏭️  Skipping full schema initialization (SKIP_FULL_SCHEMA=1)",
+          );
           await this.ensureBackwardCompatibility(client);
           await this.initializeDefaultData(client);
         } else {
           try {
             await this.runSchema(client);
             await this.initializeDefaultData(client);
-            console.log('✅ DatabaseInit - Complete schema initialized successfully');
+            console.log(
+              "✅ DatabaseInit - Complete schema initialized successfully",
+            );
           } catch (schemaError: unknown) {
-            const reason = schemaError instanceof Error ? schemaError.message : String(schemaError);
-            console.error('❌ Full schema initialization failed:', reason);
+            const reason =
+              schemaError instanceof Error
+                ? schemaError.message
+                : String(schemaError);
+            console.error("❌ Full schema initialization failed:", reason);
             throw schemaError;
           }
         }
@@ -57,7 +75,10 @@ export class DatabaseInit implements OnModuleInit {
         client.release();
       }
     } catch (err) {
-      console.error('❌ DatabaseInit failed (Non-fatal, continuing startup)', err);
+      console.error(
+        "❌ DatabaseInit failed (Non-fatal, continuing startup)",
+        err,
+      );
       // DO NOT throw err; allow app to start so we can debug via logs/health check
     }
   }
@@ -71,7 +92,7 @@ export class DatabaseInit implements OnModuleInit {
    */
   private splitSqlStatements(sql: string): string[] {
     const statements: string[] = [];
-    let currentStatement = '';
+    let currentStatement = "";
     let i = 0;
     const len = sql.length;
 
@@ -100,7 +121,7 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       // Handle dollar quoted strings $tag$...$tag$
-      if (char === '$') {
+      if (char === "$") {
         // Check if it's a dollar quote start
         const tagMatch = sql.substring(i).match(/^(\$[a-zA-Z0-9_]*\$)/);
         if (tagMatch) {
@@ -123,9 +144,9 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       // Handle comments
-      if (char === '-' && i + 1 < len && sql[i + 1] === '-') {
+      if (char === "-" && i + 1 < len && sql[i + 1] === "-") {
         // Line comment --
-        const newlineIndex = sql.indexOf('\n', i);
+        const newlineIndex = sql.indexOf("\n", i);
         if (newlineIndex !== -1) {
           currentStatement += sql.substring(i, newlineIndex + 1);
           i = newlineIndex + 1;
@@ -136,9 +157,9 @@ export class DatabaseInit implements OnModuleInit {
         continue;
       }
 
-      if (char === '/' && i + 1 < len && sql[i + 1] === '*') {
+      if (char === "/" && i + 1 < len && sql[i + 1] === "*") {
         // Block comment /* ... */
-        const closeIndex = sql.indexOf('*/', i + 2);
+        const closeIndex = sql.indexOf("*/", i + 2);
         if (closeIndex !== -1) {
           currentStatement += sql.substring(i, closeIndex + 2);
           i = closeIndex + 2;
@@ -150,12 +171,12 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       // Handle semicolon
-      if (char === ';') {
+      if (char === ";") {
         currentStatement += char;
         if (currentStatement.trim()) {
           statements.push(currentStatement.trim());
         }
-        currentStatement = '';
+        currentStatement = "";
         i++;
         continue;
       }
@@ -176,13 +197,13 @@ export class DatabaseInit implements OnModuleInit {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
-        path.join(__dirname, 'schema.sql'), // dist/database/schema.sql (build)
-        path.join(process.cwd(), 'dist', 'database', 'schema.sql'),
-        path.join(process.cwd(), 'src', 'database', 'schema.sql'), // dev path
-        path.resolve(__dirname, '../../src/database/schema.sql'),
+        path.join(__dirname, "schema.sql"), // dist/database/schema.sql (build)
+        path.join(process.cwd(), "dist", "database", "schema.sql"),
+        path.join(process.cwd(), "src", "database", "schema.sql"), // dev path
+        path.resolve(__dirname, "../../src/database/schema.sql"),
       ];
 
-      let schemaPath = '';
+      let schemaPath = "";
       for (const p of candidates) {
         if (fs.existsSync(p)) {
           schemaPath = p;
@@ -191,10 +212,10 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       if (!schemaPath) {
-        throw new Error('schema.sql not found in expected locations');
+        throw new Error("schema.sql not found in expected locations");
       }
 
-      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+      const schemaSql = fs.readFileSync(schemaPath, "utf8");
 
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
@@ -205,8 +226,12 @@ export class DatabaseInit implements OnModuleInit {
           try {
             await client.query(statement.trim());
           } catch (err: any) {
-            console.error(`❌ Failed at statement #${i + 1} of ${statements.length}:`);
-            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            console.error(
+              `❌ Failed at statement #${i + 1} of ${statements.length}:`,
+            );
+            console.error(
+              `Statement preview: ${statement.trim().substring(0, 200)}...`,
+            );
             throw err;
           }
         }
@@ -231,13 +256,13 @@ export class DatabaseInit implements OnModuleInit {
         `);
 
         if (columnCheck.rows.length === 0) {
-          console.log('📝 google_id column does not exist, creating it...');
+          console.log("📝 google_id column does not exist, creating it...");
           await client.query(`
             ALTER TABLE user_profiles ADD COLUMN google_id TEXT;
           `);
-          console.log('✅ google_id column created');
+          console.log("✅ google_id column created");
         } else {
-          console.log('✅ google_id column already exists');
+          console.log("✅ google_id column already exists");
         }
 
         // Add unique constraint separately if it doesn't exist
@@ -248,13 +273,15 @@ export class DatabaseInit implements OnModuleInit {
         `);
 
         if (constraintCheck.rows.length === 0) {
-          console.log('📝 google_id unique constraint does not exist, creating it...');
+          console.log(
+            "📝 google_id unique constraint does not exist, creating it...",
+          );
           await client.query(`
             ALTER TABLE user_profiles ADD CONSTRAINT user_profiles_google_id_key UNIQUE (google_id);
           `);
-          console.log('✅ google_id unique constraint created');
+          console.log("✅ google_id unique constraint created");
         } else {
-          console.log('✅ google_id unique constraint already exists');
+          console.log("✅ google_id unique constraint already exists");
         }
 
         // Create index if it doesn't exist
@@ -265,19 +292,21 @@ export class DatabaseInit implements OnModuleInit {
         `);
 
         if (indexCheck.rows.length === 0) {
-          console.log('📝 google_id index does not exist, creating it...');
+          console.log("📝 google_id index does not exist, creating it...");
           await client.query(`
             CREATE INDEX idx_user_profiles_google_id ON user_profiles (google_id) WHERE google_id IS NOT NULL;
           `);
-          console.log('✅ google_id index created');
+          console.log("✅ google_id index created");
         } else {
-          console.log('✅ google_id index already exists');
+          console.log("✅ google_id index already exists");
         }
 
-        console.log('✅ google_id column, constraint, and index ensured in user_profiles');
+        console.log(
+          "✅ google_id column, constraint, and index ensured in user_profiles",
+        );
       } catch (err: any) {
-        console.error('❌ Failed to add google_id column:', err.message);
-        console.error('❌ Error stack:', err.stack);
+        console.error("❌ Failed to add google_id column:", err.message);
+        console.error("❌ Error stack:", err.stack);
         // Don't throw - continue with other operations
       }
 
@@ -297,7 +326,7 @@ export class DatabaseInit implements OnModuleInit {
       // Run community group challenges schema
       await this.runCommunityGroupChallengesSchema(client);
     } catch (err) {
-      console.error('❌ Schema creation failed:', err);
+      console.error("❌ Schema creation failed:", err);
       throw err;
     }
   }
@@ -334,7 +363,7 @@ export class DatabaseInit implements OnModuleInit {
       `);
 
       // Ensure items table with separate columns (not JSONB)
-      console.log('🔧 Ensuring items table with dedicated columns...');
+      console.log("🔧 Ensuring items table with dedicated columns...");
       try {
         await client.query(`
           CREATE TABLE IF NOT EXISTS items (
@@ -364,28 +393,48 @@ export class DatabaseInit implements OnModuleInit {
 
         // Try to create indexes, skip if column doesn't exist
         try {
-          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);`);
-        } catch (e) { console.log('⚠️ Skipping idx_items_owner_id'); }
+          await client.query(
+            `CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id);`,
+          );
+        } catch {
+          console.log("⚠️ Skipping idx_items_owner_id");
+        }
 
         try {
-          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);`);
-        } catch (e) { console.log('⚠️ Skipping idx_items_category'); }
+          await client.query(
+            `CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);`,
+          );
+        } catch {
+          console.log("⚠️ Skipping idx_items_category");
+        }
 
         try {
-          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`);
-        } catch (e) { console.log('⚠️ Skipping idx_items_status'); }
+          await client.query(
+            `CREATE INDEX IF NOT EXISTS idx_items_status ON items(status);`,
+          );
+        } catch {
+          console.log("⚠️ Skipping idx_items_status");
+        }
 
         try {
-          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);`);
-        } catch (e) { console.log('⚠️ Skipping idx_items_is_deleted'); }
+          await client.query(
+            `CREATE INDEX IF NOT EXISTS idx_items_is_deleted ON items(is_deleted);`,
+          );
+        } catch {
+          console.log("⚠️ Skipping idx_items_is_deleted");
+        }
 
         try {
-          await client.query(`CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);`);
-        } catch (e) { console.log('⚠️ Skipping idx_items_created_at'); }
+          await client.query(
+            `CREATE INDEX IF NOT EXISTS idx_items_created_at ON items(created_at DESC);`,
+          );
+        } catch {
+          console.log("⚠️ Skipping idx_items_created_at");
+        }
 
-        console.log('✅ Items table ensured with dedicated columns');
+        console.log("✅ Items table ensured with dedicated columns");
       } catch (error) {
-        console.error('❌ Failed to create items table:', error);
+        console.error("❌ Failed to create items table:", error);
         // Continue anyway - table might already exist in different format
       }
 
@@ -402,8 +451,8 @@ export class DatabaseInit implements OnModuleInit {
               END IF;
             END $$ ;
           `);
-      } catch (e) {
-        console.log('⚠️ Failed to add location column to items:', e);
+      } catch (_e) {
+        console.log("⚠️ Failed to add location column to items:", _e);
       }
 
       // Minimal user_profiles to satisfy joins and stats
@@ -439,7 +488,9 @@ export class DatabaseInit implements OnModuleInit {
         END $$ ;
       `);
 
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_user_profiles_email_lower ON user_profiles (LOWER(email));`,
+      );
       // Only create firebase_uid index if the column exists
       await client.query(`
         DO $$ 
@@ -452,8 +503,12 @@ export class DatabaseInit implements OnModuleInit {
           END IF;
         END $$ ;
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_user_profiles_city ON user_profiles (city);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles (is_active, last_active);`,
+      );
 
       // Ensure metadata column exists
       await client.query(`
@@ -495,8 +550,10 @@ export class DatabaseInit implements OnModuleInit {
         ) AS exists;
       `);
       if (donationsLegacy?.rows?.[0]?.exists) {
-        console.warn('⚠️  Replacing legacy JSONB donations table with relational schema');
-        await client.query('DROP TABLE IF EXISTS donations CASCADE;');
+        console.warn(
+          "⚠️  Replacing legacy JSONB donations table with relational schema",
+        );
+        await client.query("DROP TABLE IF EXISTS donations CASCADE;");
       }
       await client.query(`
         CREATE TABLE IF NOT EXISTS donations (
@@ -570,7 +627,9 @@ export class DatabaseInit implements OnModuleInit {
         END $$ ;
       `);
       // location is JSONB – safe
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_donations_location ON donations USING GIN (location);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_donations_location ON donations USING GIN (location);`,
+      );
 
       // minimal user_activities used by stats
       await client.query(`
@@ -593,8 +652,10 @@ export class DatabaseInit implements OnModuleInit {
         ) AS exists;
       `);
       if (ridesLegacy?.rows?.[0]?.exists) {
-        console.warn('⚠️  Replacing legacy JSONB rides table with relational schema');
-        await client.query('DROP TABLE IF EXISTS rides CASCADE;');
+        console.warn(
+          "⚠️  Replacing legacy JSONB rides table with relational schema",
+        );
+        await client.query("DROP TABLE IF EXISTS rides CASCADE;");
       }
       await client.query(`
         CREATE TABLE IF NOT EXISTS rides (
@@ -644,8 +705,12 @@ export class DatabaseInit implements OnModuleInit {
           END IF;
         END $$ ;
       `);
-      await client.query('CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);');
-      await client.query('CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);');
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_rides_from_location ON rides USING GIN (from_location);",
+      );
+      await client.query(
+        "CREATE INDEX IF NOT EXISTS idx_rides_to_location ON rides USING GIN (to_location);",
+      );
 
       // Minimal chat schema required by ChatController
       // NOTE: All user ID fields use UUID type to match user_profiles.id
@@ -663,7 +728,9 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_chat_conversations_participants ON chat_conversations USING GIN (participants);`,
+      );
 
       await client.query(`
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -685,8 +752,12 @@ export class DatabaseInit implements OnModuleInit {
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages (conversation_id, created_at);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON chat_messages (sender_id);`,
+      );
 
       // Add missing columns to existing chat_messages table if needed
       await client.query(`
@@ -728,8 +799,12 @@ export class DatabaseInit implements OnModuleInit {
           UNIQUE(message_id, user_id)
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_message_read_receipts_message ON message_read_receipts (message_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_message_read_receipts_user ON message_read_receipts (user_id);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_message_read_receipts_message ON message_read_receipts (message_id);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_message_read_receipts_user ON message_read_receipts (user_id);`,
+      );
 
       // ride_bookings table
       await client.query(`
@@ -770,9 +845,15 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_events_status ON community_events (status);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_events_date ON community_events (event_date);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_events_organizer ON community_events (organizer_id);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_events_status ON community_events (status);`,
+      );
 
       // event_attendees table
       await client.query(`
@@ -800,10 +881,18 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_name ON community_members (name);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_members_name ON community_members (name);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_members_role ON community_members (role);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_members_status ON community_members (status);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_community_members_created_at ON community_members (created_at DESC);`,
+      );
 
       // Create trigger function if it doesn't exist
       await client.query(`
@@ -817,7 +906,9 @@ export class DatabaseInit implements OnModuleInit {
       `);
 
       // Create trigger for community_members
-      await client.query('DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members');
+      await client.query(
+        "DROP TRIGGER IF EXISTS update_community_members_updated_at ON community_members",
+      );
       await client.query(`
         CREATE TRIGGER update_community_members_updated_at 
         BEFORE UPDATE ON community_members 
@@ -829,7 +920,7 @@ export class DatabaseInit implements OnModuleInit {
       // All user data is now unified in user_profiles table with UUID identifiers
 
       // Ensure item_requests table exists
-      console.log('📦 Ensuring item_requests table...');
+      console.log("📦 Ensuring item_requests table...");
       await client.query(`
         CREATE TABLE IF NOT EXISTS item_requests (
           id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -846,12 +937,16 @@ export class DatabaseInit implements OnModuleInit {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         );
       `);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_item_requests_item ON item_requests(item_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_item_requests_requester ON item_requests(requester_id);`);
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_item_requests_item ON item_requests(item_id);`,
+      );
+      await client.query(
+        `CREATE INDEX IF NOT EXISTS idx_item_requests_requester ON item_requests(requester_id);`,
+      );
 
-      console.log('✅ Backward compatibility tables ensured');
+      console.log("✅ Backward compatibility tables ensured");
     } catch (err) {
-      console.error('❌ Backward compatibility setup failed:', err);
+      console.error("❌ Backward compatibility setup failed:", err);
       throw err;
     }
   }
@@ -860,25 +955,131 @@ export class DatabaseInit implements OnModuleInit {
     try {
       // Initialize donation categories
       const categories = [
-        { slug: 'money', name_he: 'כסף', name_en: 'Money', icon: '💰', color: '#4CAF50', sort_order: 1 },
-        { slug: 'trump', name_he: 'טרמפים', name_en: 'Rides', icon: '🚗', color: '#2196F3', sort_order: 2 },
-        { slug: 'knowledge', name_he: 'ידע', name_en: 'Knowledge', icon: '📚', color: '#9C27B0', sort_order: 3 },
-        { slug: 'time', name_he: 'זמן', name_en: 'Time', icon: '⏰', color: '#FF9800', sort_order: 4 },
-        { slug: 'food', name_he: 'אוכל', name_en: 'Food', icon: '🍞', color: '#8BC34A', sort_order: 5 },
-        { slug: 'clothes', name_he: 'בגדים', name_en: 'Clothes', icon: '👕', color: '#03A9F4', sort_order: 6 },
-        { slug: 'books', name_he: 'ספרים', name_en: 'Books', icon: '📖', color: '#607D8B', sort_order: 7 },
-        { slug: 'furniture', name_he: 'רהיטים', name_en: 'Furniture', icon: '🪑', color: '#795548', sort_order: 8 },
-        { slug: 'medical', name_he: 'רפואה', name_en: 'Medical', icon: '🏥', color: '#F44336', sort_order: 9 },
-        { slug: 'animals', name_he: 'חיות', name_en: 'Animals', icon: '🐾', color: '#4CAF50', sort_order: 10 },
-        { slug: 'housing', name_he: 'דיור', name_en: 'Housing', icon: '🏠', color: '#FF5722', sort_order: 11 },
-        { slug: 'support', name_he: 'תמיכה', name_en: 'Support', icon: '💝', color: '#E91E63', sort_order: 12 },
-        { slug: 'education', name_he: 'חינוך', name_en: 'Education', icon: '🎓', color: '#3F51B5', sort_order: 13 },
-        { slug: 'environment', name_he: 'סביבה', name_en: 'Environment', icon: '🌱', color: '#4CAF50', sort_order: 14 },
-        { slug: 'technology', name_he: 'טכנולוגיה', name_en: 'Technology', icon: '💻', color: '#009688', sort_order: 15 }
+        {
+          slug: "money",
+          name_he: "כסף",
+          name_en: "Money",
+          icon: "💰",
+          color: "#4CAF50",
+          sort_order: 1,
+        },
+        {
+          slug: "trump",
+          name_he: "טרמפים",
+          name_en: "Rides",
+          icon: "🚗",
+          color: "#2196F3",
+          sort_order: 2,
+        },
+        {
+          slug: "knowledge",
+          name_he: "ידע",
+          name_en: "Knowledge",
+          icon: "📚",
+          color: "#9C27B0",
+          sort_order: 3,
+        },
+        {
+          slug: "time",
+          name_he: "זמן",
+          name_en: "Time",
+          icon: "⏰",
+          color: "#FF9800",
+          sort_order: 4,
+        },
+        {
+          slug: "food",
+          name_he: "אוכל",
+          name_en: "Food",
+          icon: "🍞",
+          color: "#8BC34A",
+          sort_order: 5,
+        },
+        {
+          slug: "clothes",
+          name_he: "בגדים",
+          name_en: "Clothes",
+          icon: "👕",
+          color: "#03A9F4",
+          sort_order: 6,
+        },
+        {
+          slug: "books",
+          name_he: "ספרים",
+          name_en: "Books",
+          icon: "📖",
+          color: "#607D8B",
+          sort_order: 7,
+        },
+        {
+          slug: "furniture",
+          name_he: "רהיטים",
+          name_en: "Furniture",
+          icon: "🪑",
+          color: "#795548",
+          sort_order: 8,
+        },
+        {
+          slug: "medical",
+          name_he: "רפואה",
+          name_en: "Medical",
+          icon: "🏥",
+          color: "#F44336",
+          sort_order: 9,
+        },
+        {
+          slug: "animals",
+          name_he: "חיות",
+          name_en: "Animals",
+          icon: "🐾",
+          color: "#4CAF50",
+          sort_order: 10,
+        },
+        {
+          slug: "housing",
+          name_he: "דיור",
+          name_en: "Housing",
+          icon: "🏠",
+          color: "#FF5722",
+          sort_order: 11,
+        },
+        {
+          slug: "support",
+          name_he: "תמיכה",
+          name_en: "Support",
+          icon: "💝",
+          color: "#E91E63",
+          sort_order: 12,
+        },
+        {
+          slug: "education",
+          name_he: "חינוך",
+          name_en: "Education",
+          icon: "🎓",
+          color: "#3F51B5",
+          sort_order: 13,
+        },
+        {
+          slug: "environment",
+          name_he: "סביבה",
+          name_en: "Environment",
+          icon: "🌱",
+          color: "#4CAF50",
+          sort_order: 14,
+        },
+        {
+          slug: "technology",
+          name_he: "טכנולוגיה",
+          name_en: "Technology",
+          icon: "💻",
+          color: "#009688",
+          sort_order: 15,
+        },
       ];
 
       for (const category of categories) {
-        await client.query(`
+        await client.query(
+          `
           INSERT INTO donation_categories (slug, name_he, name_en, icon, color, sort_order)
           VALUES ($1, $2, $3, $4, $5, $6)
           ON CONFLICT (slug) DO UPDATE SET
@@ -888,38 +1089,52 @@ export class DatabaseInit implements OnModuleInit {
             color = EXCLUDED.color,
             sort_order = EXCLUDED.sort_order,
             updated_at = NOW()
-        `, [category.slug, category.name_he, category.name_en, category.icon, category.color, category.sort_order]);
+        `,
+          [
+            category.slug,
+            category.name_he,
+            category.name_en,
+            category.icon,
+            category.color,
+            category.sort_order,
+          ],
+        );
       }
 
       // Initialize global community stats
       // IMPORTANT: Using ON CONFLICT DO NOTHING to preserve existing data on redeployment
       // This ensures that stats like site_visits don't reset when the server restarts
       const defaultStats = [
-        { stat_type: 'site_visits', stat_value: 0 },
-        { stat_type: 'money_donations', stat_value: 0 },
-        { stat_type: 'volunteer_hours', stat_value: 0 },
-        { stat_type: 'rides_completed', stat_value: 0 },
-        { stat_type: 'events_created', stat_value: 0 },
-        { stat_type: 'active_members', stat_value: 0 },
-        { stat_type: 'food_kg', stat_value: 0 },
-        { stat_type: 'clothing_kg', stat_value: 0 },
-        { stat_type: 'books_donated', stat_value: 0 }
+        { stat_type: "site_visits", stat_value: 0 },
+        { stat_type: "money_donations", stat_value: 0 },
+        { stat_type: "volunteer_hours", stat_value: 0 },
+        { stat_type: "rides_completed", stat_value: 0 },
+        { stat_type: "events_created", stat_value: 0 },
+        { stat_type: "active_members", stat_value: 0 },
+        { stat_type: "food_kg", stat_value: 0 },
+        { stat_type: "clothing_kg", stat_value: 0 },
+        { stat_type: "books_donated", stat_value: 0 },
       ];
 
       for (const stat of defaultStats) {
         // ON CONFLICT DO NOTHING: If the stat exists for today, don't change it
         // This preserves accumulated values during server restarts/redeployments
-        const result = await client.query(`
+        const result = await client.query(
+          `
           INSERT INTO community_stats (stat_type, stat_value, date_period)
           VALUES ($1, $2, CURRENT_DATE)
           ON CONFLICT (stat_type, city, date_period) DO NOTHING
           RETURNING stat_type, stat_value
-        `, [stat.stat_type, stat.stat_value]);
+        `,
+          [stat.stat_type, stat.stat_value],
+        );
 
         // If result has rows, it means we created a new stat entry
         // If no rows, it means the stat already existed and was preserved
         if (result.rows.length > 0) {
-          console.log(`✨ Created new stat: ${stat.stat_type} = ${stat.stat_value}`);
+          console.log(
+            `✨ Created new stat: ${stat.stat_type} = ${stat.stat_value}`,
+          );
         } else {
           console.log(`✅ Preserved existing stat: ${stat.stat_type}`);
         }
@@ -944,16 +1159,18 @@ export class DatabaseInit implements OnModuleInit {
            SET roles = ARRAY['super_admin', 'admin', 'user']::TEXT[]
            WHERE LOWER(TRIM(email)) = $1
              AND (roles IS NULL OR NOT (roles @> ARRAY['super_admin']::TEXT[]))`,
-          [rootAdminEmail]
+          [rootAdminEmail],
         );
         console.log(`✅ Root admin role ensured for: ${rootAdminEmail}`);
       } else {
-        console.warn('⚠️ ROOT_ADMIN_EMAIL not set - no root admin bootstrap. Set in .env for initial setup.');
+        console.warn(
+          "⚠️ ROOT_ADMIN_EMAIL not set - no root admin bootstrap. Set in .env for initial setup.",
+        );
       }
 
-      console.log('✅ Default data initialized');
+      console.log("✅ Default data initialized");
     } catch (err) {
-      console.error('❌ Default data initialization failed:', err);
+      console.error("❌ Default data initialization failed:", err);
       // Don't throw here as it's not critical
     }
   }
@@ -962,13 +1179,13 @@ export class DatabaseInit implements OnModuleInit {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
-        path.join(__dirname, 'challenges-schema.sql'),
-        path.join(process.cwd(), 'dist', 'database', 'challenges-schema.sql'),
-        path.join(process.cwd(), 'src', 'database', 'challenges-schema.sql'),
-        path.resolve(__dirname, '../../src/database/challenges-schema.sql'),
+        path.join(__dirname, "challenges-schema.sql"),
+        path.join(process.cwd(), "dist", "database", "challenges-schema.sql"),
+        path.join(process.cwd(), "src", "database", "challenges-schema.sql"),
+        path.resolve(__dirname, "../../src/database/challenges-schema.sql"),
       ];
 
-      let schemaPath = '';
+      let schemaPath = "";
       for (const p of candidates) {
         if (fs.existsSync(p)) {
           schemaPath = p;
@@ -977,11 +1194,13 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       if (!schemaPath) {
-        console.warn('⚠️ challenges-schema.sql not found, skipping challenges tables');
+        console.warn(
+          "⚠️ challenges-schema.sql not found, skipping challenges tables",
+        );
         return;
       }
 
-      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+      const schemaSql = fs.readFileSync(schemaPath, "utf8");
 
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
@@ -992,16 +1211,22 @@ export class DatabaseInit implements OnModuleInit {
           try {
             await client.query(statement.trim());
           } catch (err: any) {
-            console.error(`❌ Failed at CHALLENGES statement #${i + 1} of ${statements.length}:`);
-            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            console.error(
+              `❌ Failed at CHALLENGES statement #${i + 1} of ${statements.length}:`,
+            );
+            console.error(
+              `Statement preview: ${statement.trim().substring(0, 200)}...`,
+            );
             throw err;
           }
         }
       }
 
-      console.log(`✅ Challenges schema tables created successfully from: ${schemaPath}`);
+      console.log(
+        `✅ Challenges schema tables created successfully from: ${schemaPath}`,
+      );
     } catch (err) {
-      console.error('❌ Challenges schema creation failed:', err);
+      console.error("❌ Challenges schema creation failed:", err);
       // Don't throw here as it's not critical
     }
   }
@@ -1010,13 +1235,26 @@ export class DatabaseInit implements OnModuleInit {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
-        path.join(__dirname, 'community-group-challenges-schema.sql'),
-        path.join(process.cwd(), 'dist', 'database', 'community-group-challenges-schema.sql'),
-        path.join(process.cwd(), 'src', 'database', 'community-group-challenges-schema.sql'),
-        path.resolve(__dirname, '../../src/database/community-group-challenges-schema.sql'),
+        path.join(__dirname, "community-group-challenges-schema.sql"),
+        path.join(
+          process.cwd(),
+          "dist",
+          "database",
+          "community-group-challenges-schema.sql",
+        ),
+        path.join(
+          process.cwd(),
+          "src",
+          "database",
+          "community-group-challenges-schema.sql",
+        ),
+        path.resolve(
+          __dirname,
+          "../../src/database/community-group-challenges-schema.sql",
+        ),
       ];
 
-      let schemaPath = '';
+      let schemaPath = "";
       for (const p of candidates) {
         if (fs.existsSync(p)) {
           schemaPath = p;
@@ -1025,11 +1263,13 @@ export class DatabaseInit implements OnModuleInit {
       }
 
       if (!schemaPath) {
-        console.warn('⚠️ community-group-challenges-schema.sql not found, skipping community challenges tables');
+        console.warn(
+          "⚠️ community-group-challenges-schema.sql not found, skipping community challenges tables",
+        );
         return;
       }
 
-      const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+      const schemaSql = fs.readFileSync(schemaPath, "utf8");
 
       // Split SQL statements intelligently, handling DO $$ blocks
       const statements = this.splitSqlStatements(schemaSql);
@@ -1040,8 +1280,12 @@ export class DatabaseInit implements OnModuleInit {
           try {
             await client.query(statement.trim());
           } catch (err: any) {
-            console.error(`❌ Failed at COMMUNITY CHALLENGES statement #${i + 1} of ${statements.length}:`);
-            console.error(`Statement preview: ${statement.trim().substring(0, 200)}...`);
+            console.error(
+              `❌ Failed at COMMUNITY CHALLENGES statement #${i + 1} of ${statements.length}:`,
+            );
+            console.error(
+              `Statement preview: ${statement.trim().substring(0, 200)}...`,
+            );
             throw err;
           }
         }
@@ -1061,17 +1305,22 @@ export class DatabaseInit implements OnModuleInit {
               END IF;
           END $$;
         `);
-        console.log('✅ Verified image_url column exists in community_group_challenges');
+        console.log(
+          "✅ Verified image_url column exists in community_group_challenges",
+        );
       } catch (err) {
-        console.error('⚠️ Could not verify image_url column:', err);
+        console.error("⚠️ Could not verify image_url column:", err);
       }
 
-      console.log(`✅ Community Group Challenges schema tables created successfully from: ${schemaPath}`);
+      console.log(
+        `✅ Community Group Challenges schema tables created successfully from: ${schemaPath}`,
+      );
     } catch (err) {
-      console.error('❌ Community Group Challenges schema creation failed:', err);
+      console.error(
+        "❌ Community Group Challenges schema creation failed:",
+        err,
+      );
       // Don't throw here as it's not critical
     }
   }
 }
-
-

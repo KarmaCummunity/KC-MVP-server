@@ -2,13 +2,13 @@
 // - Purpose: Service for Admin Dynamic Tables management
 // - Used by: AdminTablesController
 // - Provides: CRUD operations for tables, columns, and rows with validation
-import { Inject, Injectable } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
+import { Inject, Injectable } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
 
 export interface CreateColumnDto {
   name: string;
-  data_type: 'text' | 'number' | 'date';
+  data_type: "text" | "number" | "date";
   is_required?: boolean;
   display_order?: number;
 }
@@ -37,9 +37,7 @@ export interface UpdateRowDto {
 
 @Injectable()
 export class AdminTablesService {
-  constructor(
-    @Inject(PG_POOL) private readonly pool: Pool,
-  ) { }
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
 
   /**
    * Ensure admin tables exist, create if needed
@@ -56,8 +54,8 @@ export class AdminTablesService {
       `);
 
       if (!checkTable.rows[0].exists) {
-        console.log('📋 Creating admin_tables tables...');
-        
+        console.log("📋 Creating admin_tables tables...");
+
         // Create admin_tables
         await this.pool.query(`
           CREATE TABLE IF NOT EXISTS admin_tables (
@@ -99,14 +97,30 @@ export class AdminTablesService {
         `);
 
         // Create indexes
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_tables_created_by ON admin_tables(created_by);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_tables_created_at ON admin_tables(created_at DESC);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_columns_table_id ON admin_table_columns(table_id);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_columns_display_order ON admin_table_columns(table_id, display_order);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_rows_table_id ON admin_table_rows(table_id);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_by ON admin_table_rows(created_by);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_at ON admin_table_rows(table_id, created_at DESC);');
-        await this.pool.query('CREATE INDEX IF NOT EXISTS idx_admin_table_rows_data_gin ON admin_table_rows USING GIN (data);');
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_tables_created_by ON admin_tables(created_by);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_tables_created_at ON admin_tables(created_at DESC);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_columns_table_id ON admin_table_columns(table_id);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_columns_display_order ON admin_table_columns(table_id, display_order);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_rows_table_id ON admin_table_rows(table_id);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_by ON admin_table_rows(created_by);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_rows_created_at ON admin_table_rows(table_id, created_at DESC);",
+        );
+        await this.pool.query(
+          "CREATE INDEX IF NOT EXISTS idx_admin_table_rows_data_gin ON admin_table_rows USING GIN (data);",
+        );
 
         // Create triggers for updated_at
         await this.pool.query(`
@@ -133,10 +147,10 @@ export class AdminTablesService {
           FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
         `);
 
-        console.log('✅ admin_tables tables created successfully');
+        console.log("✅ admin_tables tables created successfully");
       }
     } catch (error) {
-      console.error('❌ Error ensuring admin_tables tables:', error);
+      console.error("❌ Error ensuring admin_tables tables:", error);
       throw error;
     }
   }
@@ -144,40 +158,59 @@ export class AdminTablesService {
   /**
    * Validate row data according to column definitions
    */
-  private validateRowData(columns: any[], data: Record<string, any>): { valid: boolean; error?: string } {
+  private validateRowData(
+    columns: any[],
+    data: Record<string, any>,
+  ): { valid: boolean; error?: string } {
     for (const column of columns) {
       const value = data[column.name];
 
       // Check required fields
-      if (column.is_required && (value === undefined || value === null || value === '')) {
+      if (
+        column.is_required &&
+        (value === undefined || value === null || value === "")
+      ) {
         return { valid: false, error: `שדה חובה: ${column.name}` };
       }
 
       // Skip validation if value is empty and not required
-      if (value === undefined || value === null || value === '') {
+      if (value === undefined || value === null || value === "") {
         continue;
       }
 
       // Validate data types
       switch (column.data_type) {
-        case 'text':
-          if (typeof value !== 'string') {
-            return { valid: false, error: `שדה ${column.name} חייב להיות טקסט` };
+        case "text":
+          if (typeof value !== "string") {
+            return {
+              valid: false,
+              error: `שדה ${column.name} חייב להיות טקסט`,
+            };
           }
           break;
-        case 'number':
-          if (typeof value !== 'number' && isNaN(Number(value))) {
-            return { valid: false, error: `שדה ${column.name} חייב להיות מספר` };
+        case "number":
+          if (typeof value !== "number" && isNaN(Number(value))) {
+            return {
+              valid: false,
+              error: `שדה ${column.name} חייב להיות מספר`,
+            };
           }
           break;
-        case 'date':
+        case "date": {
           const dateValue = value instanceof Date ? value : new Date(value);
           if (isNaN(dateValue.getTime())) {
-            return { valid: false, error: `שדה ${column.name} חייב להיות תאריך תקין` };
+            return {
+              valid: false,
+              error: `שדה ${column.name} חייב להיות תאריך תקין`,
+            };
           }
           break;
+        }
         default:
-          return { valid: false, error: `סוג נתון לא נתמך: ${column.data_type}` };
+          return {
+            valid: false,
+            error: `סוג נתון לא נתמך: ${column.data_type}`,
+          };
       }
     }
 
@@ -187,13 +220,16 @@ export class AdminTablesService {
   /**
    * Normalize row data according to column data types
    */
-  private normalizeRowData(columns: any[], data: Record<string, any>): Record<string, any> {
+  private normalizeRowData(
+    columns: any[],
+    data: Record<string, any>,
+  ): Record<string, any> {
     const normalized: Record<string, any> = {};
 
     for (const column of columns) {
       const value = data[column.name];
 
-      if (value === undefined || value === null || value === '') {
+      if (value === undefined || value === null || value === "") {
         if (!column.is_required) {
           normalized[column.name] = null;
         }
@@ -201,16 +237,17 @@ export class AdminTablesService {
       }
 
       switch (column.data_type) {
-        case 'text':
+        case "text":
           normalized[column.name] = String(value);
           break;
-        case 'number':
+        case "number":
           normalized[column.name] = Number(value);
           break;
-        case 'date':
+        case "date": {
           const dateValue = value instanceof Date ? value : new Date(value);
           normalized[column.name] = dateValue.toISOString();
           break;
+        }
         default:
           normalized[column.name] = value;
       }
@@ -226,17 +263,17 @@ export class AdminTablesService {
     await this.ensureTables();
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Validate columns
       if (!dto.columns || dto.columns.length === 0) {
-        throw new Error('חייב להגדיר לפחות עמודה אחת');
+        throw new Error("חייב להגדיר לפחות עמודה אחת");
       }
 
       // Check for duplicate column names
-      const columnNames = dto.columns.map(c => c.name);
+      const columnNames = dto.columns.map((c) => c.name);
       if (new Set(columnNames).size !== columnNames.length) {
-        throw new Error('לא ניתן להגדיר עמודות עם אותו שם');
+        throw new Error("לא ניתן להגדיר עמודות עם אותו שם");
       }
 
       // Insert table
@@ -249,7 +286,7 @@ export class AdminTablesService {
           dto.description || null,
           userId,
           JSON.stringify(dto.metadata || {}),
-        ]
+        ],
       );
 
       const table = tableResult.rows[0];
@@ -266,24 +303,24 @@ export class AdminTablesService {
             column.data_type,
             column.is_required || false,
             column.display_order !== undefined ? column.display_order : i,
-          ]
+          ],
         );
       }
 
       // Fetch columns
       const columnsResult = await client.query(
         `SELECT * FROM admin_table_columns WHERE table_id = $1::UUID ORDER BY display_order, created_at`,
-        [table.id]
+        [table.id],
       );
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       return {
         ...table,
         columns: columnsResult.rows,
       };
     } catch (error: any) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();
@@ -297,7 +334,7 @@ export class AdminTablesService {
     await this.ensureTables();
     try {
       const tablesResult = await this.pool.query(
-        `SELECT * FROM admin_tables ORDER BY created_at DESC`
+        `SELECT * FROM admin_tables ORDER BY created_at DESC`,
       );
 
       const tables = tablesResult.rows;
@@ -306,14 +343,14 @@ export class AdminTablesService {
       for (const table of tables) {
         const columnsResult = await this.pool.query(
           `SELECT * FROM admin_table_columns WHERE table_id = $1::UUID ORDER BY display_order, created_at`,
-          [table.id]
+          [table.id],
         );
         table.columns = columnsResult.rows;
 
         // Get row count
         const countResult = await this.pool.query(
           `SELECT COUNT(*) as count FROM admin_table_rows WHERE table_id = $1::UUID`,
-          [table.id]
+          [table.id],
         );
         table.row_count = parseInt(countResult.rows[0].count);
       }
@@ -327,16 +364,20 @@ export class AdminTablesService {
   /**
    * Get table by ID with columns and optionally rows
    */
-  async getTableById(id: string, includeRows: boolean = false, pagination?: { page: number; limit: number }) {
+  async getTableById(
+    id: string,
+    includeRows: boolean = false,
+    pagination?: { page: number; limit: number },
+  ) {
     await this.ensureTables();
     try {
       const tableResult = await this.pool.query(
         `SELECT * FROM admin_tables WHERE id = $1::UUID`,
-        [id]
+        [id],
       );
 
       if (tableResult.rows.length === 0) {
-        throw new Error('טבלה לא נמצאה');
+        throw new Error("טבלה לא נמצאה");
       }
 
       const table = tableResult.rows[0];
@@ -344,7 +385,7 @@ export class AdminTablesService {
       // Fetch columns
       const columnsResult = await this.pool.query(
         `SELECT * FROM admin_table_columns WHERE table_id = $1::UUID ORDER BY display_order, created_at`,
-        [id]
+        [id],
       );
       table.columns = columnsResult.rows;
 
@@ -355,7 +396,10 @@ export class AdminTablesService {
 
         if (pagination) {
           rowsQuery += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-          params.push(pagination.limit, (pagination.page - 1) * pagination.limit);
+          params.push(
+            pagination.limit,
+            (pagination.page - 1) * pagination.limit,
+          );
         }
 
         const rowsResult = await this.pool.query(rowsQuery, params);
@@ -364,7 +408,7 @@ export class AdminTablesService {
         // Get total count
         const countResult = await this.pool.query(
           `SELECT COUNT(*) as count FROM admin_table_rows WHERE table_id = $1::UUID`,
-          [id]
+          [id],
         );
         table.total_rows = parseInt(countResult.rows[0].count);
       }
@@ -378,23 +422,27 @@ export class AdminTablesService {
   /**
    * Update table structure
    */
-  async updateTable(id: string, dto: UpdateTableDto, userId: string) {
+  async updateTable(id: string, dto: UpdateTableDto, _userId: string) {
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Check if table exists
       const tableCheck = await client.query(
         `SELECT id FROM admin_tables WHERE id = $1::UUID`,
-        [id]
+        [id],
       );
 
       if (tableCheck.rows.length === 0) {
-        throw new Error('טבלה לא נמצאה');
+        throw new Error("טבלה לא נמצאה");
       }
 
       // Update table fields
-      if (dto.name || dto.description !== undefined || dto.metadata !== undefined) {
+      if (
+        dto.name ||
+        dto.description !== undefined ||
+        dto.metadata !== undefined
+      ) {
         const updates: string[] = [];
         const params: any[] = [];
         let paramIndex = 1;
@@ -415,8 +463,8 @@ export class AdminTablesService {
         if (updates.length > 0) {
           params.push(id);
           await client.query(
-            `UPDATE admin_tables SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex}::UUID`,
-            params
+            `UPDATE admin_tables SET ${updates.join(", ")}, updated_at = NOW() WHERE id = $${paramIndex}::UUID`,
+            params,
           );
         }
       }
@@ -425,18 +473,18 @@ export class AdminTablesService {
       if (dto.columns) {
         // Validate columns
         if (dto.columns.length === 0) {
-          throw new Error('חייב להגדיר לפחות עמודה אחת');
+          throw new Error("חייב להגדיר לפחות עמודה אחת");
         }
 
-        const columnNames = dto.columns.map(c => c.name);
+        const columnNames = dto.columns.map((c) => c.name);
         if (new Set(columnNames).size !== columnNames.length) {
-          throw new Error('לא ניתן להגדיר עמודות עם אותו שם');
+          throw new Error("לא ניתן להגדיר עמודות עם אותו שם");
         }
 
         // Delete existing columns
         await client.query(
           `DELETE FROM admin_table_columns WHERE table_id = $1::UUID`,
-          [id]
+          [id],
         );
 
         // Insert new columns
@@ -451,7 +499,7 @@ export class AdminTablesService {
               column.data_type,
               column.is_required || false,
               column.display_order !== undefined ? column.display_order : i,
-            ]
+            ],
           );
         }
 
@@ -459,12 +507,12 @@ export class AdminTablesService {
         // This is intentional - admins should be careful when changing table structure
       }
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       // Fetch updated table
       return await this.getTableById(id, false);
     } catch (error: any) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();
@@ -478,11 +526,11 @@ export class AdminTablesService {
     try {
       const result = await this.pool.query(
         `DELETE FROM admin_tables WHERE id = $1::UUID RETURNING id`,
-        [id]
+        [id],
       );
 
       if (result.rows.length === 0) {
-        throw new Error('טבלה לא נמצאה');
+        throw new Error("טבלה לא נמצאה");
       }
 
       return { success: true };
@@ -494,7 +542,10 @@ export class AdminTablesService {
   /**
    * Get table rows with pagination
    */
-  async getTableRows(tableId: string, pagination?: { page: number; limit: number }) {
+  async getTableRows(
+    tableId: string,
+    pagination?: { page: number; limit: number },
+  ) {
     try {
       let query = `SELECT * FROM admin_table_rows WHERE table_id = $1::UUID ORDER BY created_at DESC`;
       const params: any[] = [tableId];
@@ -509,7 +560,7 @@ export class AdminTablesService {
       // Get total count
       const countResult = await this.pool.query(
         `SELECT COUNT(*) as count FROM admin_table_rows WHERE table_id = $1::UUID`,
-        [tableId]
+        [tableId],
       );
 
       return {
@@ -531,11 +582,11 @@ export class AdminTablesService {
       // Get table columns
       const columnsResult = await this.pool.query(
         `SELECT * FROM admin_table_columns WHERE table_id = $1::UUID ORDER BY display_order`,
-        [tableId]
+        [tableId],
       );
 
       if (columnsResult.rows.length === 0) {
-        throw new Error('טבלה לא נמצאה או שאין בה עמודות');
+        throw new Error("טבלה לא נמצאה או שאין בה עמודות");
       }
 
       const columns = columnsResult.rows;
@@ -543,7 +594,7 @@ export class AdminTablesService {
       // Validate row data
       const validation = this.validateRowData(columns, dto.data);
       if (!validation.valid) {
-        throw new Error(validation.error || 'נתונים לא תקינים');
+        throw new Error(validation.error || "נתונים לא תקינים");
       }
 
       // Normalize row data
@@ -554,11 +605,7 @@ export class AdminTablesService {
         `INSERT INTO admin_table_rows (table_id, data, created_by)
          VALUES ($1::UUID, $2::jsonb, $3::UUID)
          RETURNING *`,
-        [
-          tableId,
-          JSON.stringify(normalizedData),
-          userId,
-        ]
+        [tableId, JSON.stringify(normalizedData), userId],
       );
 
       return result.rows[0];
@@ -570,16 +617,21 @@ export class AdminTablesService {
   /**
    * Update a row
    */
-  async updateRow(tableId: string, rowId: string, dto: UpdateRowDto, userId: string) {
+  async updateRow(
+    tableId: string,
+    rowId: string,
+    dto: UpdateRowDto,
+    userId: string,
+  ) {
     try {
       // Get table columns
       const columnsResult = await this.pool.query(
         `SELECT * FROM admin_table_columns WHERE table_id = $1::UUID ORDER BY display_order`,
-        [tableId]
+        [tableId],
       );
 
       if (columnsResult.rows.length === 0) {
-        throw new Error('טבלה לא נמצאה או שאין בה עמודות');
+        throw new Error("טבלה לא נמצאה או שאין בה עמודות");
       }
 
       const columns = columnsResult.rows;
@@ -587,7 +639,7 @@ export class AdminTablesService {
       // Validate row data
       const validation = this.validateRowData(columns, dto.data);
       if (!validation.valid) {
-        throw new Error(validation.error || 'נתונים לא תקינים');
+        throw new Error(validation.error || "נתונים לא תקינים");
       }
 
       // Normalize row data
@@ -599,16 +651,11 @@ export class AdminTablesService {
          SET data = $1::jsonb, updated_by = $2::UUID, updated_at = NOW()
          WHERE id = $3::UUID AND table_id = $4::UUID
          RETURNING *`,
-        [
-          JSON.stringify(normalizedData),
-          userId,
-          rowId,
-          tableId,
-        ]
+        [JSON.stringify(normalizedData), userId, rowId, tableId],
       );
 
       if (result.rows.length === 0) {
-        throw new Error('רשומה לא נמצאה');
+        throw new Error("רשומה לא נמצאה");
       }
 
       return result.rows[0];
@@ -626,11 +673,11 @@ export class AdminTablesService {
         `DELETE FROM admin_table_rows 
          WHERE id = $1::UUID AND table_id = $2::UUID 
          RETURNING id`,
-        [rowId, tableId]
+        [rowId, tableId],
       );
 
       if (result.rows.length === 0) {
-        throw new Error('רשומה לא נמצאה');
+        throw new Error("רשומה לא נמצאה");
       }
 
       return { success: true };
@@ -639,4 +686,3 @@ export class AdminTablesService {
     }
   }
 }
-

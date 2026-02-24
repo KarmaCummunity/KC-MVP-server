@@ -18,14 +18,25 @@
 // TODO: Add comprehensive unit tests for all donation operations
 // TODO: Implement proper data sanitization and validation
 // TODO: Add comprehensive API documentation with Swagger decorators
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, Logger } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
-import { RedisCacheService } from '../redis/redis-cache.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+  Logger,
+} from "@nestjs/common";
+import { Inject } from "@nestjs/common";
+import { Pool } from "pg";
+import { PG_POOL } from "../database/database.module";
+import { RedisCacheService } from "../redis/redis-cache.service";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 
-@Controller('api/donations')
+@Controller("api/donations")
 export class DonationsController {
   private readonly logger = new Logger(DonationsController.name);
   // TODO: Move cache TTL to configuration service
@@ -42,11 +53,11 @@ export class DonationsController {
    * Get all donation categories with caching
    * Cache TTL: 30 minutes (categories are static data that rarely changes)
    */
-  @Get('categories')
+  @Get("categories")
   async getCategories() {
-    const cacheKey = 'donation_categories_all';
+    const cacheKey = "donation_categories_all";
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -68,21 +79,24 @@ export class DonationsController {
    * Get a single donation category by slug with caching
    * Cache TTL: 30 minutes (categories are static data)
    */
-  @Get('categories/:slug')
-  async getCategoryBySlug(@Param('slug') slug: string) {
+  @Get("categories/:slug")
+  async getCategoryBySlug(@Param("slug") slug: string) {
     const cacheKey = `donation_category_${slug}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    const { rows } = await this.pool.query(`
+    const { rows } = await this.pool.query(
+      `
       SELECT * FROM donation_categories WHERE slug = $1 AND is_active = true
-    `, [slug]);
+    `,
+      [slug],
+    );
 
     if (rows.length === 0) {
-      return { success: false, error: 'Category not found' };
+      return { success: false, error: "Category not found" };
     }
 
     // Cache for 30 minutes - categories are static data
@@ -99,63 +113,81 @@ export class DonationsController {
     // TODO: Implement rate limiting for donation creation
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
 
       // Insert donation
-      const isRecurring = donationData.is_recurring ?? donationData.isRecurring ?? false;
+      const isRecurring =
+        donationData.is_recurring ?? donationData.isRecurring ?? false;
 
-      const { rows } = await client.query(`
+      const { rows } = await client.query(
+        `
         INSERT INTO donations (
           donor_id, recipient_id, organization_id, category_id, 
           title, description, amount, currency, type, status,
           is_recurring, location, images, tags, metadata, expires_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING *
-      `, [
-        donationData.donor_id,
-        donationData.recipient_id || null,
-        donationData.organization_id || null,
-        donationData.category_id,
-        donationData.title,
-        donationData.description,
-        donationData.amount || null,
-        donationData.currency || 'ILS',
-        donationData.type,
-        'active',
-        isRecurring,
-        donationData.location ? JSON.stringify(donationData.location) : null,
-        donationData.images || [],
-        donationData.tags || [],
-        donationData.metadata ? JSON.stringify(donationData.metadata) : null,
-        donationData.expires_at || null
-      ]);
+      `,
+        [
+          donationData.donor_id,
+          donationData.recipient_id || null,
+          donationData.organization_id || null,
+          donationData.category_id,
+          donationData.title,
+          donationData.description,
+          donationData.amount || null,
+          donationData.currency || "ILS",
+          donationData.type,
+          "active",
+          isRecurring,
+          donationData.location ? JSON.stringify(donationData.location) : null,
+          donationData.images || [],
+          donationData.tags || [],
+          donationData.metadata ? JSON.stringify(donationData.metadata) : null,
+          donationData.expires_at || null,
+        ],
+      );
 
       const donation = rows[0];
 
       // Update user stats
-      if (donationData.type === 'money' && donationData.amount) {
-        await client.query(`
+      if (donationData.type === "money" && donationData.amount) {
+        await client.query(
+          `
           UPDATE user_profiles 
           SET total_donations_amount = total_donations_amount + $1,
               updated_at = NOW()
           WHERE id = $2
-        `, [donationData.amount, donationData.donor_id]);
+        `,
+          [donationData.amount, donationData.donor_id],
+        );
       }
 
       // Update community stats
-      await this.updateCommunityStats(client, donationData.type, donationData.amount || 1);
+      await this.updateCommunityStats(
+        client,
+        donationData.type,
+        donationData.amount || 1,
+      );
 
       // Track user activity
-      await client.query(`
+      await client.query(
+        `
         INSERT INTO user_activities (user_id, activity_type, activity_data)
         VALUES ($1, $2, $3)
-      `, [
-        donationData.donor_id,
-        'donation_created',
-        JSON.stringify({ donation_id: donation.id, type: donationData.type, amount: donationData.amount })
-      ]);
+      `,
+        [
+          donationData.donor_id,
+          "donation_created",
+          JSON.stringify({
+            donation_id: donation.id,
+            type: donationData.type,
+            amount: donationData.amount,
+          }),
+        ],
+      );
 
-      await client.query('COMMIT');
+      await client.query("COMMIT");
 
       // Clear relevant caches
       await this.clearDonationCaches();
@@ -163,9 +195,9 @@ export class DonationsController {
 
       return { success: true, data: donation };
     } catch (error) {
-      await client.query('ROLLBACK');
-      this.logger.error('Create donation error:', error);
-      return { success: false, error: 'Failed to create donation' };
+      await client.query("ROLLBACK");
+      this.logger.error("Create donation error:", error);
+      return { success: false, error: "Failed to create donation" };
     } finally {
       client.release();
     }
@@ -173,16 +205,16 @@ export class DonationsController {
 
   @Get()
   async getDonations(
-    @Query('type') type?: string,
-    @Query('category') category?: string,
-    @Query('city') city?: string,
-    @Query('status') status?: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-    @Query('search') search?: string
+    @Query("type") type?: string,
+    @Query("category") category?: string,
+    @Query("city") city?: string,
+    @Query("status") status?: string,
+    @Query("limit") limit?: string,
+    @Query("offset") offset?: string,
+    @Query("search") search?: string,
   ) {
-    const cacheKey = `donations_${type || 'all'}_${category || 'all'}_${city || 'all'}_${status || 'active'}_${limit || '50'}_${offset || '0'}_${search || ''}`;
-    
+    const cacheKey = `donations_${type || "all"}_${category || "all"}_${city || "all"}_${status || "active"}_${limit || "50"}_${offset || "0"}_${search || ""}`;
+
     // Try cache first
     const cached = await this.redisCache.get(cacheKey);
     if (cached) {
@@ -261,16 +293,17 @@ export class DonationsController {
    * Get a single donation by ID with caching
    * Cache TTL: 15 minutes (donations are relatively static but can be updated)
    */
-  @Get(':id')
-  async getDonationById(@Param('id') id: string) {
+  @Get(":id")
+  async getDonationById(@Param("id") id: string) {
     const cacheKey = `donation_${id}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    const { rows } = await this.pool.query(`
+    const { rows } = await this.pool.query(
+      `
       SELECT d.*, dc.name_he as category_name, dc.icon as category_icon,
              up.name as donor_name, up.city as donor_city, up.avatar_url as donor_avatar,
              up.phone as donor_phone, up.email as donor_email
@@ -278,10 +311,12 @@ export class DonationsController {
       LEFT JOIN donation_categories dc ON d.category_id = dc.id
       LEFT JOIN user_profiles up ON d.donor_id = up.id
       WHERE d.id = $1
-    `, [id]);
+    `,
+      [id],
+    );
 
     if (rows.length === 0) {
-      return { success: false, error: 'Donation not found' };
+      return { success: false, error: "Donation not found" };
     }
 
     // Cache for 15 minutes
@@ -289,10 +324,11 @@ export class DonationsController {
     return { success: true, data: rows[0] };
   }
 
-  @Put(':id')
+  @Put(":id")
   @UseGuards(JwtAuthGuard)
-  async updateDonation(@Param('id') id: string, @Body() updateData: any) {
-    const { rows } = await this.pool.query(`
+  async updateDonation(@Param("id") id: string, @Body() updateData: any) {
+    const { rows } = await this.pool.query(
+      `
       UPDATE donations 
       SET title = COALESCE($1, title),
           description = COALESCE($2, description),
@@ -307,22 +343,24 @@ export class DonationsController {
           updated_at = NOW()
       WHERE id = $11
       RETURNING *
-    `, [
-      updateData.title,
-      updateData.description,
-      updateData.amount,
-      updateData.status,
-      updateData.is_recurring ?? updateData.isRecurring ?? null,
-      updateData.location ? JSON.stringify(updateData.location) : null,
-      updateData.images,
-      updateData.tags,
-      updateData.metadata ? JSON.stringify(updateData.metadata) : null,
-      updateData.expires_at,
-      id
-    ]);
+    `,
+      [
+        updateData.title,
+        updateData.description,
+        updateData.amount,
+        updateData.status,
+        updateData.is_recurring ?? updateData.isRecurring ?? null,
+        updateData.location ? JSON.stringify(updateData.location) : null,
+        updateData.images,
+        updateData.tags,
+        updateData.metadata ? JSON.stringify(updateData.metadata) : null,
+        updateData.expires_at,
+        id,
+      ],
+    );
 
     if (rows.length === 0) {
-      return { success: false, error: 'Donation not found' };
+      return { success: false, error: "Donation not found" };
     }
 
     // Clear specific donation cache
@@ -331,25 +369,31 @@ export class DonationsController {
     return { success: true, data: rows[0] };
   }
 
-  @Delete(':id')
+  @Delete(":id")
   @UseGuards(JwtAuthGuard)
-  async deleteDonation(@Param('id') id: string) {
+  async deleteDonation(@Param("id") id: string) {
     // First check if donation exists
-    const { rows } = await this.pool.query(`
+    const { rows } = await this.pool.query(
+      `
       SELECT id, status FROM donations WHERE id = $1
-    `, [id]);
+    `,
+      [id],
+    );
 
     if (rows.length === 0) {
-      return { success: false, error: 'Donation not found' };
+      return { success: false, error: "Donation not found" };
     }
 
     // Delete from database
-    const { rowCount } = await this.pool.query(`
+    const { rowCount } = await this.pool.query(
+      `
       DELETE FROM donations WHERE id = $1
-    `, [id]);
+    `,
+      [id],
+    );
 
     if (rowCount === 0) {
-      return { success: false, error: 'Failed to delete donation' };
+      return { success: false, error: "Failed to delete donation" };
     }
 
     // Clear specific donation cache
@@ -358,35 +402,38 @@ export class DonationsController {
     await this.clearDonationCaches();
     await this.clearCommunityStatsCaches();
 
-    return { success: true, message: 'Donation deleted successfully' };
+    return { success: true, message: "Donation deleted successfully" };
   }
 
-  @Get('user/:userId')
-  async getUserDonations(@Param('userId') userId: string) {
+  @Get("user/:userId")
+  async getUserDonations(@Param("userId") userId: string) {
     const cacheKey = `user_donations_${userId}`;
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
 
-    const { rows } = await this.pool.query(`
+    const { rows } = await this.pool.query(
+      `
       SELECT d.*, dc.name_he as category_name, dc.icon as category_icon
       FROM donations d
       LEFT JOIN donation_categories dc ON d.category_id = dc.id
       WHERE d.donor_id = $1
       ORDER BY d.created_at DESC
-    `, [userId]);
+    `,
+      [userId],
+    );
 
     await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
     return { success: true, data: rows };
   }
 
-  @Get('stats/summary')
+  @Get("stats/summary")
   async getDonationStats() {
-    const cacheKey = 'donation_stats_summary';
+    const cacheKey = "donation_stats_summary";
     const cached = await this.redisCache.get(cacheKey);
-    
+
     if (cached) {
       return { success: true, data: cached };
     }
@@ -409,17 +456,29 @@ export class DonationsController {
     return { success: true, data: stats };
   }
 
-  private async updateCommunityStats(client: any, type: string, amount: number) {
-    const statType = type === 'money' ? 'money_donations' : 
-                    type === 'time' ? 'volunteer_hours' :
-                    type === 'trump' ? 'rides_completed' : 'other_donations';
+  private async updateCommunityStats(
+    client: any,
+    type: string,
+    amount: number,
+  ) {
+    const statType =
+      type === "money"
+        ? "money_donations"
+        : type === "time"
+          ? "volunteer_hours"
+          : type === "trump"
+            ? "rides_completed"
+            : "other_donations";
 
-    await client.query(`
+    await client.query(
+      `
       INSERT INTO community_stats (stat_type, stat_value, date_period)
       VALUES ($1, $2, CURRENT_DATE)
       ON CONFLICT (stat_type, city, date_period) 
       DO UPDATE SET stat_value = community_stats.stat_value + $2, updated_at = NOW()
-    `, [statType, amount]);
+    `,
+      [statType, amount],
+    );
   }
 
   /**
@@ -429,28 +488,28 @@ export class DonationsController {
    */
   private async clearDonationCaches() {
     const patterns = [
-      'donations_*',           // All donation lists with filters
-      'user_donations_*',      // User-specific donation lists
-      'donation_stats_*',      // Donation statistics
-      'donation_*',            // Individual donation cache
-      'donation_category_*',   // Individual category cache
+      "donations_*", // All donation lists with filters
+      "user_donations_*", // User-specific donation lists
+      "donation_stats_*", // Donation statistics
+      "donation_*", // Individual donation cache
+      "donation_category_*", // Individual category cache
     ];
-    
+
     for (const pattern of patterns) {
       await this.redisCache.invalidatePattern(pattern);
     }
-    
+
     // Clear categories cache explicitly
-    await this.redisCache.delete('donation_categories_all');
+    await this.redisCache.delete("donation_categories_all");
   }
 
   private async clearCommunityStatsCaches() {
     // Use invalidatePattern for better performance
     const patterns = [
-      'community_stats_*',
-      'community_trends_*',
-      'dashboard_stats',
-      'real_time_stats',
+      "community_stats_*",
+      "community_trends_*",
+      "dashboard_stats",
+      "real_time_stats",
     ];
     for (const pattern of patterns) {
       await this.redisCache.invalidatePattern(pattern);

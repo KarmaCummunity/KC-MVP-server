@@ -2,12 +2,12 @@
 // - Purpose: Redis-backed rate limiting with per-identifier rules and block windows; utilities and stats.
 // - Reached from: `RateLimitController` and other controllers/services enforcing quotas.
 // - Rules: Built-in presets for general, login, register, password_reset, chat, search; supports custom rules.
-import { Injectable } from '@nestjs/common';
-import { RedisCacheService } from '../redis/redis-cache.service';
+import { Injectable } from "@nestjs/common";
+import { RedisCacheService } from "../redis/redis-cache.service";
 
 export interface RateLimitRule {
-  requests: number;  // Number of requests allowed
-  windowMs: number;  // Time window in milliseconds
+  requests: number; // Number of requests allowed
+  windowMs: number; // Time window in milliseconds
   blockDurationMs?: number; // How long to block after limit exceeded
 }
 
@@ -21,43 +21,43 @@ export interface RateLimitResult {
 
 @Injectable()
 export class RateLimitService {
-  private readonly RATE_LIMIT_PREFIX = 'rate_limit:';
-  private readonly BLOCKED_PREFIX = 'blocked:';
+  private readonly RATE_LIMIT_PREFIX = "rate_limit:";
+  private readonly BLOCKED_PREFIX = "blocked:";
 
   // Default rate limit rules
   private readonly DEFAULT_RULES: Record<string, RateLimitRule> = {
     // General API calls
-    'general': {
+    general: {
       requests: 100,
       windowMs: 60 * 1000, // 1 minute
       blockDurationMs: 5 * 60 * 1000, // 5 minutes
     },
     // Login attempts
-    'login': {
+    login: {
       requests: 5,
       windowMs: 15 * 60 * 1000, // 15 minutes
       blockDurationMs: 30 * 60 * 1000, // 30 minutes
     },
     // Registration
-    'register': {
+    register: {
       requests: 3,
       windowMs: 60 * 60 * 1000, // 1 hour
       blockDurationMs: 2 * 60 * 60 * 1000, // 2 hours
     },
     // Password reset
-    'password_reset': {
+    password_reset: {
       requests: 3,
       windowMs: 60 * 60 * 1000, // 1 hour
       blockDurationMs: 60 * 60 * 1000, // 1 hour
     },
     // Chat/messaging
-    'chat': {
+    chat: {
       requests: 50,
       windowMs: 60 * 1000, // 1 minute
       blockDurationMs: 10 * 60 * 1000, // 10 minutes
     },
     // Search
-    'search': {
+    search: {
       requests: 30,
       windowMs: 60 * 1000, // 1 minute
       blockDurationMs: 5 * 60 * 1000, // 5 minutes
@@ -71,17 +71,18 @@ export class RateLimitService {
    */
   async checkRateLimit(
     identifier: string, // IP address or user ID
-    ruleType: string = 'general',
-    customRule?: RateLimitRule
+    ruleType: string = "general",
+    customRule?: RateLimitRule,
   ): Promise<RateLimitResult> {
-    const rule = customRule || this.DEFAULT_RULES[ruleType] || this.DEFAULT_RULES.general;
+    const rule =
+      customRule || this.DEFAULT_RULES[ruleType] || this.DEFAULT_RULES.general;
     const now = Date.now();
     const windowStart = now - rule.windowMs;
-    
+
     // Check if currently blocked
     const blockKey = `${this.BLOCKED_PREFIX}${ruleType}:${identifier}`;
     const blockExpiry = await this.redisCache.get<number>(blockKey);
-    
+
     if (blockExpiry && blockExpiry > now) {
       return {
         allowed: false,
@@ -94,11 +95,13 @@ export class RateLimitService {
 
     // Get current request count in window
     const key = `${this.RATE_LIMIT_PREFIX}${ruleType}:${identifier}`;
-    const requests = await this.redisCache.get<number[]>(key) || [];
-    
+    const requests = (await this.redisCache.get<number[]>(key)) || [];
+
     // Filter requests within current window
-    const validRequests = requests.filter(timestamp => timestamp > windowStart);
-    
+    const validRequests = requests.filter(
+      (timestamp) => timestamp > windowStart,
+    );
+
     // Check if limit exceeded
     if (validRequests.length >= rule.requests) {
       // Block user if rule has blocking configured
@@ -107,9 +110,9 @@ export class RateLimitService {
         await this.redisCache.setWithExpiry(
           blockKey,
           blockUntil,
-          Math.ceil(rule.blockDurationMs / 1000)
+          Math.ceil(rule.blockDurationMs / 1000),
         );
-        
+
         return {
           allowed: false,
           remaining: 0,
@@ -118,7 +121,7 @@ export class RateLimitService {
           blockExpiresAt: new Date(blockUntil),
         };
       }
-      
+
       return {
         allowed: false,
         remaining: 0,
@@ -128,12 +131,12 @@ export class RateLimitService {
 
     // Add current request
     validRequests.push(now);
-    
+
     // Store updated requests with TTL
     await this.redisCache.setWithExpiry(
       key,
       validRequests,
-      Math.ceil(rule.windowMs / 1000)
+      Math.ceil(rule.windowMs / 1000),
     );
 
     return {
@@ -148,7 +151,7 @@ export class RateLimitService {
    */
   async recordRequest(
     identifier: string,
-    ruleType: string = 'general'
+    ruleType: string = "general",
   ): Promise<void> {
     await this.checkRateLimit(identifier, ruleType);
   }
@@ -158,14 +161,14 @@ export class RateLimitService {
    */
   async clearRateLimit(
     identifier: string,
-    ruleType: string = 'general'
+    ruleType: string = "general",
   ): Promise<boolean> {
     const key = `${this.RATE_LIMIT_PREFIX}${ruleType}:${identifier}`;
     const blockKey = `${this.BLOCKED_PREFIX}${ruleType}:${identifier}`;
-    
+
     const deleted1 = await this.redisCache.delete(key);
     const deleted2 = await this.redisCache.delete(blockKey);
-    
+
     return deleted1 || deleted2;
   }
 
@@ -174,7 +177,7 @@ export class RateLimitService {
    */
   async getRateLimitStatus(
     identifier: string,
-    ruleType: string = 'general'
+    ruleType: string = "general",
   ): Promise<{
     requests: number;
     limit: number;
@@ -186,17 +189,19 @@ export class RateLimitService {
     const rule = this.DEFAULT_RULES[ruleType] || this.DEFAULT_RULES.general;
     const now = Date.now();
     const windowStart = now - rule.windowMs;
-    
+
     // Check if blocked
     const blockKey = `${this.BLOCKED_PREFIX}${ruleType}:${identifier}`;
     const blockExpiry = await this.redisCache.get<number>(blockKey);
     const blocked = blockExpiry ? blockExpiry > now : false;
-    
+
     // Get current requests
     const key = `${this.RATE_LIMIT_PREFIX}${ruleType}:${identifier}`;
-    const requests = await this.redisCache.get<number[]>(key) || [];
-    const validRequests = requests.filter(timestamp => timestamp > windowStart);
-    
+    const requests = (await this.redisCache.get<number[]>(key)) || [];
+    const validRequests = requests.filter(
+      (timestamp) => timestamp > windowStart,
+    );
+
     return {
       requests: validRequests.length,
       limit: rule.requests,
@@ -216,9 +221,13 @@ export class RateLimitService {
     rateLimitKeys: string[];
     blockedKeys: string[];
   }> {
-    const rateLimitKeys = await this.redisCache.getKeys(`${this.RATE_LIMIT_PREFIX}*`);
-    const blockedKeys = await this.redisCache.getKeys(`${this.BLOCKED_PREFIX}*`);
-    
+    const rateLimitKeys = await this.redisCache.getKeys(
+      `${this.RATE_LIMIT_PREFIX}*`,
+    );
+    const blockedKeys = await this.redisCache.getKeys(
+      `${this.BLOCKED_PREFIX}*`,
+    );
+
     return {
       totalRateLimitEntries: rateLimitKeys.length,
       totalBlockedEntries: blockedKeys.length,
@@ -240,9 +249,9 @@ export class RateLimitService {
   async applyCustomRateLimit(
     identifier: string,
     rule: RateLimitRule,
-    customKey?: string
+    customKey?: string,
   ): Promise<RateLimitResult> {
-    const ruleType = customKey || 'custom';
+    const ruleType = customKey || "custom";
     return await this.checkRateLimit(identifier, ruleType, rule);
   }
 }

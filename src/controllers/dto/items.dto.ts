@@ -1,8 +1,16 @@
 // File overview:
 // - Purpose: DTOs for Items Delivery API endpoints with validation
 // - Used by: ItemsDeliveryController for creating, updating, and filtering items
-import { IsString, IsOptional, IsNumber, IsEnum, IsArray, IsBoolean, IsObject, Min, Max } from 'class-validator';
-import { Type, Transform } from 'class-transformer';
+import {
+  IsString,
+  IsOptional,
+  IsNumber,
+  IsEnum,
+  IsArray,
+  IsObject,
+  Min,
+} from "class-validator";
+import { Type, Transform } from "class-transformer";
 
 export class CreateItemDto {
   @IsString()
@@ -27,7 +35,9 @@ export class CreateItemDto {
 
   @IsOptional()
   @Type(() => Number)
-  @Transform(({ value }) => value === null || value === undefined ? undefined : Number(value))
+  @Transform(({ value }) =>
+    value === null || value === undefined ? undefined : Number(value),
+  )
   price?: number;
 
   @IsOptional()
@@ -40,7 +50,9 @@ export class CreateItemDto {
 
   @IsOptional()
   @Type(() => Number)
-  @Transform(({ value }) => value === null || value === undefined ? undefined : Number(value))
+  @Transform(({ value }) =>
+    value === null || value === undefined ? undefined : Number(value),
+  )
   quantity?: number;
 
   @IsOptional()
@@ -66,11 +78,21 @@ export class UpdateItemDto {
 
   @IsOptional()
   @IsString()
-  @IsEnum(['furniture', 'clothes', 'electronics', 'general', 'books', 'toys', 'sports', 'kitchen', 'other'])
+  @IsEnum([
+    "furniture",
+    "clothes",
+    "electronics",
+    "general",
+    "books",
+    "toys",
+    "sports",
+    "kitchen",
+    "other",
+  ])
   category?: string;
 
   @IsOptional()
-  @IsEnum(['new', 'like_new', 'used', 'for_parts'])
+  @IsEnum(["new", "like_new", "used", "for_parts"])
   condition?: string;
 
   @IsOptional()
@@ -102,11 +124,11 @@ export class UpdateItemDto {
   quantity?: number;
 
   @IsOptional()
-  @IsEnum(['available', 'reserved', 'delivered', 'expired', 'cancelled'])
+  @IsEnum(["available", "reserved", "delivered", "expired", "cancelled"])
   status?: string;
 
   @IsOptional()
-  @IsEnum(['pickup', 'delivery', 'shipping'])
+  @IsEnum(["pickup", "delivery", "shipping"])
   delivery_method?: string;
 
   @IsOptional()
@@ -138,7 +160,13 @@ export class ItemFiltersDto {
   @IsOptional()
   @Type(() => Number)
   @Transform(({ value }) => {
-    if (value === '' || value === null || value === undefined || value === 'undefined' || value === 'null') {
+    if (
+      value === "" ||
+      value === null ||
+      value === undefined ||
+      value === "undefined" ||
+      value === "null"
+    ) {
       return undefined;
     }
     const num = Number(value);
@@ -149,7 +177,13 @@ export class ItemFiltersDto {
   @IsOptional()
   @Type(() => Number)
   @Transform(({ value }) => {
-    if (value === '' || value === null || value === undefined || value === 'undefined' || value === 'null') {
+    if (
+      value === "" ||
+      value === null ||
+      value === undefined ||
+      value === "undefined" ||
+      value === "null"
+    ) {
       return undefined;
     }
     const num = Number(value);
@@ -176,7 +210,13 @@ export class ItemFiltersDto {
   @IsOptional()
   @Type(() => Number)
   @Transform(({ value }) => {
-    if (value === '' || value === null || value === undefined || value === 'undefined' || value === 'null') {
+    if (
+      value === "" ||
+      value === null ||
+      value === undefined ||
+      value === "undefined" ||
+      value === "null"
+    ) {
       return undefined;
     }
     const num = Number(value);
@@ -187,7 +227,13 @@ export class ItemFiltersDto {
   @IsOptional()
   @Type(() => Number)
   @Transform(({ value }) => {
-    if (value === '' || value === null || value === undefined || value === 'undefined' || value === 'null') {
+    if (
+      value === "" ||
+      value === null ||
+      value === undefined ||
+      value === "undefined" ||
+      value === "null"
+    ) {
       return undefined;
     }
     const num = Number(value);
@@ -212,7 +258,7 @@ export class CreateItemRequestDto {
   proposed_time?: string;
 
   @IsOptional()
-  @IsEnum(['pickup', 'delivery', 'shipping'])
+  @IsEnum(["pickup", "delivery", "shipping"])
   delivery_method?: string;
 
   @IsOptional()
@@ -226,7 +272,14 @@ export class CreateItemRequestDto {
 
 export class UpdateItemRequestDto {
   @IsOptional()
-  @IsEnum(['pending', 'approved', 'rejected', 'scheduled', 'completed', 'cancelled'])
+  @IsEnum([
+    "pending",
+    "approved",
+    "rejected",
+    "scheduled",
+    "completed",
+    "cancelled",
+  ])
   status?: string;
 
   @IsOptional()
@@ -241,4 +294,3 @@ export class UpdateItemRequestDto {
   @IsString()
   owner_response?: string;
 }
-
