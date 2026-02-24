@@ -154,22 +154,22 @@ export class PostsController {
                 )
             `);
 
-            // Create indexes
-            const indexes = [
-                'idx_posts_author_id ON posts(author_id)',
-                'idx_posts_task_id ON posts(task_id)',
-                'idx_posts_ride_id ON posts(ride_id)',
-                'idx_posts_item_id ON posts(item_id)',
-                'idx_posts_created_at ON posts(created_at DESC)',
-                'idx_posts_post_type ON posts(post_type)',
-                'idx_posts_status ON posts(status)'
+            // SEC-002.4: Create indexes individually — no string interpolation in SQL
+            const indexQueries = [
+                'CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_ride_id ON posts(ride_id)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_item_id ON posts(item_id)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type)',
+                'CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)'
             ];
 
-            for (const idx of indexes) {
+            for (const q of indexQueries) {
                 try {
-                    await this.pool.query(`CREATE INDEX IF NOT EXISTS ${idx};`);
+                    await this.pool.query(q);
                 } catch (e) {
-                    console.log(`⚠️ Skipping index ${idx}`);
+                    // index may already exist
                 }
             }
 

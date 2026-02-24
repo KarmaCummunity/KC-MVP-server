@@ -116,8 +116,8 @@ import { AdminTablesService } from './services/admin-tables.service';
     AdminFilesController,  // Admin shared files
     AdminTablesController, // Admin dynamic tables
 
-    // Testing (TODO: Remove in production)
-    RedisTestController,   // Redis connectivity testing
+    // H2: Test controllers only loaded in non-production
+    ...(process.env.NODE_ENV !== 'production' ? [RedisTestController] : []),
   ],
   providers: [
     // Database initialization - creates tables and runs migrations on startup

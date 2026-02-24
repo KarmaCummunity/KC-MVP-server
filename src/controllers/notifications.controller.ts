@@ -9,14 +9,18 @@ import {
     UseGuards,
     Inject,
     Query,
+    Req,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Request } from 'express';
 
 @Controller('api/notifications')
-@UseGuards(ThrottlerGuard)
+@UseGuards(ThrottlerGuard, JwtAuthGuard)  // H3/SEC-003.2: Auth required
 export class NotificationsController {
     constructor(
         @Inject(PG_POOL) private readonly pool: Pool,
@@ -81,12 +85,31 @@ export class NotificationsController {
         }
     }
 
+    /**
+     * SEC-003.2: Validate that the authenticated user owns the resource
+     * Admins can access any user's notifications
+     */
+    private validateOwnership(req: Request, userId: string): void {
+        const authUser = req.user;
+        if (!authUser) {
+            throw new UnauthorizedException('Authentication required');
+        }
+        const isOwner = authUser.userId === userId;
+        const isAdmin = authUser.roles?.includes('admin') ||
+            authUser.roles?.includes('super_admin');
+        if (!isOwner && !isAdmin) {
+            throw new UnauthorizedException('You can only access your own notifications');
+        }
+    }
+
     @Get(':userId')
     async getUserNotifications(
         @Param('userId') userId: string,
         @Query('limit') limit = '50',
         @Query('offset') offset = '0',
+        @Req() req: Request,
     ) {
+        this.validateOwnership(req, userId);
         console.log(`📥 NotificationsController - getUserNotifications for userId: "${userId}"`);
 
         // Validate UUID format to prevent 500 errors
@@ -137,7 +160,8 @@ export class NotificationsController {
     }
 
     @Post(':userId/read-all')
-    async markAllAsRead(@Param('userId') userId: string) {
+    async markAllAsRead(@Param('userId') userId: string, @Req() req: Request) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -159,8 +183,10 @@ export class NotificationsController {
     @Put(':userId/:notificationId/read')
     async markAsRead(
         @Param('userId') userId: string,
-        @Param('notificationId') notificationId: string
+        @Param('notificationId') notificationId: string,
+        @Req() req: Request,
     ) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -182,8 +208,10 @@ export class NotificationsController {
     @Delete(':userId/:notificationId')
     async deleteNotification(
         @Param('userId') userId: string,
-        @Param('notificationId') notificationId: string
+        @Param('notificationId') notificationId: string,
+        @Req() req: Request,
     ) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -203,7 +231,8 @@ export class NotificationsController {
     }
 
     @Delete(':userId')
-    async clearAllNotifications(@Param('userId') userId: string) {
+    async clearAllNotifications(@Param('userId') userId: string, @Req() req: Request) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {

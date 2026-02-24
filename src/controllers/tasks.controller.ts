@@ -86,19 +86,19 @@ export class TasksController {
         )
       `);
 
-      // Create indexes
-      const indexes = [
-        'idx_posts_author_id ON posts(author_id)',
-        'idx_posts_task_id ON posts(task_id)',
-        'idx_posts_created_at ON posts(created_at DESC)',
-        'idx_posts_post_type ON posts(post_type)'
+      // SEC-002.4: Create indexes individually — no string interpolation in SQL
+      const indexQueries = [
+        'CREATE INDEX IF NOT EXISTS idx_posts_author_id ON posts(author_id)',
+        'CREATE INDEX IF NOT EXISTS idx_posts_task_id ON posts(task_id)',
+        'CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)',
+        'CREATE INDEX IF NOT EXISTS idx_posts_post_type ON posts(post_type)'
       ];
 
-      for (const idx of indexes) {
+      for (const q of indexQueries) {
         try {
-          await this.pool.query(`CREATE INDEX IF NOT EXISTS ${idx};`);
+          await this.pool.query(q);
         } catch (e) {
-          console.log(`⚠️ Skipping index ${idx}`);
+          // index may already exist
         }
       }
 
@@ -167,19 +167,19 @@ export class TasksController {
       }
 
       // 3. Ensure INDEXES (Idempotent)
-      // Some simple manual index checks
-      const indexes = [
-        'idx_tasks_status ON tasks (status)',
-        'idx_tasks_priority ON tasks (priority)',
-        'idx_tasks_category ON tasks (category)',
-        'idx_tasks_due_date ON tasks (due_date)',
-        'idx_tasks_created_at ON tasks (created_at)',
-        'idx_tasks_assignees_gin ON tasks USING GIN (assignees)',
-        'idx_tasks_tags_gin ON tasks USING GIN (tags)'
+      // SEC-002.4: Create indexes individually — no string interpolation in SQL
+      const indexQueries = [
+        'CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks (priority)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks (category)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks (due_date)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_assignees_gin ON tasks USING GIN (assignees)',
+        'CREATE INDEX IF NOT EXISTS idx_tasks_tags_gin ON tasks USING GIN (tags)'
       ];
-      for (const idx of indexes) {
+      for (const q of indexQueries) {
         try {
-          await this.pool.query(`CREATE INDEX IF NOT EXISTS ${idx}`);
+          await this.pool.query(q);
         } catch (e) { /* ignore */ }
       }
 
@@ -251,13 +251,12 @@ export class TasksController {
         return true;
       }
 
-      // Check if manager is super admin
+      // SEC-003.1: Check if manager is super_admin by role, not by email
       const { rows: superCheck } = await this.pool.query(
-        `SELECT 1 FROM user_profiles WHERE id = $1 AND email IN ('navesarussi@gmail.com', 'karmacommunity2.0@gmail.com')`,
+        `SELECT 1 FROM user_profiles WHERE id = $1 AND 'super_admin' = ANY(roles)`,
         [managerId]
       );
       if (superCheck.length > 0) {
-        console.log(`✅ Super admin ${managerId} can assign to anyone`);
         return true;
       }
 
