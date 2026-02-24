@@ -12,7 +12,7 @@ export class UpsertItemDto {
   userId!: string;
 
   @IsObject()
-  data!: Record<string, unknown>;
+  data!: any;
 }
 
 export class QueryByUserDto {

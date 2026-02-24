@@ -35,7 +35,7 @@ export class ItemsDeliveryService {
       // Generate ID if not provided or if provided ID is a timestamp
       // This ensures we always have a proper ID format like "item_1234567890_abc123"
       // Similar to how rides work - the backend generates the ID, not the frontend
-      let itemId = (createItemDto as any).id;
+      let itemId = (createItemDto as unknown as { id?: string }).id;
       if (!itemId || /^\d{10,13}$/.test(itemId)) {
         // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
         // S2245: Use crypto.randomBytes instead of Math.random for ID generation

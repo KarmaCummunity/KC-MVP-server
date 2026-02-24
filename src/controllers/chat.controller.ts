@@ -79,7 +79,10 @@ export class ChatController {
   // ==========================================
 
   @Post("conversations")
-  async createConversation(@Body() conversationData: any, @Request() req: any) {
+  async createConversation(
+    @Body() conversationData: any,
+    @Request() req: import("express").Request,
+  ) {
     if (
       !conversationData.participants ||
       !Array.isArray(conversationData.participants)
@@ -213,7 +216,7 @@ export class ChatController {
   @Get("conversations/user/:userId")
   async getUserConversations(
     @Param("userId") userId: string,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     this.logger.debug("Executing getUserConversations");
     try {
@@ -310,7 +313,7 @@ export class ChatController {
     @Param("conversationId") conversationId: string,
     @Query("limit") limit: string = "100",
     @Query("offset") offset: string = "0",
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     try {
       const limitNum = parseInt(limit, 10) || 100;
@@ -406,7 +409,10 @@ export class ChatController {
   }
 
   @Post("messages")
-  async sendMessage(@Body() messageData: any, @Request() req: any) {
+  async sendMessage(
+    @Body() messageData: any,
+    @Request() req: import("express").Request,
+  ) {
     const client = await this.pool.connect();
     const authenticatedUserId = req.user?.userId;
     let senderId: string;
@@ -636,7 +642,7 @@ export class ChatController {
   async markAllMessagesAsRead(
     @Param("conversationId") conversationId: string,
     @Body() body: any,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     const client = await this.pool.connect();
     try {
@@ -716,7 +722,7 @@ export class ChatController {
   async markMessageAsRead(
     @Param("messageId") messageId: string,
     @Body() body: any,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     const client = await this.pool.connect();
     try {

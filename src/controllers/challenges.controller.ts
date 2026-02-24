@@ -175,7 +175,8 @@ export class ChallengesController {
 
       this.logger.log(`Challenge created successfully: ${result.rows[0].id}`);
       return { success: true, data: result.rows[0] };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error creating challenge:", error);
       this.logger.error("Error details:", error.message, error.stack);
       throw new InternalServerErrorException(
@@ -204,7 +205,8 @@ export class ChallengesController {
       );
 
       return { success: true, data: result.rows };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching challenges:", error);
       this.logger.error("Error details:", error.message, error.stack);
       throw new InternalServerErrorException(
@@ -236,7 +238,8 @@ export class ChallengesController {
       }
 
       return { success: true, data: result.rows[0] };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       if (error instanceof NotFoundException) throw error;
       this.logger.error("Error fetching challenge:", error);
       throw new InternalServerErrorException("Failed to fetch challenge");
@@ -298,7 +301,8 @@ export class ChallengesController {
 
       this.logger.log(`Challenge updated successfully: ${id}`);
       return { success: true, data: result.rows[0] };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       if (
         error instanceof NotFoundException ||
         error instanceof BadRequestException
@@ -373,7 +377,8 @@ export class ChallengesController {
 
       this.logger.log(`Challenge deleted successfully: ${id}`);
       return { success: true, message: "Challenge deleted" };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       if (error instanceof NotFoundException) throw error;
       this.logger.error("Error deleting challenge:", error);
@@ -443,7 +448,8 @@ export class ChallengesController {
 
       this.logger.log(`Challenge restored successfully: ${id}`);
       return { success: true, message: "Challenge restored" };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       if (error instanceof NotFoundException) throw error;
       this.logger.error("Error restoring challenge:", error);
@@ -472,7 +478,8 @@ export class ChallengesController {
       );
 
       return { success: true, data: result.rows };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching deleted challenges:", error);
       throw new InternalServerErrorException(
         "Failed to fetch deleted challenges",
@@ -515,7 +522,8 @@ export class ChallengesController {
 
       this.logger.log(`Reset log created successfully`);
       return { success: true, data: result.rows[0] };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error creating reset log:", error);
       throw new InternalServerErrorException("Failed to create reset log");
     } finally {
@@ -552,7 +560,8 @@ export class ChallengesController {
       const result = await client.query(query, params);
 
       return { success: true, data: result.rows };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching reset logs:", error);
       throw new InternalServerErrorException("Failed to fetch reset logs");
     } finally {
@@ -592,7 +601,8 @@ export class ChallengesController {
 
       this.logger.log(`Record break created successfully`);
       return { success: true, data: result.rows[0] };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error creating record break:", error);
       throw new InternalServerErrorException("Failed to create record break");
     } finally {
@@ -629,7 +639,8 @@ export class ChallengesController {
       const result = await client.query(query, params);
 
       return { success: true, data: result.rows };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching record breaks:", error);
       throw new InternalServerErrorException("Failed to fetch record breaks");
     } finally {

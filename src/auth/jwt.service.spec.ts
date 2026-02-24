@@ -22,7 +22,9 @@ describe("JwtService", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new JwtService(mockRedisCache as any);
+    service = new JwtService(
+      mockRedisCache as unknown as import("../redis/redis-cache.service").RedisCacheService,
+    );
   });
 
   describe("Token Signing (SEC-001.1)", () => {

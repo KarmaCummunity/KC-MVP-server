@@ -64,12 +64,7 @@ export class ItemsService {
     return collection;
   }
 
-  async create(
-    collection: string,
-    userId: string,
-    itemId: string,
-    data: Record<string, unknown>,
-  ) {
+  async create(collection: string, userId: string, itemId: string, data: any) {
     const table = this.tableFor(collection);
     const client = await this.pool.connect();
     try {
@@ -149,12 +144,7 @@ export class ItemsService {
     return data;
   }
 
-  async update(
-    collection: string,
-    userId: string,
-    itemId: string,
-    data: Record<string, unknown>,
-  ) {
+  async update(collection: string, userId: string, itemId: string, data: any) {
     const table = this.tableFor(collection);
     const { rowCount } = await this.pool.query(
       `UPDATE ${table} SET data = jsonb_strip_nulls(data || $1::jsonb), updated_at = NOW()

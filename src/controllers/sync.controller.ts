@@ -96,7 +96,8 @@ export class SyncController {
             error: "Must provide firebase_uid or email",
           };
         }
-      } catch (error: any) {
+      } catch (error_: unknown) {
+        const error = error_ as Error;
         this.logger.error("❌ Error fetching user from Firebase:", error);
         return { success: false, error: "User not found in Firebase" };
       }
@@ -243,7 +244,8 @@ export class SyncController {
             );
             await client.query("COMMIT");
             return { success: true, action: "created", user_id: newUser[0].id };
-          } catch (insertError: any) {
+          } catch (insertError_: unknown) {
+            const insertError = insertError_ as Error;
             // If google_id column doesn't exist, try without it
             if (
               insertError.message &&
@@ -292,7 +294,8 @@ export class SyncController {
             }
           }
         }
-      } catch (error: any) {
+      } catch (error_: unknown) {
+        const error = error_ as Error;
         await client.query("ROLLBACK");
         this.logger.error("❌ Error syncing user:", error);
         return {
@@ -302,7 +305,8 @@ export class SyncController {
       } finally {
         client.release();
       }
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("❌ Sync user error:", error);
       return { success: false, error: error.message || "Failed to sync user" };
     }
@@ -417,7 +421,8 @@ export class SyncController {
               this.logger.log(
                 `🔄 Updated user: ${normalizedEmail} (${firebaseUser.uid})`,
               );
-            } catch (updateError: any) {
+            } catch (updateError_: unknown) {
+              const updateError = updateError_ as Error;
               // If google_id column doesn't exist, try without it
               if (
                 updateError.message &&
@@ -494,7 +499,8 @@ export class SyncController {
               this.logger.log(
                 `✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`,
               );
-            } catch (insertError: any) {
+            } catch (insertError_: unknown) {
+              const insertError = insertError_ as Error;
               // If google_id column doesn't exist, try without it
               if (
                 insertError.message &&
@@ -541,7 +547,8 @@ export class SyncController {
               }
             }
           }
-        } catch (error: any) {
+        } catch (error_: unknown) {
+          const error = error_ as Error;
           this.logger.error(
             `❌ Error processing user ${firebaseUser.uid}:`,
             error,
@@ -571,7 +578,8 @@ export class SyncController {
       this.logger.log("\n✅ Firebase users sync completed!");
 
       return summary;
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       this.logger.error("❌ Full sync error:", error);
       return {
@@ -625,7 +633,8 @@ export class SyncController {
         user_profiles_with_firebase_uid: firebaseLinked,
         missing_sync: Math.max(0, firebaseCount - firebaseLinked),
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("❌ Get sync status error:", error);
       return {
         success: false,

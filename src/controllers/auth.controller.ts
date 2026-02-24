@@ -106,7 +106,7 @@ type PublicUser = {
   name?: string;
   avatar?: string;
   roles?: string[];
-  settings?: Record<string, unknown>;
+  settings?: any;
   createdAt?: string;
   lastActive?: string;
 };
@@ -281,7 +281,8 @@ export class AuthController {
       );
 
       return { exists: rows.length > 0 };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       // SECURITY: Don't leak email in error logs
       this.logger.error("Email check failed", { error: error.message });
       if (error instanceof BadRequestException) {
@@ -399,7 +400,8 @@ export class AuthController {
       // SECURITY: Log success without exposing sensitive data
       this.logger.log(`✅ User registered successfully (ID: ${userId})`);
       return { ok: true, user: this.toPublicUser(userData) };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       // SECURITY: Generic error message, log details separately
       this.logger.error("Registration failed", { error: error.message });
       if (error instanceof BadRequestException) {
@@ -487,7 +489,8 @@ export class AuthController {
       // SECURITY: Log success without exposing sensitive data
       this.logger.log(`✅ Successful login for user ID: ${rows[0].id}`);
       return { ok: true, user: this.toPublicUser(userData) };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       // SECURITY: Generic error message
       this.logger.error("Login error", { error: error.message });
       if (error instanceof BadRequestException) {
@@ -657,7 +660,8 @@ export class AuthController {
           [normalizedEmail, firebaseUidToUse, googleIdToUse],
         );
         rows = result.rows;
-      } catch (error: any) {
+      } catch (error_: unknown) {
+        const error = error_ as Error;
         // If google_id column doesn't exist, try without it
         if (error.message && error.message.includes("google_id")) {
           const result = await this.pool.query(
@@ -693,7 +697,8 @@ export class AuthController {
               userId,
             ],
           );
-        } catch (error: any) {
+        } catch (error_: unknown) {
+          const error = error_ as Error;
           // If google_id column doesn't exist, try without it
           if (error.message && error.message.includes("google_id")) {
             await this.pool.query(
@@ -768,7 +773,8 @@ export class AuthController {
             ],
           );
           newUser = result;
-        } catch (error: any) {
+        } catch (error_: unknown) {
+          const error = error_ as Error;
           // If google_id column doesn't exist, try without it
           if (error.message && error.message.includes("google_id")) {
             const result = await this.pool.query(
@@ -849,7 +855,8 @@ export class AuthController {
         },
         user: publicUser,
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       // SECURITY: Generic error message, log details separately
       this.logger.error("Google authentication failed", {
         error: error?.message || String(error),
@@ -903,7 +910,8 @@ export class AuthController {
         accessToken: result.accessToken,
         expiresIn: result.expiresIn,
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       // SECURITY: Generic error message, log details separately
       this.logger.error("Token refresh failed", {
         error: error?.message || String(error),
@@ -917,7 +925,10 @@ export class AuthController {
       }
 
       // If it's an UnauthorizedException from JwtService, return as 401
-      if (error?.status === 401 || error?.message?.includes("Unauthorized")) {
+      if (
+        (error as any)?.status === 401 ||
+        error?.message?.includes("Unauthorized")
+      ) {
         throw new BadRequestException("Invalid or expired refresh token");
       }
 

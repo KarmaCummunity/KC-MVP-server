@@ -193,7 +193,7 @@ export class DatabaseInit implements OnModuleInit {
     return statements;
   }
 
-  private async runSchema(client: any) {
+  private async runSchema(client: import("pg").PoolClient) {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
@@ -225,7 +225,8 @@ export class DatabaseInit implements OnModuleInit {
         if (statement.trim()) {
           try {
             await client.query(statement.trim());
-          } catch (err: any) {
+          } catch (e) {
+            const err = e as Error;
             console.error(
               `❌ Failed at statement #${i + 1} of ${statements.length}:`,
             );
@@ -304,7 +305,8 @@ export class DatabaseInit implements OnModuleInit {
         console.log(
           "✅ google_id column, constraint, and index ensured in user_profiles",
         );
-      } catch (err: any) {
+      } catch (e) {
+        const err = e as Error;
         console.error("❌ Failed to add google_id column:", err.message);
         console.error("❌ Error stack:", err.stack);
         // Don't throw - continue with other operations
@@ -331,7 +333,7 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
-  private async ensureBackwardCompatibility(client: any) {
+  private async ensureBackwardCompatibility(client: import("pg").PoolClient) {
     try {
       // Required extensions for UUIDs and text search
       await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
@@ -951,7 +953,7 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
-  private async initializeDefaultData(client: any) {
+  private async initializeDefaultData(client: import("pg").PoolClient) {
     try {
       // Initialize donation categories
       const categories = [
@@ -1175,7 +1177,7 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
-  private async runChallengesSchema(client: any) {
+  private async runChallengesSchema(client: import("pg").PoolClient) {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
@@ -1210,7 +1212,8 @@ export class DatabaseInit implements OnModuleInit {
         if (statement.trim()) {
           try {
             await client.query(statement.trim());
-          } catch (err: any) {
+          } catch (e) {
+            const err = e as Error;
             console.error(
               `❌ Failed at CHALLENGES statement #${i + 1} of ${statements.length}:`,
             );
@@ -1231,7 +1234,9 @@ export class DatabaseInit implements OnModuleInit {
     }
   }
 
-  private async runCommunityGroupChallengesSchema(client: any) {
+  private async runCommunityGroupChallengesSchema(
+    client: import("pg").PoolClient,
+  ) {
     try {
       // Support both build (dist) and dev (src) paths
       const candidates = [
@@ -1279,7 +1284,8 @@ export class DatabaseInit implements OnModuleInit {
         if (statement.trim()) {
           try {
             await client.query(statement.trim());
-          } catch (err: any) {
+          } catch (e) {
+            const err = e as Error;
             console.error(
               `❌ Failed at COMMUNITY CHALLENGES statement #${i + 1} of ${statements.length}:`,
             );

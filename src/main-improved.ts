@@ -94,26 +94,32 @@ async function bootstrap() {
     const allowedOrigins = process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
       : defaultOrigins;
-    app.use((req: any, res: any, next: any) => {
-      const origin = req.headers.origin;
-      if (origin && (allowedOrigins.includes(origin) || corsOrigin === "*")) {
-        res.header("Access-Control-Allow-Origin", origin);
-        res.header("Vary", "Origin");
-      }
-      res.header("Access-Control-Allow-Credentials", "true");
-      res.header(
-        "Access-Control-Allow-Methods",
-        "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
-      );
-      res.header(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept",
-      );
-      if (req.method === "OPTIONS") {
-        return res.sendStatus(204);
-      }
-      next();
-    });
+    app.use(
+      (
+        req: import("express").Request,
+        res: import("express").Response,
+        next: import("express").NextFunction,
+      ) => {
+        const origin = req.headers.origin;
+        if (origin && (allowedOrigins.includes(origin) || corsOrigin === "*")) {
+          res.header("Access-Control-Allow-Origin", origin);
+          res.header("Vary", "Origin");
+        }
+        res.header("Access-Control-Allow-Credentials", "true");
+        res.header(
+          "Access-Control-Allow-Methods",
+          "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+        );
+        res.header(
+          "Access-Control-Allow-Headers",
+          "Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept",
+        );
+        if (req.method === "OPTIONS") {
+          return res.sendStatus(204);
+        }
+        next();
+      },
+    );
 
     // Enhanced validation pipe with security settings
     app.useGlobalPipes(

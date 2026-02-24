@@ -360,11 +360,17 @@ async function bootstrap(): Promise<void> {
     });
 
     // Add Cross-Origin-Opener-Policy header for Google OAuth
-    app.use((req: any, res: any, next: any) => {
-      res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
-      res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
-      next();
-    });
+    app.use(
+      (
+        req: import("express").Request,
+        res: import("express").Response,
+        next: import("express").NextFunction,
+      ) => {
+        res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+        res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+        next();
+      },
+    );
 
     logger.log(
       `🌐 CORS enabled for ${isProduction ? "PRODUCTION" : "DEVELOPMENT"} environment`,
@@ -374,39 +380,45 @@ async function bootstrap(): Promise<void> {
     // Extra CORS fallback middleware for proxy compatibility
     // Some proxies don't properly forward CORS headers, so we add them manually
 
-    app.use((req: any, res: any, next: any) => {
-      const origin = req.headers.origin;
+    app.use(
+      (
+        req: import("express").Request,
+        res: import("express").Response,
+        next: import("express").NextFunction,
+      ) => {
+        const origin = req.headers.origin;
 
-      // Only set CORS headers if origin is in allowed list
-      if (origin && allowedOrigins.includes(origin)) {
-        res.header("Access-Control-Allow-Origin", origin);
-        res.header("Vary", "Origin");
-        res.header("Access-Control-Allow-Credentials", "true");
-        res.header(
-          "Access-Control-Allow-Methods",
-          "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
-        );
-        res.header(
-          "Access-Control-Allow-Headers",
-          "Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept",
-        );
+        // Only set CORS headers if origin is in allowed list
+        if (origin && allowedOrigins.includes(origin)) {
+          res.header("Access-Control-Allow-Origin", origin);
+          res.header("Vary", "Origin");
+          res.header("Access-Control-Allow-Credentials", "true");
+          res.header(
+            "Access-Control-Allow-Methods",
+            "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+          );
+          res.header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-Requested-With, X-Auth-Token, Origin, Accept",
+          );
 
-        // Handle preflight requests
-        if (req.method === "OPTIONS") {
-          return res.sendStatus(204);
+          // Handle preflight requests
+          if (req.method === "OPTIONS") {
+            return res.sendStatus(204);
+          }
+        } else if (origin && !isProduction) {
+          // In development, log blocked origins for debugging
+          logger.warn(
+            `🚫 Blocked CORS request from origin: ${origin} (not in allowed list)`,
+          );
+        } else if (origin && isProduction) {
+          // In production, silently block unauthorized origins (security)
+          // Don't set any CORS headers, browser will block the request
         }
-      } else if (origin && !isProduction) {
-        // In development, log blocked origins for debugging
-        logger.warn(
-          `🚫 Blocked CORS request from origin: ${origin} (not in allowed list)`,
-        );
-      } else if (origin && isProduction) {
-        // In production, silently block unauthorized origins (security)
-        // Don't set any CORS headers, browser will block the request
-      }
 
-      next();
-    });
+        next();
+      },
+    );
 
     // Configure global validation pipe with security settings
     // This automatically validates all incoming requests against DTOs

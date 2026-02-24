@@ -27,7 +27,7 @@ interface CreateMemberDto {
   contact_info?: {
     email?: string;
     phone?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   status?: MemberStatus;
   created_by?: string;
@@ -40,7 +40,7 @@ interface UpdateMemberDto {
   contact_info?: {
     email?: string;
     phone?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   status?: MemberStatus;
 }

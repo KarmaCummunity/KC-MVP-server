@@ -137,11 +137,11 @@ function attachRedisLogging(client: Redis, target: string) {
       await client.config("SET", "stop-writes-on-bgsave-error", "no");
       // eslint-disable-next-line no-console
       console.log("[redis] successfully disabled stop-writes-on-bgsave-error");
-    } catch (err: any) {
+    } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(
         "[redis] failed to disable stop-writes-on-bgsave-error (might be restricted):",
-        err.message,
+        err instanceof Error ? err.message : String(err),
       );
     }
   });

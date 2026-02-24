@@ -20,7 +20,7 @@ export class RedisCacheService {
   /**
    * Store data in Redis with optional TTL (Time To Live)
    */
-  async set(key: string, value: any, ttlSeconds?: number): Promise<void> {
+  async set(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
     if (!this.isRedisAvailable()) return;
 
     const serializedValue = JSON.stringify(value);
@@ -28,14 +28,20 @@ export class RedisCacheService {
     if (ttlSeconds) {
       try {
         await this.redis!.setex(key, ttlSeconds, serializedValue);
-      } catch (error: any) {
-        console.warn(`[RedisCache] Failed to setex key ${key}:`, error.message);
+      } catch (error) {
+        console.warn(
+          `[RedisCache] Failed to setex key ${key}:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     } else {
       try {
         await this.redis!.set(key, serializedValue);
-      } catch (error: any) {
-        console.warn(`[RedisCache] Failed to set key ${key}:`, error.message);
+      } catch (error) {
+        console.warn(
+          `[RedisCache] Failed to set key ${key}:`,
+          error instanceof Error ? error.message : error,
+        );
       }
     }
   }
@@ -43,7 +49,7 @@ export class RedisCacheService {
   /**
    * Get data from Redis
    */
-  async get<T = any>(key: string): Promise<T | null> {
+  async get<T = unknown>(key: string): Promise<T | null> {
     if (!this.isRedisAvailable()) return null;
 
     const value = await this.redis!.get(key);
@@ -68,8 +74,11 @@ export class RedisCacheService {
     try {
       const result = await this.redis!.del(key);
       return result > 0;
-    } catch (error: any) {
-      console.warn(`[RedisCache] Failed to delete key ${key}:`, error.message);
+    } catch (error) {
+      console.warn(
+        `[RedisCache] Failed to delete key ${key}:`,
+        error instanceof Error ? error.message : error,
+      );
       return false;
     }
   }
@@ -91,10 +100,11 @@ export class RedisCacheService {
     return await this.redis!.keys(pattern);
   }
 
-  /**
-   * Set with expiration (alias for set with TTL)
-   */
-  async setWithExpiry(key: string, value: any, seconds: number): Promise<void> {
+  async setWithExpiry(
+    key: string,
+    value: unknown,
+    seconds: number,
+  ): Promise<void> {
     return this.set(key, value, seconds);
   }
 
@@ -109,10 +119,10 @@ export class RedisCacheService {
       } else {
         return await this.redis!.incrby(key, amount);
       }
-    } catch (error: any) {
+    } catch (error) {
       console.warn(
         `[RedisCache] Failed to increment key ${key}:`,
-        error.message,
+        error instanceof Error ? error.message : error,
       );
       return 0;
     }
@@ -152,7 +162,7 @@ export class RedisCacheService {
    * ]);
    */
   async setMultiple(
-    entries: Array<{ key: string; value: any; ttl?: number }>,
+    entries: Array<{ key: string; value: unknown; ttl?: number }>,
   ): Promise<void> {
     if (!this.isRedisAvailable() || entries.length === 0) return;
 
@@ -169,8 +179,11 @@ export class RedisCacheService {
 
     try {
       await pipeline.exec();
-    } catch (error: any) {
-      console.warn(`[RedisCache] Failed to setMultiple:`, error.message);
+    } catch (error) {
+      console.warn(
+        `[RedisCache] Failed to setMultiple:`,
+        error instanceof Error ? error.message : error,
+      );
     }
   }
 
@@ -184,7 +197,9 @@ export class RedisCacheService {
    * const results = await redisCache.getMultiple(['user:1', 'user:2', 'user:3']);
    * const user1 = results.get('user:1'); // User data or null
    */
-  async getMultiple<T = any>(keys: string[]): Promise<Map<string, T | null>> {
+  async getMultiple<T = unknown>(
+    keys: string[],
+  ): Promise<Map<string, T | null>> {
     if (!this.isRedisAvailable() || keys.length === 0) return new Map();
 
     const pipeline = this.redis!.pipeline();

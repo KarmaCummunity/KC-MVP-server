@@ -105,7 +105,7 @@ export class PlacesController {
     await this.redisCache.increment(searchKey);
 
     // Track global stats
-    const globalStats = (await this.redisCache.get(globalKey)) || {
+    const globalStats = ((await this.redisCache.get(globalKey)) as any) || {
       totalSearches: 0,
       cacheHits: 0,
       apiCalls: 0,
@@ -126,7 +126,9 @@ export class PlacesController {
   private async getPlacesStats() {
     const searchKeys = await this.redisCache.getKeys("search_activity:*");
     const cacheKeys = await this.redisCache.getKeys("places:autocomplete:*");
-    const globalStats = (await this.redisCache.get("global_search_stats")) || {
+    const globalStats = ((await this.redisCache.get(
+      "global_search_stats",
+    )) as any) || {
       totalSearches: 0,
       cacheHits: 0,
       apiCalls: 0,

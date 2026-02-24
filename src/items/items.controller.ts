@@ -73,7 +73,7 @@ export class ItemsController {
     @Param("collection") collection: string,
     @Param("userId") userId: string,
     @Param("itemId") itemId: string,
-    @Body("data") data: Record<string, unknown>,
+    @Body("data") data: any,
   ) {
     return this.itemsService.update(collection, userId, itemId, data);
   }

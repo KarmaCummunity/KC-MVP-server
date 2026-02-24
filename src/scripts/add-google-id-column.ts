@@ -77,7 +77,8 @@ async function addGoogleIdColumn() {
 
     await client.query("COMMIT");
     console.log("✅ All operations completed successfully");
-  } catch (error: any) {
+  } catch (err) {
+    const error = err as Error;
     await client.query("ROLLBACK");
     console.error("❌ Error:", error.message);
     throw error;

@@ -149,7 +149,8 @@ export class CommunityGroupChallengesController {
 
       this.logger.log(`✅ Challenge created successfully: ${challenge.id}`);
       return { success: true, data: challenge };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       this.logger.error("Error creating challenge:", error);
       throw new InternalServerErrorException(
@@ -238,7 +239,8 @@ export class CommunityGroupChallengesController {
       const { rows } = await client.query(query, params);
 
       return { success: true, data: rows, count: rows.length };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching challenges:", error);
       throw new InternalServerErrorException("Failed to fetch challenges");
     } finally {
@@ -432,7 +434,8 @@ export class CommunityGroupChallengesController {
           },
         },
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching daily tracker:", error);
       throw new InternalServerErrorException(
         "Failed to fetch daily tracker data",
@@ -496,7 +499,8 @@ export class CommunityGroupChallengesController {
           participants,
         },
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       if (error instanceof NotFoundException) throw error;
       this.logger.error("Error fetching challenge:", error);
       throw new InternalServerErrorException("Failed to fetch challenge");
@@ -577,7 +581,8 @@ export class CommunityGroupChallengesController {
 
       this.logger.log(`✅ User joined challenge successfully`);
       return { success: true, data: participant };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       if (
         error instanceof NotFoundException ||
@@ -718,7 +723,8 @@ export class CommunityGroupChallengesController {
           current_streak: currentStreak,
         },
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       await client.query("ROLLBACK");
       if (error instanceof BadRequestException) throw error;
       this.logger.error("Error adding entry:", error);
@@ -762,7 +768,8 @@ export class CommunityGroupChallengesController {
       );
 
       return { success: true, data: rows, count: rows.length };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching entries:", error);
       throw new InternalServerErrorException("Failed to fetch entries");
     } finally {
@@ -822,7 +829,8 @@ export class CommunityGroupChallengesController {
           challenges: challengeStats,
         },
       };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       this.logger.error("Error fetching user statistics:", error);
       throw new InternalServerErrorException("Failed to fetch statistics");
     } finally {
@@ -947,7 +955,8 @@ export class CommunityGroupChallengesController {
 
       this.logger.log(`✅ Challenge updated successfully`);
       return { success: true, data: updated };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       if (
         error instanceof NotFoundException ||
         error instanceof BadRequestException
@@ -1006,7 +1015,8 @@ export class CommunityGroupChallengesController {
 
       this.logger.log(`✅ Challenge deleted successfully`);
       return { success: true, message: "Challenge deleted" };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       if (
         error instanceof NotFoundException ||
         error instanceof BadRequestException

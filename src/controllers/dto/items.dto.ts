@@ -60,7 +60,7 @@ export class CreateItemDto {
   delivery_method?: string;
 
   @IsOptional()
-  metadata?: Record<string, unknown>;
+  metadata?: any;
 
   @IsOptional()
   @IsString()
@@ -133,7 +133,7 @@ export class UpdateItemDto {
 
   @IsOptional()
   @IsObject()
-  metadata?: Record<string, unknown>;
+  metadata?: any;
 
   @IsOptional()
   @IsString()

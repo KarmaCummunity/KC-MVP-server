@@ -17,22 +17,22 @@ export interface CreateTableDto {
   name: string;
   description?: string;
   columns: CreateColumnDto[];
-  metadata?: Record<string, any>;
+  metadata?: any;
 }
 
 export interface UpdateTableDto {
   name?: string;
   description?: string;
   columns?: CreateColumnDto[];
-  metadata?: Record<string, any>;
+  metadata?: any;
 }
 
 export interface CreateRowDto {
-  data: Record<string, any>;
+  data: any;
 }
 
 export interface UpdateRowDto {
-  data: Record<string, any>;
+  data: any;
 }
 
 @Injectable()
@@ -159,8 +159,8 @@ export class AdminTablesService {
    * Validate row data according to column definitions
    */
   private validateRowData(
-    columns: any[],
-    data: Record<string, any>,
+    columns: CreateColumnDto[],
+    data: any,
   ): { valid: boolean; error?: string } {
     for (const column of columns) {
       const value = data[column.name];
@@ -197,7 +197,8 @@ export class AdminTablesService {
           }
           break;
         case "date": {
-          const dateValue = value instanceof Date ? value : new Date(value);
+          const dateValue =
+            value instanceof Date ? value : new Date(value as string | number);
           if (isNaN(dateValue.getTime())) {
             return {
               valid: false,
@@ -220,11 +221,8 @@ export class AdminTablesService {
   /**
    * Normalize row data according to column data types
    */
-  private normalizeRowData(
-    columns: any[],
-    data: Record<string, any>,
-  ): Record<string, any> {
-    const normalized: Record<string, any> = {};
+  private normalizeRowData(columns: CreateColumnDto[], data: any): any {
+    const normalized: any = {};
 
     for (const column of columns) {
       const value = data[column.name];
@@ -244,7 +242,8 @@ export class AdminTablesService {
           normalized[column.name] = Number(value);
           break;
         case "date": {
-          const dateValue = value instanceof Date ? value : new Date(value);
+          const dateValue =
+            value instanceof Date ? value : new Date(value as string | number);
           normalized[column.name] = dateValue.toISOString();
           break;
         }
@@ -319,7 +318,8 @@ export class AdminTablesService {
         ...table,
         columns: columnsResult.rows,
       };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       await client.query("ROLLBACK");
       throw error;
     } finally {
@@ -356,7 +356,8 @@ export class AdminTablesService {
       }
 
       return tables;
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה בטעינת טבלאות: ${error.message}`);
     }
   }
@@ -392,7 +393,7 @@ export class AdminTablesService {
       // Fetch rows if requested
       if (includeRows) {
         let rowsQuery = `SELECT * FROM admin_table_rows WHERE table_id = $1::UUID ORDER BY created_at DESC`;
-        const params: any[] = [id];
+        const params: unknown[] = [id];
 
         if (pagination) {
           rowsQuery += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -414,7 +415,8 @@ export class AdminTablesService {
       }
 
       return table;
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה בטעינת טבלה: ${error.message}`);
     }
   }
@@ -444,7 +446,7 @@ export class AdminTablesService {
         dto.metadata !== undefined
       ) {
         const updates: string[] = [];
-        const params: any[] = [];
+        const params: unknown[] = [];
         let paramIndex = 1;
 
         if (dto.name) {
@@ -511,7 +513,8 @@ export class AdminTablesService {
 
       // Fetch updated table
       return await this.getTableById(id, false);
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       await client.query("ROLLBACK");
       throw error;
     } finally {
@@ -534,7 +537,8 @@ export class AdminTablesService {
       }
 
       return { success: true };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה במחיקת טבלה: ${error.message}`);
     }
   }
@@ -548,7 +552,7 @@ export class AdminTablesService {
   ) {
     try {
       let query = `SELECT * FROM admin_table_rows WHERE table_id = $1::UUID ORDER BY created_at DESC`;
-      const params: any[] = [tableId];
+      const params: unknown[] = [tableId];
 
       if (pagination) {
         query += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -569,7 +573,8 @@ export class AdminTablesService {
         page: pagination?.page || 1,
         limit: pagination?.limit || rowsResult.rows.length,
       };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה בטעינת רשומות: ${error.message}`);
     }
   }
@@ -609,7 +614,8 @@ export class AdminTablesService {
       );
 
       return result.rows[0];
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה ביצירת רשומה: ${error.message}`);
     }
   }
@@ -659,7 +665,8 @@ export class AdminTablesService {
       }
 
       return result.rows[0];
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה בעדכון רשומה: ${error.message}`);
     }
   }
@@ -681,7 +688,8 @@ export class AdminTablesService {
       }
 
       return { success: true };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       throw new Error(`שגיאה במחיקת רשומה: ${error.message}`);
     }
   }

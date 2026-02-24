@@ -102,7 +102,8 @@ async function importData() {
             values,
           );
           successCount++;
-        } catch (insertError: any) {
+        } catch (err) {
+          const insertError = err as Error;
           errorCount++;
           // Skip rows with data type mismatches (e.g., UUID vs TEXT)
           if (errorCount <= 3) {

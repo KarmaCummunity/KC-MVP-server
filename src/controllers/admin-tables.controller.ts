@@ -33,7 +33,8 @@ export class AdminTablesController {
     try {
       const tables = await this.adminTablesService.getAllTables();
       return { success: true, data: tables };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה בטעינת טבלאות" };
     }
   }
@@ -61,13 +62,17 @@ export class AdminTablesController {
         pagination,
       );
       return { success: true, data: table };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה בטעינת טבלה" };
     }
   }
 
   @Post()
-  async createTable(@Body() dto: CreateTableDto, @Request() req: any) {
+  async createTable(
+    @Body() dto: CreateTableDto,
+    @Request() req: import("express").Request,
+  ) {
     try {
       const userId = req.user?.userId;
       if (!userId) {
@@ -84,7 +89,8 @@ export class AdminTablesController {
 
       const table = await this.adminTablesService.createTable(dto, userId);
       return { success: true, data: table };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה ביצירת טבלה" };
     }
   }
@@ -93,7 +99,7 @@ export class AdminTablesController {
   async updateTable(
     @Param("id") id: string,
     @Body() dto: UpdateTableDto,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     try {
       const userId = req.user?.userId;
@@ -103,7 +109,8 @@ export class AdminTablesController {
 
       const table = await this.adminTablesService.updateTable(id, dto, userId);
       return { success: true, data: table };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה בעדכון טבלה" };
     }
   }
@@ -113,7 +120,8 @@ export class AdminTablesController {
     try {
       await this.adminTablesService.deleteTable(id);
       return { success: true, message: "טבלה נמחקה בהצלחה" };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה במחיקת טבלה" };
     }
   }
@@ -138,7 +146,8 @@ export class AdminTablesController {
         pagination,
       );
       return { success: true, data: result };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה בטעינת רשומות" };
     }
   }
@@ -147,7 +156,7 @@ export class AdminTablesController {
   async createRow(
     @Param("id") tableId: string,
     @Body() dto: CreateRowDto,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     try {
       const userId = req.user?.userId;
@@ -161,7 +170,8 @@ export class AdminTablesController {
 
       const row = await this.adminTablesService.createRow(tableId, dto, userId);
       return { success: true, data: row };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה ביצירת רשומה" };
     }
   }
@@ -171,7 +181,7 @@ export class AdminTablesController {
     @Param("id") tableId: string,
     @Param("rowId") rowId: string,
     @Body() dto: UpdateRowDto,
-    @Request() req: any,
+    @Request() req: import("express").Request,
   ) {
     try {
       const userId = req.user?.userId;
@@ -190,7 +200,8 @@ export class AdminTablesController {
         userId,
       );
       return { success: true, data: row };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה בעדכון רשומה" };
     }
   }
@@ -200,7 +211,8 @@ export class AdminTablesController {
     try {
       await this.adminTablesService.deleteRow(tableId, rowId);
       return { success: true, message: "רשומה נמחקה בהצלחה" };
-    } catch (error: any) {
+    } catch (error_: unknown) {
+      const error = error_ as Error;
       return { success: false, error: error.message || "שגיאה במחיקת רשומה" };
     }
   }

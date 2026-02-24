@@ -141,7 +141,10 @@ export class AdminFilesController {
 
   @Post()
   @UseGuards(JwtAuthGuard, AdminAuthGuard)
-  async uploadFile(@Body() dto: CreateFileDto, @Request() req: any) {
+  async uploadFile(
+    @Body() dto: CreateFileDto,
+    @Request() req: import("express").Request,
+  ) {
     await this.ensureTable();
 
     try {
@@ -170,7 +173,7 @@ export class AdminFilesController {
           this.logger.warn(
             `uploadFile: Invalid or missing userId, setting to NULL. Received: ${userId}`,
           );
-          userId = null;
+          userId = null as any;
         }
       }
 

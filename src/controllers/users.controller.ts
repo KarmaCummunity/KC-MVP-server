@@ -1333,7 +1333,8 @@ export class UsersController {
           [requestingAdminId],
         );
         requestingUser = result.rows;
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         // Fallback: if hierarchy_level column doesn't exist yet
         if (error.message && error.message.includes("hierarchy_level")) {
           const result = await client.query(
@@ -1380,7 +1381,8 @@ export class UsersController {
           [targetUserId],
         );
         targetUser = result.rows;
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         // Fallback: if hierarchy_level column doesn't exist yet
         if (error.message && error.message.includes("hierarchy_level")) {
           const result = await client.query(
@@ -1672,7 +1674,8 @@ export class UsersController {
           ORDER BY level, name
         `);
         allUsers = result.rows;
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         // If columns don't exist, use query without them
         if (error.message && error.message.includes("salary")) {
           this.logger.warn(
@@ -2140,7 +2143,8 @@ export class UsersController {
         this.logger.log(
           `[UsersController] Database query returned ${rows.length} rows`,
         );
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         // If google_id column doesn't exist, try without it
         if (error.message && error.message.includes("google_id")) {
           this.logger.log(
@@ -2215,7 +2219,8 @@ export class UsersController {
       }
 
       return { success: true, data: user };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       this.logger.error(
         `[UsersController] getUserById error for id ${id}:`,
         error,
@@ -2539,7 +2544,8 @@ export class UsersController {
       `;
       const result = await this.pool.query(query, params);
       rows = result.rows;
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       // Fallback: if hierarchy_level column doesn't exist yet (migration not run)
       // OR if there's a type conversion error (jsonb/json)
       if (
@@ -2953,9 +2959,9 @@ export class UsersController {
       try {
         const result = await client.query(query, params);
         rows = result.rows;
-      } catch (err: any) {
+      } catch (err) {
         // Fallback if google_id column doesn't exist yet
-        if (err.message?.includes("google_id")) {
+        if ((err as Error).message?.includes("google_id")) {
           this.logger.warn(
             "⚠️ Google ID column missing in resolve-id, retrying without it",
           );
@@ -3080,7 +3086,8 @@ export class UsersController {
                         lastActive: newUser[0].last_active,
                       },
                     };
-                  } catch (insertError: any) {
+                  } catch (insertError_: unknown) {
+                    const insertError = insertError_ as Error;
                     // If google_id column doesn't exist, try without it
                     if (
                       insertError.message &&
@@ -3280,7 +3287,8 @@ export class UsersController {
           lastActive: user.last_active,
         },
       };
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       await client.query("ROLLBACK");
       this.logger.error("❌ Error in resolveUserId:", error);
       return {

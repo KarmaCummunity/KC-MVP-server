@@ -53,7 +53,9 @@ async function verify() {
 
       if (emailCheck.rows.length > 0) {
         console.log("✅ Emails are anonymized:");
-        emailCheck.rows.forEach((r: any) => console.log(`   - ${r.email}`));
+        emailCheck.rows.forEach((r: { email: string }) =>
+          console.log(`   - ${r.email}`),
+        );
       } else {
         console.log("⚠️  Warning: Emails may not be anonymized!");
       }
@@ -62,7 +64,8 @@ async function verify() {
     }
 
     console.log("\n✅ Verification complete!\n");
-  } catch (error: any) {
+  } catch (err) {
+    const error = err as Error;
     console.error("❌ Verification failed:", error.message);
     process.exit(1);
   } finally {

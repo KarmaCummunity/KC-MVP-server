@@ -858,7 +858,7 @@ export class StatsController {
       // Helper function to get cached or execute query
       const getCachedOrQuery = async (
         cacheKey: string,
-        queryFn: () => Promise<any>,
+        queryFn: () => Promise<unknown>,
         ttl: number = 10 * 60,
       ) => {
         const cached = cachedMetrics.get(cacheKey);
@@ -866,7 +866,7 @@ export class StatsController {
           // Return in the same format as pool.query would
           return { rows: [cached] };
         }
-        const result = await queryFn();
+        const result = (await queryFn()) as any;
         // Cache only the first row (query results are arrays with one object)
         if (result && result.rows && result.rows.length > 0) {
           await this.redisCache.set(cacheKey, result.rows[0], ttl);
@@ -1066,7 +1066,7 @@ export class StatsController {
         chatMetrics,
         siteVisitsMetrics,
         taskMetrics,
-      ] = queries;
+      ] = queries as any[];
 
       // Map all computed stats
       const computed = {

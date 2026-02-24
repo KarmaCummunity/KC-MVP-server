@@ -125,7 +125,7 @@ async function syncFirebaseUsers() {
           // User exists - update if needed
           const existingUser = existingUsers[0];
           const needsUpdate: string[] = [];
-          const updateValues: any[] = [];
+          const updateValues: unknown[] = [];
           let paramCount = 1;
 
           // Check if firebase_uid needs to be set/updated
@@ -238,7 +238,8 @@ async function syncFirebaseUsers() {
             console.log(
               `✨ Created user: ${normalizedEmail} (${firebaseUser.uid})`,
             );
-          } catch (insertError: any) {
+          } catch (err) {
+            const insertError = err as Error;
             // If google_id column doesn't exist, try without it
             if (
               insertError.message &&
@@ -285,7 +286,8 @@ async function syncFirebaseUsers() {
             }
           }
         }
-      } catch (error: any) {
+      } catch (err) {
+        const error = err as Error;
         errors++;
         console.error(
           `❌ Error syncing user ${firebaseUser.uid}:`,

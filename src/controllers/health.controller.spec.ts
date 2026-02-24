@@ -11,13 +11,11 @@ describe("HealthController (e2e)", () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    // הגדרת environment variables לבדיקות (חייב להיות לפני יצירת המודול!)
     process.env.GOOGLE_CLIENT_ID = "test-client-id-for-testing";
     process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID =
       "test-web-client-id-for-testing";
     process.env.NODE_ENV = "test";
 
-    // יצירת test module
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })

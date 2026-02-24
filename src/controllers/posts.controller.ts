@@ -171,7 +171,10 @@ export class PostsController {
               "ALTER TABLE posts ALTER COLUMN item_id TYPE TEXT;",
             );
           } catch (e) {
-            this.logger.log("ℹ️  Note: item_id fix check:", (e as any).message);
+            this.logger.log(
+              "ℹ️  Note: item_id fix check:",
+              (e as Error).message,
+            );
           }
 
           // Table exists and is patched
@@ -1782,7 +1785,7 @@ export class PostsController {
       description?: string;
       image?: string;
     },
-    @Req() req: any,
+    @Req() req: import("express").Request,
   ) {
     const client = await this.pool.connect();
     try {
@@ -1790,7 +1793,10 @@ export class PostsController {
 
       // Get user_id from authenticated request
       const user_id =
-        req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+        req.user?.userId ||
+        (req.user as any)?.id ||
+        (req.user as any)?.sub ||
+        body.user_id;
 
       if (!user_id) {
         await client.query("ROLLBACK");
@@ -1919,13 +1925,16 @@ export class PostsController {
   async hidePost(
     @Param("postId") postId: string,
     @Body() body: { user_id?: string },
-    @Req() req: any,
+    @Req() req: import("express").Request,
   ) {
     const client = await this.pool.connect();
     try {
       // Get user_id from authenticated request
       const user_id =
-        req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+        req.user?.userId ||
+        (req.user as any)?.id ||
+        (req.user as any)?.sub ||
+        body.user_id;
 
       if (!user_id) {
         return { success: false, error: "User not authenticated" };
@@ -2002,13 +2011,16 @@ export class PostsController {
   async unhidePost(
     @Param("postId") postId: string,
     @Body() body: { user_id?: string },
-    @Req() req: any,
+    @Req() req: import("express").Request,
   ) {
     const client = await this.pool.connect();
     try {
       // Get user_id from authenticated request
       const user_id =
-        req.user?.userId || req.user?.id || req.user?.sub || body.user_id;
+        req.user?.userId ||
+        (req.user as any)?.id ||
+        (req.user as any)?.sub ||
+        body.user_id;
 
       if (!user_id) {
         return { success: false, error: "User not authenticated" };
@@ -2092,14 +2104,18 @@ export class PostsController {
    */
   @Delete(":postId")
   @UseGuards(JwtAuthGuard)
-  async deletePost(@Param("postId") postId: string, @Req() req: any) {
+  async deletePost(
+    @Param("postId") postId: string,
+    @Req() req: import("express").Request,
+  ) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
 
       // Get user_id from authenticated request (more secure/reliable than body)
       // JwtAuthGuard populates req.user with SessionTokenPayload which uses 'userId'
-      const user_id = req.user?.userId || req.user?.id || req.user?.sub;
+      const user_id =
+        req.user?.userId || (req.user as any)?.id || (req.user as any)?.sub;
 
       if (!user_id) {
         await client.query("ROLLBACK");
@@ -2260,7 +2276,7 @@ export class PostsController {
         message: errorMessage,
         stack: errorStack,
         postId,
-        userId: req?.user?.id,
+        userId: req?.user?.userId || (req?.user as any)?.id,
       });
       return {
         success: false,

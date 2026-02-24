@@ -149,7 +149,8 @@ async function run() {
         await client.query(
           `CREATE INDEX IF NOT EXISTS ${t}_data_gin ON ${t} USING GIN (data);`,
         );
-      } catch (err: any) {
+      } catch (e) {
+        const err = e as Error & { code?: string };
         console.error(`❌ Error initializing table '${t}':`, err.message);
         if (err.code === "42501") {
           // Permission denied - try to grant myself? No.

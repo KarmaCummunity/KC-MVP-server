@@ -110,7 +110,8 @@ export class UserResolutionService {
       }
 
       return uuid;
-    } catch (error: any) {
+    } catch (err) {
+      const error = err as Error;
       // If it's a NotFoundException we threw, re-throw it
       if (error instanceof NotFoundException) {
         throw error;
@@ -164,7 +165,7 @@ export class UserResolutionService {
     },
   ): Promise<void> {
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: string[] = [];
     let paramCount = 1;
 
     if (externalIds.firebase_uid) {
