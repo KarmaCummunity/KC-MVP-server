@@ -2,7 +2,7 @@
 // - Purpose: CRUD עבור ניהול אנשים בקהילה - רשומות של אנשים והתפקיד/התרומה שלהם
 // - Routes: /api/community-members (GET, POST), /api/community-members/:id (GET, PATCH, DELETE)
 // - Storage: PostgreSQL טבלת community_members (schema.sql)
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
@@ -37,6 +37,7 @@ interface UpdateMemberDto {
 
 @Controller('/api/community-members')
 export class CommunityMembersController {
+  private readonly logger = new Logger(CommunityMembersController.name);
   private readonly CACHE_TTL = 10 * 60; // 10 minutes
 
   constructor(
@@ -100,13 +101,13 @@ export class CommunityMembersController {
       const tableExists = checkTable.rows[0].exists;
 
       if (!tableExists) {
-        console.log('📋 Creating community_members table...');
+        this.logger.log('📋 Creating community_members table...');
 
         // Create extension if needed
         try {
           await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
         } catch (extError) {
-          console.warn('⚠️ Could not create uuid-ossp extension:', extError);
+          this.logger.warn('⚠️ Could not create uuid-ossp extension:', extError);
         }
 
         // Create the table
@@ -150,10 +151,10 @@ export class CommunityMembersController {
           EXECUTE FUNCTION update_updated_at_column()
         `);
 
-        console.log('✅ community_members table created successfully');
+        this.logger.log('✅ community_members table created successfully');
       }
     } catch (error) {
-      console.error('❌ Error ensuring community_members table:', error);
+      this.logger.error('❌ Error ensuring community_members table:', error);
       // Don't throw - let the query fail naturally if table doesn't exist
     }
   }
@@ -210,7 +211,7 @@ export class CommunityMembersController {
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Error fetching community members:', error);
+      this.logger.error('Error fetching community members:', error);
       return {
         success: false,
         error: 'Failed to fetch community members',
@@ -258,7 +259,7 @@ export class CommunityMembersController {
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error fetching community member:', error);
+      this.logger.error('Error fetching community member:', error);
       return {
         success: false,
         error: 'Failed to fetch community member'
@@ -284,7 +285,7 @@ export class CommunityMembersController {
       if (dto.created_by) {
         createdByUuid = await this.resolveUserIdToUUID(dto.created_by);
         if (!createdByUuid) {
-          console.warn(`⚠️ Could not resolve created_by user: ${dto.created_by}`);
+          this.logger.warn(`⚠️ Could not resolve created_by user: ${dto.created_by}`);
         }
       }
 
@@ -316,7 +317,7 @@ export class CommunityMembersController {
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error creating community member:', error);
+      this.logger.error('Error creating community member:', error);
       return {
         success: false,
         error: 'Failed to create community member'
@@ -401,7 +402,7 @@ export class CommunityMembersController {
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Error updating community member:', error);
+      this.logger.error('Error updating community member:', error);
       return {
         success: false,
         error: 'Failed to update community member'
@@ -434,7 +435,7 @@ export class CommunityMembersController {
 
       return { success: true, message: 'Member deleted successfully' };
     } catch (error) {
-      console.error('Error deleting community member:', error);
+      this.logger.error('Error deleting community member:', error);
       return {
         success: false,
         error: 'Failed to delete community member'

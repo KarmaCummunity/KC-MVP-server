@@ -1,11 +1,11 @@
 // File overview:
 // - Purpose: JWT service for secure session token creation, validation, and refresh token management
 // - Provides: Session token creation, validation, refresh tokens, secure signing
-// - Security: Uses RS256 signing, proper expiration, blacklist support
+// - Security: Uses HMAC-SHA256 signing (SEC-001.1), proper expiration, blacklist support
 
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { RedisCacheService } from '../redis/redis-cache.service';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, createHmac } from 'crypto';
 
 export interface SessionTokenPayload {
   userId: string;
@@ -83,8 +83,8 @@ export class JwtService {
     // Store refresh token in Redis with expiry
     await this.storeRefreshToken(sessionId, refreshToken, user.id);
 
-    this.logger.log('Created token pair for user', { 
-      userId: user.id, 
+    this.logger.log('Created token pair for user', {
+      userId: user.id,
       email: user.email,
       sessionId,
       accessExpiresIn: this.ACCESS_TOKEN_EXPIRY,
@@ -111,7 +111,7 @@ export class JwtService {
       }
 
       const payload = this.verifyTokenSignature(token);
-      
+
       // Validate token hasn't expired
       const now = Math.floor(Date.now() / 1000);
       if (payload.exp < now) {
@@ -128,9 +128,9 @@ export class JwtService {
 
       return payload;
     } catch (error) {
-      this.logger.warn('Token verification failed', { 
+      this.logger.warn('Token verification failed', {
         error: error instanceof Error ? error.message : String(error),
-        tokenLength: token?.length 
+        tokenLength: token?.length
       });
       throw new UnauthorizedException('Invalid token');
     }
@@ -141,7 +141,7 @@ export class JwtService {
    */
   async refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresIn: number }> {
     const payload = await this.verifyToken(refreshToken);
-    
+
     if (payload.type !== 'refresh') {
       throw new UnauthorizedException('Invalid token type for refresh');
     }
@@ -160,7 +160,7 @@ export class JwtService {
 
     const accessToken = this.signToken(newAccessPayload);
 
-    this.logger.log('Refreshed access token', { 
+    this.logger.log('Refreshed access token', {
       userId: payload.userId,
       sessionId: payload.sessionId
     });
@@ -178,18 +178,18 @@ export class JwtService {
     try {
       const payload = this.verifyTokenSignature(token);
       const remainingTtl = payload.exp - Math.floor(Date.now() / 1000);
-      
+
       if (remainingTtl > 0) {
         // Add to blacklist until expiry
         const blacklistKey = `${this.TOKEN_BLACKLIST_PREFIX}${this.hashToken(token)}`;
         await this.redisCache.setWithExpiry(blacklistKey, true, remainingTtl);
-        
+
         // If it's a refresh token, also remove from storage
         if (payload.type === 'refresh') {
           await this.removeRefreshToken(payload.sessionId);
         }
 
-        this.logger.log('Token revoked', { 
+        this.logger.log('Token revoked', {
           userId: payload.userId,
           sessionId: payload.sessionId,
           tokenType: payload.type
@@ -208,9 +208,9 @@ export class JwtService {
       await this.removeRefreshToken(sessionId);
       this.logger.log('User session revoked', { sessionId });
     } catch (error) {
-      this.logger.error('Failed to revoke user session', { 
+      this.logger.error('Failed to revoke user session', {
         error: error instanceof Error ? error.message : String(error),
-        sessionId 
+        sessionId
       });
     }
   }
@@ -226,7 +226,7 @@ export class JwtService {
     try {
       const keys = await this.redisCache.getKeys(`${this.REFRESH_TOKEN_PREFIX}*`);
       const sessions: Array<{ sessionId: string; createdAt: Date; expiresAt: Date }> = [];
-      
+
       for (const key of keys) {
         const token = await this.redisCache.get<string>(key);
         if (token) {
@@ -244,12 +244,12 @@ export class JwtService {
           }
         }
       }
-      
+
       return sessions;
     } catch (error) {
-      this.logger.error('Failed to get user active sessions', { 
+      this.logger.error('Failed to get user active sessions', {
         error: error instanceof Error ? error.message : String(error),
-        userId 
+        userId
       });
       return [];
     }
@@ -260,14 +260,14 @@ export class JwtService {
   private signToken(payload: SessionTokenPayload): string {
     const secret = process.env.JWT_SECRET!;
     const header = { alg: 'HS256', typ: 'JWT' };
-    
+
     const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
     const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    
-    const signature = createHash('sha256')
-      .update(`${encodedHeader}.${encodedPayload}.${secret}`)
+
+    const signature = createHmac('sha256', secret)
+      .update(`${encodedHeader}.${encodedPayload}`)
       .digest('base64url');
-    
+
     return `${encodedHeader}.${encodedPayload}.${signature}`;
   }
 
@@ -279,12 +279,12 @@ export class JwtService {
 
     const [encodedHeader, encodedPayload, signature] = parts;
     const secret = process.env.JWT_SECRET!;
-    
+
     // Verify signature
-    const expectedSignature = createHash('sha256')
-      .update(`${encodedHeader}.${encodedPayload}.${secret}`)
+    const expectedSignature = createHmac('sha256', secret)
+      .update(`${encodedHeader}.${encodedPayload}`)
       .digest('base64url');
-    
+
     if (signature !== expectedSignature) {
       throw new Error('Invalid token signature');
     }
@@ -311,7 +311,7 @@ export class JwtService {
   private async storeRefreshToken(sessionId: string, refreshToken: string, userId: string): Promise<void> {
     const key = `${this.REFRESH_TOKEN_PREFIX}${sessionId}`;
     await this.redisCache.setWithExpiry(key, refreshToken, this.REFRESH_TOKEN_EXPIRY);
-    
+
     // Also store user mapping for cleanup
     const userKey = `user_sessions:${userId}`;
     const userSessions = await this.redisCache.get<string[]>(userKey) || [];

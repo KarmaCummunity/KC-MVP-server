@@ -10,7 +10,9 @@ console.log("==================================================");
 const port = process.env.PORT || 3001;
 
 const server = http.createServer((req, res) => {
-    console.log(`[MINIMAL] Received request: ${req.method} ${req.url}`);
+    const safeMethod = req.method ? req.method.replace(/[\r\n]/g, '') : '';
+    const safeUrl = req.url ? encodeURIComponent(req.url) : '';
+    console.log(`[MINIMAL] Received request: ${safeMethod} ${safeUrl}`);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         status: 'ok',

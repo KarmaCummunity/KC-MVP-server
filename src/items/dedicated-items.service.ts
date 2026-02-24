@@ -2,13 +2,15 @@
 // - Purpose: Service for dedicated items table with separate columns (not JSONB)
 // - Provides: CRUD operations for items with all fields as separate database columns
 // - External deps: PostgreSQL connection pool
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { CreateItemDto, UpdateItemDto } from './dto/dedicated-item.dto';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class DedicatedItemsService {
+  private readonly logger = new Logger(DedicatedItemsService.name);
   constructor(@Inject(PG_POOL) private readonly pool: Pool) { }
 
   /**
@@ -75,10 +77,11 @@ export class DedicatedItemsService {
       let itemId = dto.id;
       if (!itemId || /^\d{10,13}$/.test(itemId)) {
         // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
-        itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        console.log('🔧 Generated new item ID (was timestamp or missing):', itemId);
+        // S2245: Use crypto.randomBytes instead of Math.random for secure ID generation
+        itemId = `item_${Date.now()}_${randomBytes(6).toString('hex')}`;
+        this.logger.log(`Generated new item ID (was timestamp or missing): ${itemId}`);
       } else {
-        console.log('✅ Using provided item ID:', itemId);
+        this.logger.log(`Using provided item ID: ${itemId}`);
       }
 
       // Verify ID format before using
@@ -86,7 +89,7 @@ export class DedicatedItemsService {
         throw new Error('Invalid item ID format - ID must be at least 10 characters');
       }
 
-      console.log('📝 Creating item:', itemId, dto.title, '- Owner:', ownerName, `(${ownerUuid})`);
+      this.logger.log(`Creating item: ${itemId} ${dto.title} - Owner: ${ownerName} (${ownerUuid})`);
 
       const result = await client.query(
         `INSERT INTO items (
@@ -146,19 +149,19 @@ export class DedicatedItemsService {
           })
         ]);
 
-        console.log('✅ Auto-created post for item:', createdItem.id);
+        this.logger.log(`Auto-created post for item: ${createdItem.id}`);
       } catch (postError) {
-        console.error('⚠️ Failed to auto-create post for item (continuing anyway):', postError);
+        this.logger.warn(`Failed to auto-create post for item (continuing): ${postError}`);
         // Don't fail the item creation if post creation fails
       }
 
       await client.query('COMMIT');
 
-      console.log('✅ Item created successfully:', result.rows[0].id, '- Owner:', ownerName, `(${ownerUuid})`);
+      this.logger.log(`Item created: ${result.rows[0].id} - Owner: ${ownerName} (${ownerUuid})`);
       return result.rows[0];
     } catch (error) {
       await client.query('ROLLBACK').catch(() => { }); // Ignore rollback errors
-      console.error('❌ Error creating item:', error);
+      this.logger.error('Error creating item:', error);
       throw error;
     } finally {
       client.release();
@@ -174,7 +177,7 @@ export class DedicatedItemsService {
       // Resolve owner_id to UUID
       const ownerUuid = await this.resolveUserIdToUUID(ownerId);
 
-      console.log('🔍 Fetching items for owner:', ownerUuid);
+      this.logger.debug(`Fetching items for owner: ${ownerUuid}`);
 
       const result = await client.query(
         `SELECT * FROM items 
@@ -183,10 +186,10 @@ export class DedicatedItemsService {
         [ownerUuid]
       );
 
-      console.log(`✅ Found ${result.rows.length} items for owner:`, ownerUuid);
+      this.logger.debug(`Found ${result.rows.length} items for owner: ${ownerUuid}`);
       return result.rows;
     } catch (error) {
-      console.error('❌ Error fetching items by owner:', error);
+      this.logger.error('Error fetching items by owner:', error);
       throw error;
     } finally {
       client.release();
@@ -199,7 +202,7 @@ export class DedicatedItemsService {
   async getItemById(id: string) {
     const client = await this.pool.connect();
     try {
-      console.log('🔍 Fetching item:', id);
+      this.logger.debug(`Fetching item: ${id}`);
 
       const result = await client.query(
         `SELECT * FROM items WHERE id = $1 AND is_deleted = FALSE`,
@@ -207,14 +210,14 @@ export class DedicatedItemsService {
       );
 
       if (result.rows.length === 0) {
-        console.log('⚠️ Item not found:', id);
+        this.logger.debug(`Item not found: ${id}`);
         return null;
       }
 
-      console.log('✅ Item found:', id);
+      this.logger.debug(`Item found: ${id}`);
       return result.rows[0];
     } catch (error) {
-      console.error('❌ Error fetching item by ID:', error);
+      this.logger.error('Error fetching item by ID:', error);
       throw error;
     } finally {
       client.release();
@@ -227,7 +230,7 @@ export class DedicatedItemsService {
   async updateItem(id: string, dto: UpdateItemDto) {
     const client = await this.pool.connect();
     try {
-      console.log('✏️ Updating item:', id);
+      this.logger.debug(`Updating item: ${id}`);
 
       const fields = [];
       const values = [];
@@ -243,7 +246,7 @@ export class DedicatedItemsService {
       });
 
       if (fields.length === 0) {
-        console.log('⚠️ No fields to update');
+        this.logger.debug('No fields to update');
         return this.getItemById(id);
       }
 
@@ -254,14 +257,14 @@ export class DedicatedItemsService {
       const result = await client.query(query, values);
 
       if (result.rows.length === 0) {
-        console.log('⚠️ Item not found for update:', id);
+        this.logger.debug(`Item not found for update: ${id}`);
         return null;
       }
 
-      console.log('✅ Item updated successfully:', id);
+      this.logger.log(`Item updated: ${id}`);
       return result.rows[0];
     } catch (error) {
-      console.error('❌ Error updating item:', error);
+      this.logger.error('Error updating item:', error);
       throw error;
     } finally {
       client.release();
@@ -274,7 +277,7 @@ export class DedicatedItemsService {
   async softDeleteItem(id: string) {
     const client = await this.pool.connect();
     try {
-      console.log('🗑️ Soft deleting item:', id);
+      this.logger.debug(`Soft deleting item: ${id}`);
 
       const result = await client.query(
         `UPDATE items 
@@ -285,14 +288,14 @@ export class DedicatedItemsService {
       );
 
       if (result.rows.length === 0) {
-        console.log('⚠️ Item not found or already deleted:', id);
+        this.logger.debug(`Item not found or already deleted: ${id}`);
         return { success: false, message: 'Item not found or already deleted' };
       }
 
-      console.log('✅ Item soft deleted successfully:', id);
+      this.logger.log(`Item soft deleted: ${id}`);
       return { success: true, message: 'Item deleted', item: result.rows[0] };
     } catch (error) {
-      console.error('❌ Error soft deleting item:', error);
+      this.logger.error('Error soft deleting item:', error);
       throw error;
     } finally {
       client.release();
@@ -305,7 +308,7 @@ export class DedicatedItemsService {
   async getItemsByCategory(category: string) {
     const client = await this.pool.connect();
     try {
-      console.log('🔍 Fetching items by category:', category);
+      this.logger.debug(`Fetching items by category: ${category}`);
 
       const result = await client.query(
         `SELECT * FROM items 
@@ -314,10 +317,10 @@ export class DedicatedItemsService {
         [category]
       );
 
-      console.log(`✅ Found ${result.rows.length} items for category:`, category);
+      this.logger.debug(`Found ${result.rows.length} items for category: ${category}`);
       return result.rows;
     } catch (error) {
-      console.error('❌ Error fetching items by category:', error);
+      this.logger.error('Error fetching items by category:', error);
       throw error;
     } finally {
       client.release();
@@ -330,7 +333,7 @@ export class DedicatedItemsService {
   async searchItems(searchTerm: string) {
     const client = await this.pool.connect();
     try {
-      console.log('🔍 Searching items:', searchTerm);
+      this.logger.debug(`Searching items: ${searchTerm}`);
 
       const result = await client.query(
         `SELECT * FROM items 
@@ -340,10 +343,10 @@ export class DedicatedItemsService {
         [`%${searchTerm}%`]
       );
 
-      console.log(`✅ Found ${result.rows.length} items matching:`, searchTerm);
+      this.logger.debug(`Found ${result.rows.length} items matching: ${searchTerm}`);
       return result.rows;
     } catch (error) {
-      console.error('❌ Error searching items:', error);
+      this.logger.error('Error searching items:', error);
       throw error;
     } finally {
       client.release();

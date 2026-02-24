@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Inject, UseGuards, Request, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -15,6 +15,7 @@ interface CreateFileDto {
 
 @Controller('/api/admin-files')
 export class AdminFilesController {
+    private readonly logger = new Logger(AdminFilesController.name);
     private readonly CACHE_TTL = 10 * 60; // 10 minutes
 
     constructor(
@@ -33,7 +34,7 @@ export class AdminFilesController {
       `);
 
             if (!checkTable.rows[0].exists) {
-                console.log('📋 Creating general_files table...');
+                this.logger.log('Creating general_files table...');
                 await this.pool.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
 
                 await this.pool.query(`
@@ -53,10 +54,10 @@ export class AdminFilesController {
                 await this.pool.query('CREATE INDEX IF NOT EXISTS idx_general_files_folder ON general_files (folder_path)');
                 await this.pool.query('CREATE INDEX IF NOT EXISTS idx_general_files_created_at ON general_files (created_at DESC)');
 
-                console.log('✅ general_files table created successfully');
+                this.logger.log('general_files table created successfully');
             }
         } catch (error) {
-            console.error('❌ Error ensuring general_files table:', error);
+            this.logger.error('Error ensuring general_files table:', error);
         }
     }
 
@@ -102,7 +103,7 @@ export class AdminFilesController {
 
             return { success: true, data: rows };
         } catch (error) {
-            console.error('Error fetching admin files:', error);
+            this.logger.error('Error fetching admin files:', error);
             return { success: false, error: 'Failed to fetch files', data: [] };
         }
     }
@@ -146,7 +147,7 @@ export class AdminFilesController {
                 if (dto.uploaded_by && uuidRegex.test(dto.uploaded_by)) {
                     userId = dto.uploaded_by;
                 } else {
-                    console.warn(`⚠️ uploadFile: Invalid or missing userId, setting to NULL. Received: ${userId}`);
+                    this.logger.warn(`uploadFile: Invalid or missing userId, setting to NULL. Received: ${userId}`);
                     userId = null;
                 }
             }
@@ -168,7 +169,7 @@ export class AdminFilesController {
             await this.redisCache.invalidatePattern('admin_files_list_*');
             return { success: true, data: rows[0] };
         } catch (error) {
-            console.error('Error saving file metadata:', error);
+            this.logger.error('Error saving file metadata:', error);
             return { success: false, error: 'Failed to save file metadata' };
         }
     }
@@ -187,7 +188,7 @@ export class AdminFilesController {
             await this.redisCache.invalidatePattern('admin_files_list_*');
             return { success: true, message: 'File deleted successfully' };
         } catch (error) {
-            console.error('Error deleting file:', error);
+            this.logger.error('Error deleting file:', error);
             return { success: false, error: 'Failed to delete file' };
         }
     }

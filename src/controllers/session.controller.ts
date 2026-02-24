@@ -6,7 +6,7 @@
 // ⚠️ WARNING: This is a DEMO/TEST controller. It should NOT be used in production.
 // ⚠️ The real authentication happens in UsersController (/api/users/login).
 // ⚠️ TODO: Remove this controller from production builds or disable the /session routes.
-import { Controller, Get, Post, Delete, Body, Headers, Ip, Req, Param, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Headers, Ip, Req, Param, Inject, Logger } from '@nestjs/common';
 import { SessionService } from '../auth/session.service';
 import { RateLimitService } from '../auth/rate-limit.service';
 import { Request } from 'express';
@@ -16,6 +16,7 @@ import * as argon2 from 'argon2';
 
 @Controller('session')
 export class SessionController {
+  private readonly logger = new Logger(SessionController.name);
   constructor(
     private readonly sessionService: SessionService,
     private readonly rateLimitService: RateLimitService,
@@ -103,7 +104,7 @@ export class SessionController {
         },
       };
     } catch (error) {
-      console.error('Session login error:', error);
+      this.logger.error('Session login error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),

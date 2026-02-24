@@ -2,14 +2,16 @@
 // - Purpose: Service for Items Delivery operations with database queries and Redis caching
 // - Used by: ItemsDeliveryController
 // - Provides: CRUD operations for items, search with filters, and item requests management
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { CreateItemDto, UpdateItemDto, ItemFiltersDto, CreateItemRequestDto, UpdateItemRequestDto } from './dto/items.dto';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class ItemsDeliveryService {
+  private readonly logger = new Logger(ItemsDeliveryService.name);
   private readonly CACHE_TTL = 5 * 60; // 5 minutes
 
   constructor(
@@ -30,10 +32,11 @@ export class ItemsDeliveryService {
       let itemId = (createItemDto as any).id;
       if (!itemId || /^\d{10,13}$/.test(itemId)) {
         // If ID is missing or is a timestamp (only digits, 10-13 chars), generate a proper ID
-        itemId = `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        console.log('🔧 Generated new item ID (was timestamp or missing):', itemId);
+        // S2245: Use crypto.randomBytes instead of Math.random for ID generation
+        itemId = `item_${Date.now()}_${randomBytes(6).toString('hex')}`;
+        this.logger.log(`Generated new item ID (was timestamp or missing): ${itemId}`);
       } else {
-        console.log('✅ Using provided item ID:', itemId);
+        this.logger.log(`Using provided item ID: ${itemId}`);
       }
 
       // Verify ID format before using
@@ -41,7 +44,7 @@ export class ItemsDeliveryService {
         throw new Error('Invalid item ID format - ID must be at least 10 characters');
       }
 
-      console.log('🔧 Creating item with ID:', itemId, 'Type:', typeof itemId);
+      this.logger.log(`Creating item with ID: ${itemId}, Type: ${typeof itemId}`);
 
       const { rows } = await client.query(`
         INSERT INTO items (
@@ -67,11 +70,11 @@ export class ItemsDeliveryService {
       ]);
 
       const createdItem = rows[0];
-      console.log('✅ Created item - ID:', createdItem.id, 'Type:', typeof createdItem.id, 'Length:', createdItem.id?.length);
-      
+      this.logger.log(`Created item - ID: ${createdItem.id}`);
+
       // CRITICAL: Verify the ID is correct before using it
       if (!createdItem.id || createdItem.id.length < 10) {
-        console.error('❌ CRITICAL: Item ID is invalid!', createdItem);
+        this.logger.error('CRITICAL: Item ID is invalid!', createdItem);
         throw new Error('Failed to create item - invalid ID returned from database');
       }
 
@@ -85,7 +88,7 @@ export class ItemsDeliveryService {
 
         // Ensure item_id is the full item ID, not just timestamp
         const itemIdForPost = createdItem.id;
-        console.log('📝 Creating post with item_id:', itemIdForPost, 'Type:', typeof itemIdForPost);
+        this.logger.log(`Creating post with item_id: ${itemIdForPost}`);
 
         await client.query(`
           INSERT INTO posts (author_id, item_id, title, description, images, post_type, metadata)
@@ -111,16 +114,16 @@ export class ItemsDeliveryService {
           WHERE item_id = $1 AND post_type = $2
           ORDER BY created_at DESC LIMIT 1
         `, [itemIdForPost, postType]);
-        
+
         if (verifyRows.length > 0) {
-          console.log('✅ Verified post created with item_id:', verifyRows[0].item_id, 'Post ID:', verifyRows[0].id);
+          this.logger.log(`Verified post created with item_id: ${verifyRows[0].item_id}`);
         } else {
-          console.error('❌ Failed to verify post creation - post not found!');
+          this.logger.error('Failed to verify post creation - post not found!');
         }
 
-        console.log('✅ Auto-created post for item:', createdItem.id);
+        this.logger.log(`Auto-created post for item: ${createdItem.id}`);
       } catch (postError) {
-        console.error('⚠️ Failed to auto-create post for item (continuing anyway):', postError);
+        this.logger.warn(`Failed to auto-create post for item (continuing): ${postError}`);
         // Don't fail the item creation if post creation fails
       }
 
@@ -132,7 +135,7 @@ export class ItemsDeliveryService {
       return { success: true, data: createdItem };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Create item error:', error);
+      this.logger.error('Create item error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to create item' };
     } finally {
       client.release();
@@ -239,9 +242,13 @@ export class ItemsDeliveryService {
     }
 
     // Sorting
+    // S2077: Whitelist sortBy/sortOrder to prevent SQL injection
     const sortBy = filters.sort_by || 'created_at';
     const sortOrder = filters.sort_order || 'desc';
-    query += ` ORDER BY i.${sortBy} ${sortOrder.toUpperCase()}`;
+    const allowedSortColumns = ['created_at', 'price', 'title', 'quantity', 'updated_at'];
+    const safeSortBy = allowedSortColumns.includes(sortBy) ? sortBy : 'created_at';
+    const safeSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    query += ` ORDER BY i.${safeSortBy} ${safeSortOrder}`;
 
     // Pagination
     const limit = filters.limit || 50;
@@ -354,7 +361,7 @@ export class ItemsDeliveryService {
       await this.invalidateItemCaches();
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Update item error:', error);
+      this.logger.error('Update item error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to update item' };
     } finally {
       client.release();
@@ -375,7 +382,7 @@ export class ItemsDeliveryService {
       await this.invalidateItemCaches();
       return { success: true, message: 'Item deleted successfully' };
     } catch (error) {
-      console.error('Delete item error:', error);
+      this.logger.error('Delete item error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to delete item' };
     } finally {
       client.release();
@@ -432,7 +439,7 @@ export class ItemsDeliveryService {
 
       return { success: true, data: rows[0] };
     } catch (error) {
-      console.error('Create item request error:', error);
+      this.logger.error('Create item request error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to create request' };
     } finally {
       client.release();
@@ -595,7 +602,7 @@ export class ItemsDeliveryService {
       return { success: true, data: rows[0] };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Update item request error:', error);
+      this.logger.error('Update item request error:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Failed to update request' };
     } finally {
       client.release();

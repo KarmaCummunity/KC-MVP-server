@@ -209,7 +209,7 @@ export class AuthController {
       }
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('AuthController - upsertUserProfileFromLegacy skipped (schema present but insert/update failed):', err);
+      this.logger.warn('AuthController - upsertUserProfileFromLegacy skipped (schema present but insert/update failed):', err);
     }
   }
 

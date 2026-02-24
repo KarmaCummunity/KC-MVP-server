@@ -79,10 +79,10 @@ echo "Google OAuth: Configured"
 echo ""
 
 # Export environment variables
-export GOOGLE_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com
-export EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=430191522654-o70t2qnqc4bvpvmbpak7unog7pvp9c95.apps.googleusercontent.com
-export DATABASE_URL=postgresql://kc:kc_password@localhost:5432/kc_db
-export REDIS_URL=redis://localhost:6379
+export GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-"config_required"}
+export EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=${EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID:-"config_required"}
+export DATABASE_URL=${DATABASE_URL:-"postgresql://kc:local_secret@localhost:5432/kc_db"}
+export REDIS_URL=${REDIS_URL:-"redis://localhost:6379"}
 export NODE_ENV=development
 export PORT=3001
 export CORS_ORIGIN="http://localhost:3000,https://karma-community-kc.com"

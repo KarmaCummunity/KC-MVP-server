@@ -208,32 +208,29 @@ async function bootstrap(): Promise<void> {
 
     // [MVP] Agent debug log removed
 
-    // Configure body parser with 50MB limit for base64 image uploads
-    app.use(bodyParser.json({ limit: '50mb' }));
-    app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+    // Configure body parser with 5MB limit (SEC-002, PERF-003)
+    // Use a separate multipart/upload route for larger files
+    app.use(bodyParser.json({ limit: '5mb' }));
+    app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
 
-    logger.log('📦 Body parser configured with 50MB limit for image uploads');
+    logger.log('📦 Body parser configured with 5MB limit');
 
     const port = Number(process.env.PORT || 3001);
 
-    // ═══════════════════════════════════════════════════════════════
-    // SECURITY MIDDLEWARE - Helmet.js.
-    // ═══════════════════════════════════════════════════════════════
-    // TEMPORARILY DISABLED: Helmet was causing "upstream sent too big header" error
-    // Railway's nginx proxy has limited buffer size for response headers
-    // TODO: Re-enable with minimal configuration after fixing the issue
+    // SEC-002.2: Security headers via Helmet.js
+    // Minimal config to avoid Railway's nginx buffer overflow ("upstream sent too big header")
+    app.use(helmet({
+      contentSecurityPolicy: false,     // CSP can be strict — disabled for now to avoid breaking mobile
+      crossOriginEmbedderPolicy: false, // Disabled to allow cross-origin resources
+      crossOriginOpenerPolicy: false,   // Disabled to avoid breaking OAuth popups
+      hsts: { maxAge: 31536000 },       // Strict-Transport-Security: 1 year
+      frameguard: { action: 'deny' },   // X-Frame-Options: DENY — prevents clickjacking
+      noSniff: true,                    // X-Content-Type-Options: nosniff
+      xssFilter: true,                  // X-XSS-Protection: 1; mode=block
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    }));
 
-    // app.use(helmet({
-    //   contentSecurityPolicy: false,
-    //   hsts: false,
-    //   frameguard: false,
-    //   noSniff: false,
-    //   xssFilter: false,
-    //   referrerPolicy: false,
-    //   crossOriginOpenerPolicy: false
-    // }));
-
-    logger.log('⚠️  Security headers (Helmet.js) temporarily disabled to fix 502 error');
+    logger.log('🛡️  Helmet.js security headers enabled (SEC-002.2)');
 
     // Determine environment for CORS configuration
     const environment = process.env.ENVIRONMENT || process.env.NODE_ENV || 'development';
@@ -353,6 +350,10 @@ async function bootstrap(): Promise<void> {
 
     // Start the HTTP server
     await app.listen(port, '0.0.0.0');
+
+    // H5/PERF-003.1: Set server timeout to 30s to prevent hung connections
+    const httpServer = app.getHttpServer();
+    httpServer.setTimeout(30000);
 
     // Log successful startup with configuration summary
     const isDevelopment = environment === 'development';

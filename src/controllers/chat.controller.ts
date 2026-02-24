@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards, Request, Inject } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards, Request, Inject, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
@@ -8,6 +8,7 @@ import { UserResolutionService } from '../services/user-resolution.service';
 @Controller('api/chat')
 @UseGuards(OptionalAuthGuard)
 export class ChatController {
+  private readonly logger = new Logger(ChatController.name);
   private readonly CACHE_TTL = 2 * 60; // 2 minutes
 
   constructor(
@@ -38,7 +39,7 @@ export class ChatController {
       try {
         await this.redisCache.invalidatePattern(pattern);
       } catch (error) {
-        console.error(`Failed to invalidate cache pattern ${pattern}:`, error);
+        this.logger.warn(`Failed to invalidate cache pattern ${pattern}:`, error);
       }
     }
   }
@@ -95,7 +96,7 @@ export class ChatController {
 
       // CRITICAL FIX: Sort participants to ensure consistent order
       // This prevents duplicate conversations when participants arrive in different order
-      const sortedParticipants = [...resolvedParticipants].sort();
+      const sortedParticipants = [...resolvedParticipants].sort((a, b) => a.localeCompare(b));
 
       await client.query('BEGIN');
 
@@ -148,7 +149,7 @@ export class ChatController {
       return { success: true, data: conversation };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Create conversation error:', error);
+      this.logger.error('Create conversation error:', error);
       return { success: false, error: 'Failed to create conversation' };
     } finally {
       client.release();
@@ -157,7 +158,7 @@ export class ChatController {
 
   @Get('conversations/user/:userId')
   async getUserConversations(@Param('userId') userId: string, @Request() req: any) {
-    console.log('--- Executing getUserConversations [FINAL TEXT CAST VERSION] ---');
+    this.logger.debug('Executing getUserConversations');
     try {
       const authenticatedUserId = req.user?.userId;
       const resolvedParamUserId = await this.resolveUserId(userId);
@@ -181,7 +182,7 @@ export class ChatController {
       let cached;
       try {
         cached = await this.redisCache.get(cacheKey);
-      } catch (cacheError) { }
+      } catch (_cacheError) { /* S108: cache miss is non-fatal */ }
 
       if (cached) {
         return { success: true, data: cached };
@@ -223,11 +224,11 @@ export class ChatController {
 
       try {
         await this.redisCache.set(cacheKey, rows, this.CACHE_TTL);
-      } catch (cacheError) { }
+      } catch (_cacheError) { /* S108: cache set error is non-fatal */ }
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Get user conversations error:', error);
+      this.logger.error('Get user conversations error:', error);
       return {
         success: false,
         error: 'Failed to get user conversations',
@@ -283,7 +284,7 @@ export class ChatController {
         if (cached) {
           return { success: true, data: cached };
         }
-      } catch (cacheError) { }
+      } catch (_cacheError) { /* S108: cache miss is non-fatal */ }
 
       const { rows } = await this.pool.query(`
         SELECT 
@@ -307,11 +308,11 @@ export class ChatController {
 
       try {
         await this.redisCache.set(cacheKey, messages, this.CACHE_TTL);
-      } catch (cacheError) { }
+      } catch (_cacheError) { /* S108: cache set error is non-fatal */ }
 
       return { success: true, data: messages };
     } catch (error) {
-      console.error('Get conversation messages error:', error);
+      this.logger.error('Get conversation messages error:', error);
       return {
         success: false,
         error: 'Failed to get conversation messages',
@@ -365,7 +366,7 @@ export class ChatController {
           }
 
           // CRITICAL FIX: Sort participants to ensure consistent order
-          const sortedParticipants = [...resolvedParticipants].sort();
+          const sortedParticipants = [...resolvedParticipants].sort((a, b) => a.localeCompare(b));
 
           await client.query('BEGIN');
           transactionStarted = true;
@@ -481,7 +482,7 @@ export class ChatController {
         try { await client.query('ROLLBACK'); } catch { }
       }
       client.release();
-      console.error('Send message error:', error);
+      this.logger.error('Send message error:', error);
       return { success: false, error: 'Failed to send message', message: error instanceof Error ? error.message : 'Unknown error' };
     }
   }

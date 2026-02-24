@@ -1,20 +1,20 @@
 // Community Group Challenges Controller
 // Handles all operations for community challenges: create, list, join, track entries, statistics
-import { 
-  Body, 
-  Controller, 
-  Get, 
-  Post, 
-  Put, 
-  Delete, 
-  Param, 
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
   Query,
-  Logger, 
-  BadRequestException, 
+  Logger,
+  BadRequestException,
   NotFoundException,
-  InternalServerErrorException 
+  InternalServerErrorException,
+  Inject
 } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { validate } from 'class-validator';
@@ -30,7 +30,7 @@ import {
 export class CommunityGroupChallengesController {
   private readonly logger = new Logger(CommunityGroupChallengesController.name);
 
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(@Inject(PG_POOL) private readonly pool: Pool) { }
 
   /**
    * Create a new community challenge
@@ -39,7 +39,7 @@ export class CommunityGroupChallengesController {
   @Post()
   async createChallenge(@Body() dto: CreateCommunityGroupChallengeDto) {
     this.logger.log(`Creating new community challenge: ${dto.title}`);
-    
+
     const errors = await validate(dto);
     if (errors.length > 0) {
       this.logger.warn('Validation failed', errors);
@@ -59,7 +59,7 @@ export class CommunityGroupChallengesController {
         frequency: dto.frequency,
         difficulty: dto.difficulty
       })}`);
-      
+
       const { rows: [challenge] } = await client.query(`
         INSERT INTO community_group_challenges 
         (creator_id, title, description, type, frequency, goal_value, deadline, difficulty, category)
@@ -76,14 +76,14 @@ export class CommunityGroupChallengesController {
         dto.difficulty || null,
         dto.category || null
       ]);
-      
+
       this.logger.log(`✅ Challenge created with ID: ${challenge.id}`);
 
       // 2. Auto-create a corresponding post
       try {
         const postTitle = challenge.title;
         const postDescription = challenge.description || `אתגר קהילתי חדש: ${challenge.title}`;
-        
+
         await client.query(`
           INSERT INTO posts 
           (author_id, community_challenge_id, title, description, post_type, metadata)
@@ -144,7 +144,7 @@ export class CommunityGroupChallengesController {
   @Get()
   async getChallenges(@Query() filters: GetChallengesFilterDto) {
     this.logger.log('Fetching challenges with filters:', filters);
-    
+
     const client = await this.pool.connect();
     try {
       let query = `
@@ -239,7 +239,7 @@ export class CommunityGroupChallengesController {
     }
 
     this.logger.log(`Fetching daily tracker for user ${userId}, range: ${startDate} - ${endDate}`);
-    
+
     const client = await this.pool.connect();
     try {
       // Default to current week if not specified
@@ -304,18 +304,18 @@ export class CommunityGroupChallengesController {
           this.logger.log(`BOOLEAN status calc: challenge=${challenge.id}, value=${value} (type=${typeof value}), numValue=${numValue}, result=${result}`);
           return result;
         }
-        
+
         // NUMERIC or DURATION
         if (!challenge.goal_value || !challenge.goal_direction) {
           return 'neutral';
         }
-        
+
         if (challenge.goal_direction === 'maximize') {
           return value >= challenge.goal_value ? 'success' : 'failed';
         } else if (challenge.goal_direction === 'minimize') {
           return value < challenge.goal_value ? 'success' : 'failed';
         }
-        
+
         return 'neutral';
       };
 
@@ -379,7 +379,7 @@ export class CommunityGroupChallengesController {
       }));
 
       this.logger.log(`✅ Fetched tracker data: ${challenges.length} challenges, ${entries.length} entries`);
-      
+
       return {
         success: true,
         data: {
@@ -405,7 +405,7 @@ export class CommunityGroupChallengesController {
   @Get(':id')
   async getChallengeById(@Param('id') id: string) {
     this.logger.log(`Fetching challenge: ${id}`);
-    
+
     const client = await this.pool.connect();
     try {
       // Get challenge with creator info and post_id
@@ -438,8 +438,8 @@ export class CommunityGroupChallengesController {
         LIMIT 10
       `, [id]);
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         data: {
           ...challenge,
           participants
@@ -460,7 +460,7 @@ export class CommunityGroupChallengesController {
   @Post(':id/join')
   async joinChallenge(@Param('id') challengeId: string, @Body() dto: JoinChallengeDto) {
     this.logger.log(`User ${dto.user_id} joining challenge ${challengeId}`);
-    
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -524,7 +524,7 @@ export class CommunityGroupChallengesController {
   @Post(':id/entries')
   async addChallengeEntry(@Param('id') challengeId: string, @Body() dto: CreateChallengeEntryDto) {
     this.logger.log(`Adding entry for challenge ${challengeId}, user ${dto.user_id}, date=${dto.entry_date ?? 'today'}, value=${dto.value}`);
-    
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -597,13 +597,13 @@ export class CommunityGroupChallengesController {
       await client.query('COMMIT');
 
       this.logger.log(`✅ Entry added successfully. Streak: ${currentStreak}`);
-      return { 
-        success: true, 
-        data: { 
-          entry_date: entryDate, 
-          value: dto.value, 
-          current_streak: currentStreak 
-        } 
+      return {
+        success: true,
+        data: {
+          entry_date: entryDate,
+          value: dto.value,
+          current_streak: currentStreak
+        }
       };
     } catch (error: any) {
       await client.query('ROLLBACK');
@@ -630,7 +630,7 @@ export class CommunityGroupChallengesController {
     }
 
     this.logger.log(`Fetching entries for challenge ${challengeId}, user ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       const actualLimit = limit || 100;
@@ -658,7 +658,7 @@ export class CommunityGroupChallengesController {
   @Get('user/:userId/stats')
   async getUserStatistics(@Param('userId') userId: string) {
     this.logger.log(`Fetching statistics for user ${userId}`);
-    
+
     const client = await this.pool.connect();
     try {
       // Overall stats
@@ -689,8 +689,8 @@ export class CommunityGroupChallengesController {
         ORDER BY p.current_streak DESC, p.joined_at DESC
       `, [userId]);
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         data: {
           overall: overallStats,
           challenges: challengeStats
@@ -718,7 +718,7 @@ export class CommunityGroupChallengesController {
     }
 
     this.logger.log(`Updating challenge ${challengeId}`);
-    
+
     const client = await this.pool.connect();
     try {
       // Verify user is the creator
@@ -828,7 +828,7 @@ export class CommunityGroupChallengesController {
     }
 
     this.logger.log(`Deleting challenge ${challengeId}`);
-    
+
     const client = await this.pool.connect();
     try {
       // Verify user is the creator

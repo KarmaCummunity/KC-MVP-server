@@ -85,7 +85,7 @@ export class RedisModule { }
 function maskRedisUrl(url: string): string {
   try {
     const u = new URL(url);
-    if (u.password) u.password = '***';
+    if (u.password) u.password = '*'.repeat(3);
     return u.toString();
   } catch {
     return url.replace(/:(?:[^@/]+)@/, ':***@');

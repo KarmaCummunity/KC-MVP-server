@@ -18,7 +18,7 @@
 // TODO: Add comprehensive logging and monitoring
 // TODO: Add unit and integration tests for all endpoints
 // TODO: Optimize database queries - many N+1 query problems
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, UseGuards, Logger } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
@@ -30,6 +30,7 @@ import * as argon2 from 'argon2';
 
 @Controller('api/users')
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
   // TODO: Move constants to a dedicated constants file
   // TODO: Make cache TTL configurable through environment variables
   // TODO: Implement different TTL values for different types of data
@@ -70,25 +71,25 @@ export class UsersController {
         const existingColumns = checkResult.rows.map(r => r.column_name);
 
         if (!existingColumns.includes('salary')) {
-          console.log('📋 Adding salary column to user_profiles...');
+          this.logger.log('📋 Adding salary column to user_profiles...');
           await client.query(`
             ALTER TABLE user_profiles 
             ADD COLUMN salary DECIMAL(10,2) DEFAULT 0
           `);
-          console.log('✅ Added salary column');
+          this.logger.log('✅ Added salary column');
         }
 
         if (!existingColumns.includes('seniority_start_date')) {
-          console.log('📋 Adding seniority_start_date column to user_profiles...');
+          this.logger.log('📋 Adding seniority_start_date column to user_profiles...');
           await client.query(`
             ALTER TABLE user_profiles 
             ADD COLUMN seniority_start_date DATE DEFAULT CURRENT_DATE
           `);
-          console.log('✅ Added seniority_start_date column');
+          this.logger.log('✅ Added seniority_start_date column');
         }
 
         if (!existingColumns.includes('parent_manager_id')) {
-          console.log('📋 Adding parent_manager_id column to user_profiles...');
+          this.logger.log('📋 Adding parent_manager_id column to user_profiles...');
           await client.query(`
             ALTER TABLE user_profiles 
             ADD COLUMN parent_manager_id UUID REFERENCES user_profiles(id) ON DELETE SET NULL
@@ -96,13 +97,13 @@ export class UsersController {
           await client.query(`
             CREATE INDEX IF NOT EXISTS idx_user_profiles_parent_manager ON user_profiles(parent_manager_id)
           `);
-          console.log('✅ Added parent_manager_id column');
+          this.logger.log('✅ Added parent_manager_id column');
         }
       } finally {
         client.release();
       }
     } catch (error) {
-      console.error('❌ Error ensuring user profile columns:', error);
+      this.logger.error('❌ Error ensuring user profile columns:', error);
       // Don't throw - allow fallback query to work
     }
   }
@@ -128,7 +129,7 @@ export class UsersController {
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Search users error:', error);
+      this.logger.error('Search users error:', error);
       return { success: false, error: 'Failed to search users' };
     }
   }
@@ -144,8 +145,8 @@ export class UsersController {
     try {
       const { managerId, requestingUserId } = body;
 
-      console.log(`[setManager] Setting manager for user ${id}: managerId=${managerId} (type: ${typeof managerId}), requestingUserId=${requestingUserId}`);
-      console.log(`[setManager] Full body:`, JSON.stringify(body));
+      this.logger.log(`[setManager] Setting manager for user ${id}: managerId=${managerId} (type: ${typeof managerId}), requestingUserId=${requestingUserId}`);
+      this.logger.log(`[setManager] Full body:`, JSON.stringify(body));
 
       // Permission check: only admin or super admin can change manager assignments
       if (requestingUserId) {
@@ -159,7 +160,7 @@ export class UsersController {
             (reqUser[0].roles || []).includes('super_admin');
 
           if (!isAdmin) {
-            console.log(`[setManager] Permission denied for user ${requestingUserId}`);
+            this.logger.log(`[setManager] Permission denied for user ${requestingUserId}`);
             return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
           }
         }
@@ -173,7 +174,7 @@ export class UsersController {
       );
 
       if (rootEmail && targetUserCheck.length > 0 && (targetUserCheck[0].email || '').toLowerCase().trim() === rootEmail) {
-        console.log(`[setManager] ❌ BLOCKED: Attempt to modify root admin`);
+        this.logger.log(`[setManager] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
       }
 
@@ -186,7 +187,7 @@ export class UsersController {
         );
 
         if (currentUser.length === 0) {
-          console.log(`[setManager] User not found: ${id}`);
+          this.logger.log(`[setManager] User not found: ${id}`);
           return { success: false, error: 'User not found' };
         }
 
@@ -194,7 +195,7 @@ export class UsersController {
         // - If user is NOT an admin, remove 'volunteer' role (becomes regular user)
         // - If user IS an admin, remove 'admin' role too (admin must have a manager, except root admin)
         const currentManagerId = currentUser[0].parent_manager_id;
-        console.log(`[setManager] Removing manager assignment for user ${id}, current manager: ${currentManagerId}`);
+        this.logger.log(`[setManager] Removing manager assignment for user ${id}, current manager: ${currentManagerId}`);
 
         // Check if user is an admin
         const { rows: userData } = await this.pool.query(
@@ -215,7 +216,7 @@ export class UsersController {
         // If admin (and not root admin), remove admin roles too (admin must have a manager)
         if (isAdmin && !isRootAdmin) {
           newRoles = newRoles.filter((r: string) => r !== 'admin' && r !== 'super_admin');
-          console.log(`[setManager] ⚠️ Removing admin roles from user ${id} because manager assignment was removed (admin must have a manager)`);
+          this.logger.log(`[setManager] ⚠️ Removing admin roles from user ${id} because manager assignment was removed (admin must have a manager)`);
         }
 
         // Update: remove manager, and update roles
@@ -231,9 +232,9 @@ export class UsersController {
         // Invalidate caches to ensure fresh data
         await this.redisCache.delete(`user_profile_${id}`);
         await this.redisCache.invalidatePattern('users_list*');
-        console.log(`[setManager] Invalidated cache for user ${id} and all user lists`);
+        this.logger.log(`[setManager] Invalidated cache for user ${id} and all user lists`);
 
-        console.log(`✅ Manager removed: ${id} no longer reports to anyone`);
+        this.logger.log(`✅ Manager removed: ${id} no longer reports to anyone`);
         return { success: true, message: 'שיוך מנהל הוסר בהצלחה' };
       }
 
@@ -254,13 +255,13 @@ export class UsersController {
       // CRITICAL FIX: If the proposed manager is the root admin (from env),
       // ensure it has NO parent_manager_id (cannot be subordinate to anyone)
       if (rootEmail && (managerEmail || '').toLowerCase().trim() === rootEmail && managerCurrentParent !== null) {
-        console.log(`[setManager] 🔧 FIXING: Root admin has parent_manager_id=${managerCurrentParent}, removing it...`);
+        this.logger.log(`[setManager] 🔧 FIXING: Root admin has parent_manager_id=${managerCurrentParent}, removing it...`);
         await this.pool.query(`
           UPDATE user_profiles 
           SET parent_manager_id = NULL, updated_at = NOW()
           WHERE id = $1
         `, [managerId]);
-        console.log(`[setManager] ✅ Fixed: Root admin no longer has a parent manager`);
+        this.logger.log(`[setManager] ✅ Fixed: Root admin no longer has a parent manager`);
         // Invalidate cache
         await this.redisCache.delete(`user_profile_${managerId}`);
         await this.redisCache.invalidatePattern('users_list*');
@@ -268,7 +269,7 @@ export class UsersController {
 
       // SPECIAL CASE: If assigning to root admin (from env), skip cycle check
       if (rootEmail && (managerEmail || '').toLowerCase().trim() === rootEmail) {
-        console.log(`[setManager] ✅ Assigning to root admin - skipping cycle check`);
+        this.logger.log(`[setManager] ✅ Assigning to root admin - skipping cycle check`);
         // Proceed directly to assignment (skip cycle detection)
       } else {
         // Full cycle detection using recursive CTE
@@ -282,7 +283,7 @@ export class UsersController {
           WHERE id IN ($1, $2)
         `, [id, managerId]);
 
-        console.log(`[setManager] 🔍 Current hierarchy state:`, {
+        this.logger.log(`[setManager] 🔍 Current hierarchy state:`, {
           userId: id,
           managerId: managerId,
           users: currentHierarchy.map((u: any) => ({
@@ -310,7 +311,7 @@ export class UsersController {
           SELECT id, parent_manager_id, depth FROM manager_chain ORDER BY depth
         `, [managerId]);
 
-        console.log(`[setManager] 🔍 Manager chain (going up from ${managerId}):`,
+        this.logger.log(`[setManager] 🔍 Manager chain (going up from ${managerId}):`,
           managerChainDebug.map((m: any) => ({ id: m.id, parent: m.parent_manager_id, depth: m.depth }))
         );
 
@@ -332,8 +333,8 @@ export class UsersController {
           SELECT id, depth FROM manager_chain WHERE id = $2 LIMIT 1
         `, [managerId, id]);
 
-        console.log(`[setManager] 🔄 Checking for hierarchy cycle: Would user ${id} becoming subordinate of ${managerId} create a cycle?`);
-        console.log(`[setManager] 🔍 Cycle check result:`, cycleCheck);
+        this.logger.log(`[setManager] 🔄 Checking for hierarchy cycle: Would user ${id} becoming subordinate of ${managerId} create a cycle?`);
+        this.logger.log(`[setManager] 🔍 Cycle check result:`, cycleCheck);
 
         if (cycleCheck.length > 0) {
           // Get user details for better error message
@@ -347,16 +348,16 @@ export class UsersController {
           const userName = userInfo.name || userInfo.email || id;
           const managerName = managerInfo.name || managerInfo.email || managerId;
 
-          console.log(`❌ [setManager] CYCLE DETECTED: Cannot assign ${managerName} as manager of ${userName}`);
-          console.log(`   Reason: ${userName} is already in the management chain above ${managerName}`);
-          console.log(`   This would create a circular chain: ${userName} → ... → ${managerName} → ${userName}`);
+          this.logger.log(`❌ [setManager] CYCLE DETECTED: Cannot assign ${managerName} as manager of ${userName}`);
+          this.logger.log(`   Reason: ${userName} is already in the management chain above ${managerName}`);
+          this.logger.log(`   This would create a circular chain: ${userName} → ... → ${managerName} → ${userName}`);
           return {
             success: false,
             error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - זה יוצר מחזור בהיררכיה כי ${userName} כבר נמצא בשרשרת הניהול מעל ${managerName}`
           };
         }
 
-        console.log(`[setManager] ✅ No upward cycle found`);
+        this.logger.log(`[setManager] ✅ No upward cycle found`);
       }
 
       // Check reverse direction - if manager is subordinate of user
@@ -379,7 +380,7 @@ export class UsersController {
           SELECT 1 FROM subordinate_tree WHERE id = $1 LIMIT 1
         `, [managerId, id]);
 
-        console.log(`[setManager] 🔄 Checking reverse: Is ${managerId} a subordinate of ${id}?`);
+        this.logger.log(`[setManager] 🔄 Checking reverse: Is ${managerId} a subordinate of ${id}?`);
 
         if (reverseCheck.length > 0) {
           // Get user details for better error message
@@ -393,20 +394,20 @@ export class UsersController {
           const userName = userInfo.name || userInfo.email || id;
           const managerName = managerInfo.name || managerInfo.email || managerId;
 
-          console.log(`❌ [setManager] REVERSE CYCLE DETECTED: ${managerName} is currently a subordinate of ${userName}`);
-          console.log(`   Cannot assign ${managerName} as manager of ${userName} - would create cycle`);
+          this.logger.log(`❌ [setManager] REVERSE CYCLE DETECTED: ${managerName} is currently a subordinate of ${userName}`);
+          this.logger.log(`   Cannot assign ${managerName} as manager of ${userName} - would create cycle`);
           return {
             success: false,
             error: `לא ניתן להגדיר את ${managerName} כמנהל של ${userName} - ${managerName} כבר כפוף ל-${userName}`
           };
         }
 
-        console.log(`[setManager] ✅ No reverse cycle found - proceeding with assignment`);
+        this.logger.log(`[setManager] ✅ No reverse cycle found - proceeding with assignment`);
       } else {
-        console.log(`[setManager] ✅ Skipping reverse cycle check (root admin cannot be subordinate)`);
+        this.logger.log(`[setManager] ✅ Skipping reverse cycle check (root admin cannot be subordinate)`);
       }
 
-      console.log(`[setManager] 📝 Before UPDATE: user=${id}, new parent_manager_id=${managerId}`);
+      this.logger.log(`[setManager] 📝 Before UPDATE: user=${id}, new parent_manager_id=${managerId}`);
 
       // CRITICAL CHECK: Admin must have a manager (except root admin)
       // If user is an admin and we're removing their manager, we should have already removed admin role
@@ -423,7 +424,7 @@ export class UsersController {
 
         // If user is an admin (and not root admin), they MUST have a manager
         if (isAdmin && !isRootAdmin && !managerId) {
-          console.log(`[setManager] ❌ BLOCKED: Admin ${id} cannot exist without a manager (except root admin)`);
+          this.logger.log(`[setManager] ❌ BLOCKED: Admin ${id} cannot exist without a manager (except root admin)`);
           return {
             success: false,
             error: 'מנהל חייב להיות משויך למנהל מעליו (חוץ מהמנהל הראשי). אם ברצונך להסיר את השיוך, המשתמש יהפוך למשתמש רגיל.'
@@ -451,14 +452,14 @@ export class UsersController {
       await this.redisCache.delete(`user_profile_${id}`);
       await this.redisCache.delete(`user_profile_${managerId}`);
       await this.redisCache.invalidatePattern('users_list*');
-      console.log(`[setManager] ♻️ Invalidated cache for users ${id} and ${managerId} and all user lists`);
+      this.logger.log(`[setManager] ♻️ Invalidated cache for users ${id} and ${managerId} and all user lists`);
 
-      console.log(`✅ Manager set: ${id} now reports to ${managerId}`);
-      console.log(`[setManager] 📊 Updated: parent_manager_id=${managerId}`);
+      this.logger.log(`✅ Manager set: ${id} now reports to ${managerId}`);
+      this.logger.log(`[setManager] 📊 Updated: parent_manager_id=${managerId}`);
 
       return { success: true, message: 'Manager updated successfully' };
     } catch (error) {
-      console.error('Set manager error:', error);
+      this.logger.error('Set manager error:', error);
       return { success: false, error: 'Failed to set manager' };
     }
   }
@@ -485,7 +486,7 @@ export class UsersController {
 
       if (rootEmail && subordinateCheck.length > 0 && (subordinateCheck[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[manageHierarchy] ❌ BLOCKED: Attempt to modify root admin`);
+        this.logger.log(`[manageHierarchy] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות את המנהל הראשי - הוא המנהל הראשי' };
       }
 
@@ -511,15 +512,15 @@ export class UsersController {
           SELECT 1 FROM manager_chain WHERE id = $2 LIMIT 1
         `, [managerId, subordinateId]);
 
-        console.log(`[manageHierarchy] 🔄 Checking for hierarchy cycle: Would ${subordinateId} → ${managerId} create a cycle?`);
+        this.logger.log(`[manageHierarchy] 🔄 Checking for hierarchy cycle: Would ${subordinateId} → ${managerId} create a cycle?`);
 
         if (cycleCheck.length > 0) {
           await client.query('ROLLBACK');
-          console.log(`❌ [manageHierarchy] CYCLE DETECTED: ${subordinateId} is already in the management chain ABOVE ${managerId}`);
+          this.logger.log(`❌ [manageHierarchy] CYCLE DETECTED: ${subordinateId} is already in the management chain ABOVE ${managerId}`);
           return { success: false, error: 'Cannot create hierarchy cycle - this would create a circular management chain' };
         }
 
-        console.log(`[manageHierarchy] ✅ No upward cycle found`);
+        this.logger.log(`[manageHierarchy] ✅ No upward cycle found`);
 
         // Also check if subordinate would become manager of someone in their own chain
         const { rows: reverseCheck } = await client.query(`
@@ -540,15 +541,15 @@ export class UsersController {
           SELECT 1 FROM subordinate_chain WHERE id = $1 LIMIT 1
         `, [managerId, subordinateId]);
 
-        console.log(`[manageHierarchy] 🔄 Checking reverse: Is ${managerId} in hierarchy chain of ${subordinateId}?`);
+        this.logger.log(`[manageHierarchy] 🔄 Checking reverse: Is ${managerId} in hierarchy chain of ${subordinateId}?`);
 
         if (reverseCheck.length > 0) {
           await client.query('ROLLBACK');
-          console.log(`❌ [manageHierarchy] REVERSE CYCLE DETECTED: ${managerId} is already in management chain of ${subordinateId}`);
+          this.logger.log(`❌ [manageHierarchy] REVERSE CYCLE DETECTED: ${managerId} is already in management chain of ${subordinateId}`);
           return { success: false, error: 'Cannot assign - this user is already in your management chain' };
         }
 
-        console.log(`[manageHierarchy] ✅ No reverse cycle found - proceeding with assignment`);
+        this.logger.log(`[manageHierarchy] ✅ No reverse cycle found - proceeding with assignment`);
 
         await client.query(`
           UPDATE user_profiles 
@@ -557,7 +558,7 @@ export class UsersController {
         `, [managerId, subordinateId]);
 
         await client.query('COMMIT');
-        console.log(`✅ Hierarchy updated: ${subordinateId} now reports to ${managerId}`);
+        this.logger.log(`✅ Hierarchy updated: ${subordinateId} now reports to ${managerId}`);
         return { success: true, message: 'Subordinate added successfully' };
 
       } else if (action === 'remove') {
@@ -579,7 +580,7 @@ export class UsersController {
         `, [subordinateId]);
 
         const transferCount = tasksToTransfer.length;
-        console.log(`📋 Found ${transferCount} active tasks to transfer from ${subordinateId} to ${managerId}`);
+        this.logger.log(`📋 Found ${transferCount} active tasks to transfer from ${subordinateId} to ${managerId}`);
 
         // 2. Remove manager link
         await client.query(`
@@ -598,10 +599,10 @@ export class UsersController {
             AND status NOT IN ('done', 'archived')
           `, [subordinateId, managerId]);
 
-          console.log(`✅ Transferred ${transferCount} tasks from ${subordinateName} to manager ${managerId}`);
+          this.logger.log(`✅ Transferred ${transferCount} tasks from ${subordinateName} to manager ${managerId}`);
 
           // Log the transfer details
-          console.log('📝 Transferred tasks:', tasksToTransfer.map(t => `${t.id.substring(0, 8)}: ${t.title} (${t.priority})`).join(', '));
+          this.logger.log('📝 Transferred tasks:', tasksToTransfer.map(t => `${t.id.substring(0, 8)}: ${t.title} (${t.priority})`).join(', '));
         }
 
         await client.query('COMMIT');
@@ -631,9 +632,9 @@ export class UsersController {
                 }
               })
             ]);
-            console.log(`🔔 Notification sent to manager ${managerId} about ${transferCount} transferred tasks`);
+            this.logger.log(`🔔 Notification sent to manager ${managerId} about ${transferCount} transferred tasks`);
           } catch (notifError) {
-            console.warn('Failed to create transfer notification (non-fatal):', notifError);
+            this.logger.warn('Failed to create transfer notification (non-fatal):', notifError);
           }
         }
 
@@ -649,7 +650,7 @@ export class UsersController {
 
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Manage hierarchy error:', error);
+      this.logger.error('Manage hierarchy error:', error);
       return { success: false, error: 'Failed to manage hierarchy' };
     } finally {
       client.release();
@@ -674,7 +675,7 @@ export class UsersController {
     try {
       const { requestingAdminId } = body;
 
-      console.log(`[promoteToAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
+      this.logger.log(`[promoteToAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
 
       if (!requestingAdminId) {
         return { success: false, error: 'requestingAdminId is required' };
@@ -688,7 +689,7 @@ export class UsersController {
         [requestingAdminId]
       );
 
-      console.log(`[promoteToAdmin] 🔍 Requesting user lookup:`, {
+      this.logger.log(`[promoteToAdmin] 🔍 Requesting user lookup:`, {
         requestingAdminId,
         found: requestingUser.length > 0,
         user: requestingUser[0] || null
@@ -696,14 +697,14 @@ export class UsersController {
 
       if (requestingUser.length === 0) {
         await client.query('ROLLBACK');
-        console.log(`[promoteToAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
+        this.logger.log(`[promoteToAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
         return { success: false, error: 'Requesting user not found' };
       }
 
       const isSuperAdmin = (requestingUser[0].roles || []).includes('super_admin');
       const isAdmin = (requestingUser[0].roles || []).includes('admin') || isSuperAdmin;
 
-      console.log(`[promoteToAdmin] 🔐 Authorization check:`, {
+      this.logger.log(`[promoteToAdmin] 🔐 Authorization check:`, {
         email: requestingUser[0].email,
         roles: requestingUser[0].roles,
         isSuperAdmin,
@@ -712,7 +713,7 @@ export class UsersController {
 
       if (!isAdmin) {
         await client.query('ROLLBACK');
-        console.log(`[promoteToAdmin] ❌ Authorization denied - not an admin`);
+        this.logger.log(`[promoteToAdmin] ❌ Authorization denied - not an admin`);
         return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
       }
 
@@ -731,11 +732,11 @@ export class UsersController {
       const rootEmail = this.getRootAdminEmail();
       if (rootEmail && (targetUser[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[promoteToAdmin] ❌ BLOCKED: Attempt to modify root admin`);
+        this.logger.log(`[promoteToAdmin] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
 
-      const targetIsSuperAdmin = (targetUser[0].roles || []).includes('super_admin');
+
 
       const targetIsAlreadyAdmin = (targetUser[0].roles || []).includes('admin') ||
         (targetUser[0].roles || []).includes('super_admin');
@@ -797,10 +798,10 @@ export class UsersController {
       await this.redisCache.delete(`user_profile_${targetUserId}`);
       await this.redisCache.delete(`user_profile_${requestingAdminId}`);
       await this.redisCache.invalidatePattern('users_list*');
-      console.log(`[promoteToAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+      this.logger.log(`[promoteToAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
 
-      console.log(`✅ User ${targetUserId} promoted to admin under ${requestingAdminId}`);
-      console.log(`[promoteToAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
+      this.logger.log(`✅ User ${targetUserId} promoted to admin under ${requestingAdminId}`);
+      this.logger.log(`[promoteToAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
 
       return {
         success: true,
@@ -809,7 +810,7 @@ export class UsersController {
 
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Promote to admin error:', error);
+      this.logger.error('Promote to admin error:', error);
       return { success: false, error: 'Failed to promote user to admin' };
     } finally {
       client.release();
@@ -834,7 +835,7 @@ export class UsersController {
     try {
       const { requestingAdminId, convertToVolunteer = false } = body;
 
-      console.log(`[demoteAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}, convertToVolunteer=${convertToVolunteer}`);
+      this.logger.log(`[demoteAdmin] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}, convertToVolunteer=${convertToVolunteer}`);
 
       if (!requestingAdminId) {
         return { success: false, error: 'requestingAdminId is required' };
@@ -848,7 +849,7 @@ export class UsersController {
         [requestingAdminId]
       );
 
-      console.log(`[demoteAdmin] 🔍 Requesting user lookup:`, {
+      this.logger.log(`[demoteAdmin] 🔍 Requesting user lookup:`, {
         requestingAdminId,
         found: requestingUser.length > 0,
         user: requestingUser[0] || null
@@ -856,14 +857,14 @@ export class UsersController {
 
       if (requestingUser.length === 0) {
         await client.query('ROLLBACK');
-        console.log(`[demoteAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
+        this.logger.log(`[demoteAdmin] ❌ Requesting user not found: ${requestingAdminId}`);
         return { success: false, error: 'Requesting user not found' };
       }
 
       const isSuperAdmin = (requestingUser[0].roles || []).includes('super_admin');
       const isAdmin = (requestingUser[0].roles || []).includes('admin') || isSuperAdmin;
 
-      console.log(`[demoteAdmin] 🔐 Authorization check:`, {
+      this.logger.log(`[demoteAdmin] 🔐 Authorization check:`, {
         email: requestingUser[0].email,
         roles: requestingUser[0].roles,
         isSuperAdmin,
@@ -872,7 +873,7 @@ export class UsersController {
 
       if (!isAdmin) {
         await client.query('ROLLBACK');
-        console.log(`[demoteAdmin] ❌ Authorization denied - not an admin`);
+        this.logger.log(`[demoteAdmin] ❌ Authorization denied - not an admin`);
         return { success: false, error: 'אין לך הרשאה לבצע פעולה זו - נדרשות הרשאות מנהל' };
       }
 
@@ -891,11 +892,11 @@ export class UsersController {
       const rootEmail = this.getRootAdminEmail();
       if (rootEmail && (targetUser[0].email || '').toLowerCase().trim() === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[demoteAdmin] ❌ BLOCKED: Attempt to modify root admin`);
+        this.logger.log(`[demoteAdmin] ❌ BLOCKED: Attempt to modify root admin`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
 
-      const targetIsSuperAdmin = (targetUser[0].roles || []).includes('super_admin');
+
 
       // 3. Check authorization - can only demote your own subordinates
       if (!isSuperAdmin) {
@@ -933,7 +934,7 @@ export class UsersController {
         if (!newRoles.includes('volunteer')) {
           newRoles.push('volunteer');
         }
-        console.log(`[demoteAdmin] 🔄 Converting to volunteer under ${requestingAdminId}`);
+        this.logger.log(`[demoteAdmin] 🔄 Converting to volunteer under ${requestingAdminId}`);
       } else {
         // Regular demotion: if no parent_manager_id, remove volunteer role (becomes regular user)
         // If has parent_manager_id, keep it and keep volunteer role (they're still a volunteer)
@@ -949,7 +950,7 @@ export class UsersController {
         }
       }
 
-      console.log(`[demoteAdmin] 📝 Before UPDATE: target=${targetUserId}, hasParent=${hasParentManager}, convertToVolunteer=${convertToVolunteer}, currentRoles=${JSON.stringify(currentRoles)}, newRoles=${JSON.stringify(newRoles)}, newParentManagerId=${newParentManagerId}`);
+      this.logger.log(`[demoteAdmin] 📝 Before UPDATE: target=${targetUserId}, hasParent=${hasParentManager}, convertToVolunteer=${convertToVolunteer}, currentRoles=${JSON.stringify(currentRoles)}, newRoles=${JSON.stringify(newRoles)}, newParentManagerId=${newParentManagerId}`);
 
       // Update: remove admin roles, set parent_manager_id, and update volunteer role
       await client.query(`
@@ -966,10 +967,10 @@ export class UsersController {
       await this.redisCache.delete(`user_profile_${targetUserId}`);
       await this.redisCache.delete(`user_profile_${requestingAdminId}`);
       await this.redisCache.invalidatePattern('users_list*');
-      console.log(`[demoteAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+      this.logger.log(`[demoteAdmin] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
 
-      console.log(`✅ User ${targetUserId} demoted from admin by ${requestingAdminId}`);
-      console.log(`[demoteAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${newParentManagerId}`);
+      this.logger.log(`✅ User ${targetUserId} demoted from admin by ${requestingAdminId}`);
+      this.logger.log(`[demoteAdmin] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${newParentManagerId}`);
 
       const message = convertToVolunteer
         ? `הרשאות מנהל הוסרו מ-${targetUser[0].name || targetUser[0].email} והוא הפך למתנדב`
@@ -982,7 +983,7 @@ export class UsersController {
 
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Demote admin error:', error);
+      this.logger.error('Demote admin error:', error);
       return { success: false, error: 'Failed to demote admin' };
     } finally {
       client.release();
@@ -1007,7 +1008,7 @@ export class UsersController {
     try {
       const { requestingAdminId } = body;
 
-      console.log(`[promoteToVolunteer] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
+      this.logger.log(`[promoteToVolunteer] 📝 Request: targetUserId=${targetUserId}, requestingAdminId=${requestingAdminId}`);
 
       if (!requestingAdminId) {
         return { success: false, error: 'requestingAdminId is required' };
@@ -1041,9 +1042,9 @@ export class UsersController {
         return { success: false, error: 'Requesting user not found' };
       }
 
-      const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(requestingUser[0].email);
+      // SEC-003.1: Use RBAC roles instead of hardcoded emails
+      const isSuperAdmin = (requestingUser[0].roles || []).includes('super_admin');
       const isAdmin = (requestingUser[0].roles || []).includes('admin') ||
-        (requestingUser[0].roles || []).includes('super_admin') ||
         isSuperAdmin;
       const hierarchyLevel = requestingUser[0].hierarchy_level;
 
@@ -1080,14 +1081,16 @@ export class UsersController {
         return { success: false, error: 'User not found' };
       }
 
-      // CRITICAL: Protect root admin - karmacommunity2.0@gmail.com is the KING
-      if (targetUser[0].email === 'karmacommunity2.0@gmail.com') {
+      // CRITICAL: Protect root admin — use env var, not hardcoded email
+      const rootEmail = this.getRootAdminEmail();
+      if (rootEmail && targetUser[0].email === rootEmail) {
         await client.query('ROLLBACK');
-        console.log(`[promoteToVolunteer] ❌ BLOCKED: Attempt to modify root admin (karmacommunity2.0@gmail.com)`);
+        this.logger.log(`[promoteToVolunteer] ❌ BLOCKED: Attempt to modify root admin (${rootEmail})`);
         return { success: false, error: 'לא ניתן לשנות הרשאות למנהל הראשי - הוא המנהל הראשי' };
       }
 
-      const targetIsSuperAdmin = ['navesarussi@gmail.com'].includes(targetUser[0].email);
+      // SEC-003.1: Use RBAC roles instead of hardcoded emails
+
 
       // 3. Check if target is already a volunteer under someone else
       const targetIsVolunteer = (targetUser[0].roles || []).includes('volunteer');
@@ -1140,10 +1143,10 @@ export class UsersController {
       await this.redisCache.delete(`user_profile_${targetUserId}`);
       await this.redisCache.delete(`user_profile_${requestingAdminId}`);
       await this.redisCache.invalidatePattern('users_list*');
-      console.log(`[promoteToVolunteer] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
+      this.logger.log(`[promoteToVolunteer] ♻️ Invalidated cache for users ${targetUserId} and ${requestingAdminId}`);
 
-      console.log(`✅ User ${targetUserId} promoted to volunteer under ${requestingAdminId}`);
-      console.log(`[promoteToVolunteer] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
+      this.logger.log(`✅ User ${targetUserId} promoted to volunteer under ${requestingAdminId}`);
+      this.logger.log(`[promoteToVolunteer] 📊 Updated: roles=${JSON.stringify(newRoles)}, parent_manager_id=${requestingAdminId}`);
 
       return {
         success: true,
@@ -1152,7 +1155,7 @@ export class UsersController {
 
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Promote to volunteer error:', error);
+      this.logger.error('Promote to volunteer error:', error);
       return { success: false, error: 'Failed to promote user to volunteer' };
     } finally {
       client.release();
@@ -1177,7 +1180,8 @@ export class UsersController {
         return { success: false, error: 'Admin not found' };
       }
 
-      const isSuperAdmin = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'].includes(adminRows[0].email);
+      // SEC-003.1: Use RBAC roles instead of hardcoded emails
+      const isSuperAdmin = (adminRows[0].roles || []).includes('super_admin');
 
       // Get all users who are NOT:
       // 1. The requesting admin themselves
@@ -1244,7 +1248,7 @@ export class UsersController {
       return { success: true, data: rows };
 
     } catch (error) {
-      console.error('Get eligible for promotion error:', error);
+      this.logger.error('Get eligible for promotion error:', error);
       return { success: false, error: 'Failed to get eligible users' };
     }
   }
@@ -1273,7 +1277,7 @@ export class UsersController {
         return { success: false, error: 'Root admin (karmacommunity2.0@gmail.com) not found' };
       }
 
-      const rootAdmin = rootAdminRows[0];
+
 
       // Try query with salary/seniority fields, fallback if columns don't exist
       let allUsers: any[];
@@ -1322,7 +1326,7 @@ export class UsersController {
       } catch (error: any) {
         // If columns don't exist, use query without them
         if (error.message && error.message.includes('salary')) {
-          console.warn('Salary/seniority columns not found, using fallback query');
+          this.logger.warn('Salary/seniority columns not found, using fallback query');
           const result = await this.pool.query(`
             WITH RECURSIVE hierarchy AS (
               -- Base case: ROOT admin (karmacommunity2.0@gmail.com) - the KING
@@ -1413,7 +1417,7 @@ export class UsersController {
 
       const tree = buildTree(null, 0);
 
-      console.log(`🌳 Built hierarchy tree with ${allUsers.length} users`);
+      this.logger.log(`🌳 Built hierarchy tree with ${allUsers.length} users`);
 
       return {
         success: true,
@@ -1421,7 +1425,7 @@ export class UsersController {
         totalCount: allUsers.length
       };
     } catch (error) {
-      console.error('Get full hierarchy tree error:', error);
+      this.logger.error('Get full hierarchy tree error:', error);
       return { success: false, error: 'Failed to get hierarchy tree' };
     }
   }
@@ -1453,7 +1457,7 @@ export class UsersController {
 
       return { success: true, data: rows };
     } catch (error) {
-      console.error('Get hierarchy error:', error);
+      this.logger.error('Get hierarchy error:', error);
       return { success: false, error: 'Failed to get hierarchy' };
     }
   }
@@ -1493,7 +1497,7 @@ export class UsersController {
         passwordHash = await argon2.hash(userData.password);
       }
 
-      const nowIso = new Date().toISOString();
+
 
       const PRE_APPROVED_ADMINS = [
         'mahalalel100@gmail.com',
@@ -1585,7 +1589,7 @@ export class UsersController {
       return { success: true, data: user };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Register user error:', error);
+      this.logger.error('Register user error:', error);
       return { success: false, error: 'Failed to register user' };
     } finally {
       client.release();
@@ -1675,7 +1679,7 @@ export class UsersController {
 
       return { success: true, data: userResponse };
     } catch (error) {
-      console.error('Login user error:', error);
+      this.logger.error('Login user error:', error);
       return { success: false, error: 'Login failed' };
     }
   }
@@ -1683,7 +1687,7 @@ export class UsersController {
   @Get(':id')
   async getUserById(@Param('id') id: string) {
     try {
-      console.log(`[UsersController] getUserById called with id: ${id}`);
+      this.logger.log(`[UsersController] getUserById called with id: ${id}`);
 
       // Normalize email to lowercase for consistent lookup
       // This matches the normalization used in auth.controller.ts
@@ -1691,7 +1695,7 @@ export class UsersController {
         ? String(id).trim().toLowerCase()
         : id;
 
-      console.log(`[UsersController] Normalized id: ${normalizedId}`);
+      this.logger.log(`[UsersController] Normalized id: ${normalizedId}`);
 
       const cacheKey = `user_profile_${normalizedId}`;
 
@@ -1700,17 +1704,17 @@ export class UsersController {
       try {
         cached = await this.redisCache.get(cacheKey);
         if (cached) {
-          console.log(`[UsersController] Cache hit for ${normalizedId}`);
+          this.logger.log(`[UsersController] Cache hit for ${normalizedId}`);
           return { success: true, data: cached };
         }
-        console.log(`[UsersController] Cache miss for ${normalizedId}`);
+        this.logger.log(`[UsersController] Cache miss for ${normalizedId}`);
       } catch (cacheError) {
-        console.warn(`[UsersController] Redis cache error (non-fatal):`, cacheError);
+        this.logger.warn(`[UsersController] Redis cache error (non-fatal):`, cacheError);
         // Continue without cache - don't fail the request
       }
 
       // Use user_profiles table - support UUID, email, firebase_uid, or google_id lookups
-      console.log(`[UsersController] Querying database for ${normalizedId}`);
+      this.logger.log(`[UsersController] Querying database for ${normalizedId}`);
 
       // Try query with google_id first, if it fails (column doesn't exist), try without it
       let rows: any[];
@@ -1751,11 +1755,11 @@ export class UsersController {
           LIMIT 1
         `, [normalizedId]);
         rows = result.rows;
-        console.log(`[UsersController] Database query returned ${rows.length} rows`);
+        this.logger.log(`[UsersController] Database query returned ${rows.length} rows`);
       } catch (error: any) {
         // If google_id column doesn't exist, try without it
         if (error.message && error.message.includes('google_id')) {
-          console.log(`[UsersController] Retrying query without google_id column`);
+          this.logger.log(`[UsersController] Retrying query without google_id column`);
           const result = await this.pool.query(`
             SELECT 
               id,
@@ -1791,33 +1795,33 @@ export class UsersController {
             LIMIT 1
           `, [normalizedId]);
           rows = result.rows;
-          console.log(`[UsersController] Retry query returned ${rows.length} rows`);
+          this.logger.log(`[UsersController] Retry query returned ${rows.length} rows`);
         } else {
           throw error;
         }
       }
 
       if (rows.length === 0) {
-        console.log(`[UsersController] User not found for ${normalizedId}`);
+        this.logger.log(`[UsersController] User not found for ${normalizedId}`);
         return { success: false, error: 'User not found' };
       }
 
       const user = rows[0];
-      console.log(`[UsersController] User found: ${user.email} (${user.id})`);
+      this.logger.log(`[UsersController] User found: ${user.email} (${user.id})`);
 
       // Try to cache the result, but don't fail if Redis is down
       try {
         await this.redisCache.set(cacheKey, user, this.CACHE_TTL);
-        console.log(`[UsersController] User cached successfully`);
+        this.logger.log(`[UsersController] User cached successfully`);
       } catch (cacheError) {
-        console.warn(`[UsersController] Failed to cache user (non-fatal):`, cacheError);
+        this.logger.warn(`[UsersController] Failed to cache user (non-fatal):`, cacheError);
         // Continue - caching failure shouldn't fail the request
       }
 
       return { success: true, data: user };
     } catch (error: any) {
-      console.error(`[UsersController] getUserById error for id ${id}:`, error);
-      console.error(`[UsersController] Error stack:`, error?.stack);
+      this.logger.error(`[UsersController] getUserById error for id ${id}:`, error);
+      this.logger.error(`[UsersController] Error stack:`, error?.stack);
       return {
         success: false,
         error: 'Failed to get user',
@@ -1855,7 +1859,7 @@ export class UsersController {
         // Allow updates to name, avatar, etc. but block changes to roles, parent_manager_id, hierarchy_level
         if (updateData.roles !== undefined || updateData.parent_manager_id !== undefined || updateData.hierarchy_level !== undefined) {
           await client.query('ROLLBACK');
-          console.log(`[updateUser] ❌ BLOCKED: Attempt to modify root admin roles/hierarchy (karmacommunity2.0@gmail.com)`);
+          this.logger.log(`[updateUser] ❌ BLOCKED: Attempt to modify root admin roles/hierarchy (karmacommunity2.0@gmail.com)`);
           return { success: false, error: 'לא ניתן לשנות הרשאות או היררכיה למנהל הראשי - הוא המנהל הראשי' };
         }
       }
@@ -1907,11 +1911,12 @@ export class UsersController {
         updateValues.push(updateData.firebase_uid);
       }
       if (updateData.roles !== undefined) {
-        // STATIC PROTECTION: Prevent modifying super admin roles
-        const superAdminEmails = ['navesarussi@gmail.com', 'karmacommunity2.0@gmail.com'];
+        // SEC-003.1: Use ROOT_ADMIN_EMAIL env var instead of hardcoded emails
+        const rootAdminEmail = this.getRootAdminEmail();
+        const superAdminEmails = rootAdminEmail ? [rootAdminEmail] : [];
         if (superAdminEmails.includes(existingUser.email?.toLowerCase() || '')) {
           // Instead of throwing error, we just ignore the roles update for this user to be safe but not break other updates
-          console.warn(`Attempted to modify roles of Super Admin (${existingUser.email}) - Ignoring role update.`);
+          this.logger.warn(`Attempted to modify roles of Super Admin (${existingUser.email}) - Ignoring role update.`);
         } else {
           updateFields.push(`roles = $${paramCount++}::text[]`);
           updateValues.push(updateData.roles);
@@ -1982,7 +1987,7 @@ export class UsersController {
       return { success: true, data: user };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Update user error:', error);
+      this.logger.error('Update user error:', error);
       return { success: false, error: 'Failed to update user' };
     } finally {
       client.release();
@@ -2008,11 +2013,11 @@ export class UsersController {
     if (!shouldForceRefresh) {
       const cached = await this.redisCache.get(cacheKey);
       if (cached) {
-        console.log(`[getUsers] 📦 Returning cached data for key: ${cacheKey}`);
+        this.logger.log(`[getUsers] 📦 Returning cached data for key: ${cacheKey}`);
         return { success: true, data: cached };
       }
     } else {
-      console.log(`[getUsers] 🔄 Force refresh requested, bypassing cache for key: ${cacheKey}`);
+      this.logger.log(`[getUsers] 🔄 Force refresh requested, bypassing cache for key: ${cacheKey}`);
     }
 
     // Unified query: Get all users from both user_profiles and users (legacy) tables
@@ -2104,7 +2109,7 @@ export class UsersController {
       // Fallback: if hierarchy_level column doesn't exist yet (migration not run)
       // OR if there's a type conversion error (jsonb/json)
       if (error.message && (error.message.includes('hierarchy_level') || error.message.includes('could not convert type jsonb'))) {
-        console.warn('[getUsers] Using fallback query:', error.message);
+        this.logger.warn('[getUsers] Using fallback query:', error.message);
         query = `
           SELECT 
             u.id::text as id,
@@ -2151,7 +2156,7 @@ export class UsersController {
     }
 
     // Log for debugging
-    console.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);
+    this.logger.log(`[UsersController] getUsers returned ${rows.length} users from unified table`);
 
     // Cache for 20 minutes - user lists are relatively static
     await this.redisCache.set(cacheKey, rows, 20 * 60);
@@ -2320,7 +2325,7 @@ export class UsersController {
       return { success: true, message: 'User followed successfully' };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Follow user error:', error);
+      this.logger.error('Follow user error:', error);
       return { success: false, error: 'Failed to follow user' };
     } finally {
       client.release();
@@ -2366,7 +2371,7 @@ export class UsersController {
       return { success: true, message: 'User unfollowed successfully' };
     } catch (error) {
       await client.query('ROLLBACK');
-      console.error('Unfollow user error:', error);
+      this.logger.error('Unfollow user error:', error);
       return { success: false, error: 'Failed to unfollow user' };
     } finally {
       client.release();
@@ -2414,7 +2419,7 @@ export class UsersController {
     const { firebase_uid, google_id, email } = body;
 
     // Use a clearer logging for debugging
-    console.log('🔍 ResolveUserId called with:', { firebase_uid, google_id, email });
+    this.logger.log('🔍 ResolveUserId called with:', { firebase_uid, google_id, email });
 
     if (!firebase_uid && !google_id && !email) {
       return { success: false, error: 'Must provide firebase_uid, google_id, or email' };
@@ -2457,7 +2462,7 @@ export class UsersController {
       } catch (err: any) {
         // Fallback if google_id column doesn't exist yet
         if (err.message?.includes('google_id')) {
-          console.warn('⚠️ Google ID column missing in resolve-id, retrying without it');
+          this.logger.warn('⚠️ Google ID column missing in resolve-id, retrying without it');
           // Retry without google_id logic
           let fallbackQuery = `SELECT id, email, name, avatar_url, roles, settings, created_at, last_active, firebase_uid FROM user_profiles WHERE false`;
           const fallbackParams: any[] = [];
@@ -2473,7 +2478,7 @@ export class UsersController {
       }
 
       if (rows.length === 0) {
-        console.log('❌ User not found for resolution:', { firebase_uid, google_id, email });
+        this.logger.log('❌ User not found for resolution:', { firebase_uid, google_id, email });
         // User not found - if we have firebase_uid, try to create user from Firebase
         if (firebase_uid) {
           try {
@@ -2492,7 +2497,7 @@ export class UsersController {
                   );
                   const googleId = googleProvider?.uid || null;
 
-                  const nowIso = new Date().toISOString();
+
                   const creationTime = firebaseUser.metadata.creationTime
                     ? new Date(firebaseUser.metadata.creationTime)
                     : new Date();
@@ -2533,7 +2538,7 @@ export class UsersController {
                       ]
                     );
                     await client.query('COMMIT');
-                    console.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
+                    this.logger.log(`✨ Auto-created user from Firebase: ${normalizedEmail} (${firebaseUser.uid})`);
 
                     // Generate JWT tokens for the new user
                     const tokenPair = await this.jwtService.createTokenPair({
@@ -2595,7 +2600,7 @@ export class UsersController {
                         ]
                       );
                       await client.query('COMMIT');
-                      console.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
+                      this.logger.log(`✨ Auto-created user from Firebase (without google_id): ${normalizedEmail} (${firebaseUser.uid})`);
 
                       // Generate JWT tokens for the new user
                       const tokenPair = await this.jwtService.createTokenPair({
@@ -2629,18 +2634,18 @@ export class UsersController {
                   }
                 }
               } catch (firebaseError) {
-                console.warn('⚠️ Could not fetch user from Firebase Admin SDK:', firebaseError);
+                this.logger.warn('⚠️ Could not fetch user from Firebase Admin SDK:', firebaseError);
                 // Continue to return error
               }
             }
-          } catch (adminError) {
+          } catch {
             // Firebase Admin SDK not available - that's okay, continue
-            console.warn('⚠️ Firebase Admin SDK not available for auto-creation');
+            this.logger.warn('⚠️ Firebase Admin SDK not available for auto-creation');
           }
         }
 
         await client.query('ROLLBACK');
-        console.log('❌ User not found for resolution');
+        this.logger.log('❌ User not found for resolution');
         return { success: false, error: 'User not found' };
       }
 
@@ -2655,7 +2660,7 @@ export class UsersController {
       } else if (email && user.email?.toLowerCase() === email.toLowerCase()) {
         resolvedBy = 'email';
       }
-      console.log(`✅ User resolved by ${resolvedBy}:`, { email: user.email, id: user.id });
+      this.logger.log(`✅ User resolved by ${resolvedBy}:`, { email: user.email, id: user.id });
 
       let needsUpdate = false;
       const updateFields: string[] = [];
@@ -2665,12 +2670,12 @@ export class UsersController {
       // 2. Alert on account linking (found by email, but missing external ID)
       if (firebase_uid && user.firebase_uid !== firebase_uid) {
         if (!user.firebase_uid) {
-          console.log(`🔗 Linking User ${user.email} to Firebase UID: ${firebase_uid}`);
+          this.logger.log(`🔗 Linking User ${user.email} to Firebase UID: ${firebase_uid}`);
           updateFields.push(`firebase_uid = $${upCount++}`);
           updateValues.push(firebase_uid);
           needsUpdate = true;
         } else {
-          console.warn(`⚠️ Conflict: User ${user.email} has different Firebase UID (${user.firebase_uid}) than provided (${firebase_uid})`);
+          this.logger.warn(`⚠️ Conflict: User ${user.email} has different Firebase UID (${user.firebase_uid}) than provided (${firebase_uid})`);
         }
       }
 
@@ -2678,7 +2683,7 @@ export class UsersController {
         // Check if row has google_id property (it might not if column missing)
         // We assume if we are here, we want to try updating it.
         if (!user.google_id) {
-          console.log(`🔗 Linking User ${user.email} to Google ID: ${google_id}`);
+          this.logger.log(`🔗 Linking User ${user.email} to Google ID: ${google_id}`);
           updateFields.push(`google_id = $${upCount++}`);
           updateValues.push(google_id);
           needsUpdate = true;
@@ -2695,9 +2700,9 @@ export class UsersController {
             WHERE id = $${upCount}
           `;
           await client.query(updateQuery, updateValues);
-          console.log('✅ User linked successfully');
+          this.logger.log('✅ User linked successfully');
         } catch (updateErr) {
-          console.error('❌ Failed to link user account:', updateErr);
+          this.logger.error('❌ Failed to link user account:', updateErr);
           // Non-fatal? Maybe. But safer to rollback if linking fails.
           // actually, if we fail to link, we should probably still return the user found by email, 
           // but logging the error is important.
@@ -2740,7 +2745,7 @@ export class UsersController {
 
     } catch (error: any) {
       await client.query('ROLLBACK');
-      console.error('❌ Error in resolveUserId:', error);
+      this.logger.error('❌ Error in resolveUserId:', error);
       return { success: false, error: error.message || 'Failed to resolve user ID' };
     } finally {
       client.release();

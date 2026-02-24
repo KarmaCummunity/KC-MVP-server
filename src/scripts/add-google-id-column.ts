@@ -9,24 +9,26 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 async function addGoogleIdColumn() {
-  const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgresql://kc:kc_password@localhost:5432/kc_db',
-  });
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL environment variable is required');
+  }
+  const pool = new Pool({ connectionString });
 
   const client = await pool.connect();
-  
+
   try {
     await client.query('BEGIN');
-    
+
     console.log('📝 Checking if google_id column exists...');
-    
+
     // Check if column exists
     const columnCheck = await client.query(`
       SELECT column_name 
       FROM information_schema.columns 
       WHERE table_name = 'user_profiles' AND column_name = 'google_id'
     `);
-    
+
     if (columnCheck.rows.length === 0) {
       console.log('📝 google_id column does not exist, creating it...');
       await client.query(`
@@ -36,14 +38,14 @@ async function addGoogleIdColumn() {
     } else {
       console.log('✅ google_id column already exists');
     }
-    
+
     // Check if unique constraint exists
     const constraintCheck = await client.query(`
       SELECT conname 
       FROM pg_constraint 
       WHERE conname = 'user_profiles_google_id_key'
     `);
-    
+
     if (constraintCheck.rows.length === 0) {
       console.log('📝 google_id unique constraint does not exist, creating it...');
       await client.query(`
@@ -53,14 +55,14 @@ async function addGoogleIdColumn() {
     } else {
       console.log('✅ google_id unique constraint already exists');
     }
-    
+
     // Check if index exists
     const indexCheck = await client.query(`
       SELECT indexname 
       FROM pg_indexes 
       WHERE tablename = 'user_profiles' AND indexname = 'idx_user_profiles_google_id'
     `);
-    
+
     if (indexCheck.rows.length === 0) {
       console.log('📝 google_id index does not exist, creating it...');
       await client.query(`
@@ -70,7 +72,7 @@ async function addGoogleIdColumn() {
     } else {
       console.log('✅ google_id index already exists');
     }
-    
+
     await client.query('COMMIT');
     console.log('✅ All operations completed successfully');
   } catch (error: any) {

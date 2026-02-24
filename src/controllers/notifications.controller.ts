@@ -9,15 +9,21 @@ import {
     UseGuards,
     Inject,
     Query,
+    Req,
+    UnauthorizedException,
+    Logger,
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { RedisCacheService } from '../redis/redis-cache.service';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Request } from 'express';
 
 @Controller('api/notifications')
-@UseGuards(ThrottlerGuard)
+@UseGuards(ThrottlerGuard, JwtAuthGuard)  // H3/SEC-003.2: Auth required
 export class NotificationsController {
+    private readonly logger = new Logger(NotificationsController.name);
     constructor(
         @Inject(PG_POOL) private readonly pool: Pool,
         private readonly redisCache: RedisCacheService,
@@ -42,7 +48,7 @@ export class NotificationsController {
             `);
 
             if (!checkResult.rows[0]?.exists) {
-                console.log('📋 Creating user_notifications table...');
+                this.logger.log('Creating user_notifications table...');
                 await client.query(`
                     CREATE TABLE user_notifications (
                         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -73,11 +79,28 @@ export class NotificationsController {
                     WHERE is_read = false;
                 `);
 
-                console.log('✅ user_notifications table created successfully');
+                this.logger.log('user_notifications table created successfully');
             }
         } catch (error) {
-            console.error('❌ Error ensuring user_notifications table:', error);
+            this.logger.error('Error ensuring user_notifications table:', error);
             throw error;
+        }
+    }
+
+    /**
+     * SEC-003.2: Validate that the authenticated user owns the resource
+     * Admins can access any user's notifications
+     */
+    private validateOwnership(req: Request, userId: string): void {
+        const authUser = req.user;
+        if (!authUser) {
+            throw new UnauthorizedException('Authentication required');
+        }
+        const isOwner = authUser.userId === userId;
+        const isAdmin = authUser.roles?.includes('admin') ||
+            authUser.roles?.includes('super_admin');
+        if (!isOwner && !isAdmin) {
+            throw new UnauthorizedException('You can only access your own notifications');
         }
     }
 
@@ -86,13 +109,15 @@ export class NotificationsController {
         @Param('userId') userId: string,
         @Query('limit') limit = '50',
         @Query('offset') offset = '0',
+        @Req() req: Request,
     ) {
-        console.log(`📥 NotificationsController - getUserNotifications for userId: "${userId}"`);
+        this.validateOwnership(req, userId);
+        this.logger.debug(`getUserNotifications for userId: ${userId}`);
 
         // Validate UUID format to prevent 500 errors
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (!uuidRegex.test(userId)) {
-            console.warn(`⚠️ Invalid UUID provided: "${userId}"`);
+            this.logger.warn(`Invalid UUID provided: ${userId}`);
             return { success: false, error: 'Invalid user ID format' };
         }
 
@@ -131,13 +156,14 @@ export class NotificationsController {
                 client.release();
             }
         } catch (error) {
-            console.error('Error fetching notifications:', error);
+            this.logger.error('Error fetching notifications:', error);
             return { success: false, error: 'Failed to fetch notifications' };
         }
     }
 
     @Post(':userId/read-all')
-    async markAllAsRead(@Param('userId') userId: string) {
+    async markAllAsRead(@Param('userId') userId: string, @Req() req: Request) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -151,7 +177,7 @@ export class NotificationsController {
                 client.release();
             }
         } catch (error) {
-            console.error('Error marking all notifications as read:', error);
+            this.logger.error('Error marking all notifications as read:', error);
             return { success: false, error: 'Failed to mark notifications as read' };
         }
     }
@@ -159,8 +185,10 @@ export class NotificationsController {
     @Put(':userId/:notificationId/read')
     async markAsRead(
         @Param('userId') userId: string,
-        @Param('notificationId') notificationId: string
+        @Param('notificationId') notificationId: string,
+        @Req() req: Request,
     ) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -174,7 +202,7 @@ export class NotificationsController {
                 client.release();
             }
         } catch (error) {
-            console.error('Error marking notification as read:', error);
+            this.logger.error('Error marking notification as read:', error);
             return { success: false, error: 'Failed to mark notification as read' };
         }
     }
@@ -182,8 +210,10 @@ export class NotificationsController {
     @Delete(':userId/:notificationId')
     async deleteNotification(
         @Param('userId') userId: string,
-        @Param('notificationId') notificationId: string
+        @Param('notificationId') notificationId: string,
+        @Req() req: Request,
     ) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -197,13 +227,14 @@ export class NotificationsController {
                 client.release();
             }
         } catch (error) {
-            console.error('Error deleting notification:', error);
+            this.logger.error('Error deleting notification:', error);
             return { success: false, error: 'Failed to delete notification' };
         }
     }
 
     @Delete(':userId')
-    async clearAllNotifications(@Param('userId') userId: string) {
+    async clearAllNotifications(@Param('userId') userId: string, @Req() req: Request) {
+        this.validateOwnership(req, userId);
         try {
             const client = await this.pool.connect();
             try {
@@ -217,7 +248,7 @@ export class NotificationsController {
                 client.release();
             }
         } catch (error) {
-            console.error('Error clearing notifications:', error);
+            this.logger.error('Error clearing notifications:', error);
             return { success: false, error: 'Failed to clear notifications' };
         }
     }
